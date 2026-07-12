@@ -1,0 +1,16 @@
+# Signing materials (local debug only)
+#
+# debug.p12 / debug.cer / debug.csr were generated locally as key material.
+# HarmonyOS personal debugging ALSO requires a profile (*.p7b) issued via
+# Huawei developer account (DevEco automatic signing).
+#
+# Do this in DevEco Studio:
+#   Project Structure → Signing Configs → Automatically generate signature
+# That will write cert/profile paths into build-profile.json5.
+#
+# Never commit real release keys or store passwords to a public repo.
+debug.p12
+debug.cer
+debug.csr
+*.p7b
+material/

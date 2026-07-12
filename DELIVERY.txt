@@ -1,0 +1,23 @@
+# Cursor Mobile — 交付与调研说明
+
+## 现状（2026-07-12）
+
+| 路径 | 状态 | 说明 |
+|------|------|------|
+| 鸿蒙 ArkWeb 壳（本目录） | **因 Cloudflare 暂搁置** | 见 `PARKED.txt` |
+| Android 壳 APK（`android-shell/`） | **当前主交付** | 全屏 WebView + 常驻实例 + 深度缓存 |
+
+产物：`dist/cursor-android-release.apk` → 手机下载 **`Agents-shell.apk`**
+
+## Android 壳 v1.6.3
+
+- **点状态栏回顶**：状态栏区域可点，滚动 WebView / 页内滚动容器到顶部
+- **安全区 / 键盘避让 / 高清开屏**：同 1.6.2
+- 包名 `com.brian.agents.shell`  **1.6.3** (13)
+
+构建：`scripts/install-android.sh` 或 `android-shell/./gradlew assembleRelease`
+
+## 合规边界
+
+- 只打开 Cursor 官方页；不中转、不存密码、不注入改页面
+- 不伪造登录、不跳过证书错误

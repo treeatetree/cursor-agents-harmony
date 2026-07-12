@@ -1,0 +1,19 @@
+# Local Android SDK path (machine-specific)
+local.properties
+
+# Gradle
+.gradle/
+**/build/
+captures/
+
+# Signing — do not commit real production secrets
+keystore/*.jks
+keystore/*.keystore
+
+# Downloaded brand pack (icons copied into res/)
+brand-assets/
+
+# IDE
+.idea/
+*.iml
+.DS_Store

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.CursorMobile" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/cursor_bg</item>
+        <item name="android:statusBarColor">@color/cursor_bg</item>
+        <item name="android:navigationBarColor">@color/cursor_bg</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="colorPrimary">@color/cursor_accent</item>
+        <item name="android:windowSplashScreenBackground">@color/cursor_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_logo</item>
+        <item name="android:navigationBarDividerColor">@color/cursor_bg</item>
+    </style>
+</resources>
