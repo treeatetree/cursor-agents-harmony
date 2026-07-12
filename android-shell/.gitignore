@@ -10,9 +10,6 @@ captures/
 keystore/*.jks
 keystore/*.keystore
 
-# Downloaded brand pack (icons copied into res/)
-brand-assets/
-
 # IDE
 .idea/
 *.iml
