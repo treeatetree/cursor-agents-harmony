@@ -52,10 +52,6 @@ object WebViewHost {
         if (existing != null) {
             contextWrapper?.baseContext = activity
             (existing.parent as? ViewGroup)?.removeView(existing)
-            try {
-                existing.settings.textZoom = 110
-            } catch (_: Throwable) {
-            }
             return existing
         }
 
@@ -100,8 +96,7 @@ object WebViewHost {
             settings.javaScriptCanOpenWindowsAutomatically = true
             settings.allowFileAccess = false
             settings.allowContentAccess = true
-            // Slightly larger text → slightly larger hit targets in dense Agents UI.
-            settings.textZoom = 110
+            settings.textZoom = 100
 
             applyPerfSettings(settings)
 

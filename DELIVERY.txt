@@ -9,11 +9,11 @@
 
 产物：`dist/cursor-android-release.apk` → 手机下载 **`Agents-shell.apk`**
 
-## Android 壳 v1.6.3
+## Android 壳 v1.6.9
 
-- **点状态栏回顶**：状态栏区域可点，滚动 WebView / 页内滚动容器到顶部
-- **安全区 / 键盘避让 / 高清开屏**：同 1.6.2
-- 包名 `com.brian.agents.shell`  **1.6.3** (13)
+- **缩放**：改回 `textZoom`（不再用 CSS zoom），避免输入框被挤出屏外
+- **抽搐**：去掉触控坐标钳制；仅在真正弹出键盘时抬高布局
+- 左下角缩放控件与缓存逻辑保留；包名 `com.brian.agents.shell`  **1.6.9** (19)
 
 构建：`scripts/install-android.sh` 或 `android-shell/./gradlew assembleRelease`
 

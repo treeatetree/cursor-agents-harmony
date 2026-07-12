@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -11,14 +13,14 @@ android {
         applicationId = "com.brian.agents.shell"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "1.6.3"
+        versionCode = 20
+        versionName = "1.7.0"
     }
 
     signingConfigs {
         create("release") {
             val keystoreFile = rootProject.file("keystore/cursor-release.jks")
-            val props = java.util.Properties()
+            val props = Properties()
             val localProps = rootProject.file("local.properties")
             if (localProps.exists()) {
                 localProps.inputStream().use { props.load(it) }

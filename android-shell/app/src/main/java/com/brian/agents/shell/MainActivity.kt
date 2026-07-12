@@ -65,6 +65,12 @@ class MainActivity : AppCompatActivity() {
         private const val BG = "#141414"
         private const val PREFS = "agents_shell"
         private const val KEY_LAST_URL = "last_ok_url"
+        private const val KEY_CONTENT_ZOOM = "content_zoom"
+        private const val DEFAULT_CONTENT_ZOOM = 1.15f
+        private val ZOOM_STEPS = floatArrayOf(
+            1.00f, 1.05f, 1.10f, 1.15f, 1.20f, 1.25f, 1.30f,
+            1.35f, 1.40f, 1.45f, 1.50f, 1.60f, 1.70f, 1.80f, 1.90f, 2.00f
+        )
     }
 
     private lateinit var root: FrameLayout
@@ -75,6 +81,12 @@ class MainActivity : AppCompatActivity() {
     private var errorPanel: View? = null
     private var navCover: ImageView? = null
     private var statusBarTapZone: View? = null
+    private var zoomChrome: LinearLayout? = null
+    private var zoomLabel: TextView? = null
+    private var zoomMinus: TextView? = null
+    private var zoomPlus: TextView? = null
+    private var zoomExpanded = false
+    private var contentZoom = DEFAULT_CONTENT_ZOOM
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
     private var pendingPermissionRequest: PermissionRequest? = null
     private var firstPaintDone = false
@@ -84,6 +96,7 @@ class MainActivity : AppCompatActivity() {
     private var handlingBack = false
     private var coverShownAt = 0L
     private val hideCoverRunnable = Runnable { hideNavCover(force = true) }
+    private val collapseZoomRunnable = Runnable { collapseZoomChrome() }
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             val callback = filePathCallback
@@ -137,6 +150,7 @@ class MainActivity : AppCompatActivity() {
                 android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
         )
         requestHighRefreshRate()
+        contentZoom = loadContentZoom()
 
         root = FrameLayout(this).apply {
             setBackgroundColor(Color.parseColor(BG))
@@ -196,6 +210,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(progressBar)
         root.addView(statusBarTapZone)
         root.addView(navCover)
+        root.addView(buildZoomChrome())
         root.addView(splash)
         root.addView(errorPanel)
 
@@ -253,8 +268,14 @@ class MainActivity : AppCompatActivity() {
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
         val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
         val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+        val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
         val top = maxOf(bars.top, cutout.top)
-        val bottom = maxOf(ime.bottom, bars.bottom, cutout.bottom)
+        // Only lift for a real IME — avoids layout twitch when menus/dropdowns focus.
+        val bottom = if (imeVisible && ime.bottom > bars.bottom) {
+            ime.bottom
+        } else {
+            maxOf(bars.bottom, cutout.bottom)
+        }
         webContainer?.setPadding(0, top, 0, bottom)
         progressBar?.setPadding(0, top, 0, 0)
         errorPanel?.setPadding(dp(24), top + dp(24), dp(24), bottom + dp(24))
@@ -267,6 +288,14 @@ class MainActivity : AppCompatActivity() {
             }
             zone.isClickable = top > 0
             zone.visibility = if (top > 0) View.VISIBLE else View.GONE
+        }
+        zoomChrome?.let { chrome ->
+            val lp = chrome.layoutParams as FrameLayout.LayoutParams
+            lp.gravity = Gravity.BOTTOM or Gravity.START
+            lp.bottomMargin = bottom + dp(10)
+            lp.marginStart = dp(10)
+            lp.marginEnd = 0
+            chrome.layoutParams = lp
         }
     }
 
@@ -554,6 +583,7 @@ class MainActivity : AppCompatActivity() {
                 maybePrerenderThenLoad(wv, resolveStartUrl())
             } else {
                 fadeSplashIfNeeded()
+                applyContentZoom(wv)
             }
         }
     }
@@ -659,6 +689,8 @@ class MainActivity : AppCompatActivity() {
             progressBar?.visibility = View.GONE
             hideError()
             scheduleHideNavCover(80L)
+            // textZoom is sticky on the WebView; only clear leftover CSS zoom once.
+            clearLegacyCssZoom(view)
             rememberUrl(url)
             WebViewHost.markLoaded()
             PersistScheduler.scheduleFlush()
@@ -891,6 +923,177 @@ class MainActivity : AppCompatActivity() {
 
     private fun hideError() {
         errorPanel?.visibility = View.GONE
+    }
+
+    /**
+     * Use WebSettings.textZoom so layout stays inside the viewport (CSS zoom was
+     * pushing the composer off-screen and twitching dropdowns).
+     */
+    private fun applyContentZoom(wv: WebView?) {
+        if (wv == null) return
+        val target = (contentZoom * 100f).toInt().coerceIn(100, 200)
+        try {
+            if (wv.settings.textZoom != target) {
+                wv.settings.textZoom = target
+            }
+        } catch (_: Throwable) {
+        }
+        clearLegacyCssZoom(wv)
+    }
+
+    /** Remove old documentElement.zoom from ≤1.6.8 which broke fixed bottom UI. */
+    private fun clearLegacyCssZoom(wv: WebView?) {
+        if (wv == null) return
+        wv.evaluateJavascript(
+            """
+            (function(){
+              try {
+                var root = document.documentElement;
+                if (!root || root.dataset.agentsCssZoomCleared === '1') return;
+                root.style.zoom = '';
+                if (document.body) document.body.style.zoom = '';
+                delete root.dataset.agentsShellZoom;
+                root.dataset.agentsCssZoomCleared = '1';
+              } catch (e) {}
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    private fun loadContentZoom(): Float {
+        val raw = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getFloat(KEY_CONTENT_ZOOM, DEFAULT_CONTENT_ZOOM)
+        return nearestZoomStep(raw)
+    }
+
+    private fun saveContentZoom() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putFloat(KEY_CONTENT_ZOOM, contentZoom)
+            .apply()
+    }
+
+    private fun nearestZoomStep(value: Float): Float {
+        var best = ZOOM_STEPS[0]
+        var bestDist = kotlin.math.abs(value - best)
+        for (step in ZOOM_STEPS) {
+            val d = kotlin.math.abs(value - step)
+            if (d < bestDist) {
+                best = step
+                bestDist = d
+            }
+        }
+        return best
+    }
+
+    private fun zoomLabelText(): String = "${(contentZoom * 100f).toInt()}%"
+
+    private fun buildZoomChrome(): View {
+        val minus = TextView(this).apply {
+            text = "−"
+            setTextColor(Color.parseColor("#DDDDDD"))
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            visibility = View.GONE
+            setOnClickListener {
+                bumpZoom(-1)
+                keepZoomExpanded()
+            }
+        }
+        val label = TextView(this).apply {
+            text = zoomLabelText()
+            setTextColor(Color.parseColor("#CCCCCC"))
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            setOnClickListener {
+                if (zoomExpanded) {
+                    collapseZoomChrome()
+                } else {
+                    expandZoomChrome()
+                }
+            }
+        }
+        val plus = TextView(this).apply {
+            text = "+"
+            setTextColor(Color.parseColor("#DDDDDD"))
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            visibility = View.GONE
+            setOnClickListener {
+                bumpZoom(+1)
+                keepZoomExpanded()
+            }
+        }
+        zoomMinus = minus
+        zoomLabel = label
+        zoomPlus = plus
+
+        val plate = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(16).toFloat()
+            setColor(Color.parseColor("#66141414"))
+            setStroke(dp(1), Color.parseColor("#33FFFFFF"))
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = plate
+            alpha = 0.38f
+            elevation = 4f
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+                bottomMargin = dp(10)
+                marginStart = dp(10)
+            }
+            addView(minus)
+            addView(label)
+            addView(plus)
+        }
+        zoomChrome = row
+        return row
+    }
+
+    private fun expandZoomChrome() {
+        zoomExpanded = true
+        zoomMinus?.visibility = View.VISIBLE
+        zoomPlus?.visibility = View.VISIBLE
+        zoomChrome?.animate()?.alpha(0.72f)?.setDuration(120)?.start()
+        keepZoomExpanded()
+    }
+
+    private fun collapseZoomChrome() {
+        zoomExpanded = false
+        zoomMinus?.visibility = View.GONE
+        zoomPlus?.visibility = View.GONE
+        zoomLabel?.text = zoomLabelText()
+        zoomChrome?.animate()?.alpha(0.38f)?.setDuration(160)?.start()
+        zoomChrome?.removeCallbacks(collapseZoomRunnable)
+    }
+
+    private fun keepZoomExpanded() {
+        zoomChrome?.removeCallbacks(collapseZoomRunnable)
+        zoomChrome?.postDelayed(collapseZoomRunnable, 2_800L)
+    }
+
+    private fun bumpZoom(dir: Int) {
+        val idx = ZOOM_STEPS.indexOfFirst { kotlin.math.abs(it - contentZoom) < 0.001f }
+            .let { cur ->
+                if (cur >= 0) cur
+                else ZOOM_STEPS.indexOfFirst { kotlin.math.abs(it - DEFAULT_CONTENT_ZOOM) < 0.001f }
+                    .coerceAtLeast(0)
+            }
+            .coerceIn(0, ZOOM_STEPS.lastIndex)
+        val next = (idx + dir).coerceIn(0, ZOOM_STEPS.lastIndex)
+        contentZoom = ZOOM_STEPS[next]
+        zoomLabel?.text = zoomLabelText()
+        saveContentZoom()
+        applyContentZoom(webView)
     }
 
     private fun fadeSplashIfNeeded() {
