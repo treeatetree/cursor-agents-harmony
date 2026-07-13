@@ -66,7 +66,7 @@ object WebViewHost {
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
-            setLayerType(View.LAYER_TYPE_NONE, null)
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 // Smoother scroll while off-screen tiles rasterize.
                 try {
@@ -129,8 +129,8 @@ object WebViewHost {
             if (WebViewFeature.isFeatureSupported(WebViewFeature.BACK_FORWARD_CACHE_SETTINGS_EXPERIMENTAL_V3)) {
                 val bf: BackForwardCacheSettings =
                     WebSettingsCompat.getBackForwardCacheSettings(settings)
-                bf.setTimeoutSeconds(600)
-                bf.setMaxPagesInCache(12)
+                bf.setTimeoutSeconds(1_800)
+                bf.setMaxPagesInCache(24)
             }
         } catch (t: Throwable) {
             Log.d(TAG, "BFCache settings skipped: ${t.message}")
@@ -141,8 +141,8 @@ object WebViewHost {
             ) {
                 val profile = ProfileStore.getInstance().getProfile(Profile.DEFAULT_PROFILE_NAME)
                 profile?.getPrefetchCache()?.apply {
-                    setMaxPrefetches(8)
-                    setPrefetchTtlSeconds(300)
+                    setMaxPrefetches(16)
+                    setPrefetchTtlSeconds(1_200)
                 }
             }
         } catch (t: Throwable) {

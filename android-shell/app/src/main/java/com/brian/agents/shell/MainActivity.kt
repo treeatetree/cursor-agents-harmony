@@ -79,7 +79,7 @@ class MainActivity : AppCompatActivity() {
     private var progressBar: ProgressBar? = null
     private var splash: View? = null
     private var errorPanel: View? = null
-    private var navCover: ImageView? = null
+    private var navCover: View? = null
     private var statusBarTapZone: View? = null
     private var zoomChrome: LinearLayout? = null
     private var zoomLabel: TextView? = null
@@ -95,7 +95,14 @@ class MainActivity : AppCompatActivity() {
     private var wasOffline = false
     private var handlingBack = false
     private var coverShownAt = 0L
-    private val hideCoverRunnable = Runnable { hideNavCover(force = true) }
+    private var lastSeenUrl: String? = null
+    private var coverMinHoldMs = 360L
+    private var coverGen = 0
+    private var hideCoverGen = 0
+    private val hideCoverRunnable = Runnable {
+        if (hideCoverGen != coverGen) return@Runnable
+        hideNavCover(force = true)
+    }
     private val collapseZoomRunnable = Runnable { collapseZoomChrome() }
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -181,15 +188,17 @@ class MainActivity : AppCompatActivity() {
 
         splash = buildSplash()
         errorPanel = buildErrorPanel().apply { visibility = View.GONE }
-        navCover = ImageView(this).apply {
+        navCover = View(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            scaleType = ImageView.ScaleType.FIT_XY
+            // Solid mask only — bitmap freeze was causing a stretch/morph flash
+            // when half-res frames were scaled up then swapped for live content.
             setBackgroundColor(Color.parseColor(BG))
             visibility = View.GONE
             elevation = 6f
+            isClickable = true // block touches while masked
         }
 
         // iOS-like: tap status bar → scroll page to top.
@@ -367,7 +376,8 @@ class MainActivity : AppCompatActivity() {
     private fun navigateBackOrBackground(): Boolean {
         val wv = webView ?: WebViewHost.peek()
         if (wv != null && wv.canGoBack()) {
-            showNavCoverFromWebView(wv)
+            showNavCover(minHoldMs = 400L)
+            armNavSettleProbe(wv)
             wv.goBack()
             return true
         }
@@ -375,55 +385,45 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    private fun showNavCoverFromWebView(wv: WebView) {
-        try {
-            val cover = navCover ?: return
-            val bmp = captureWebView(wv)
-            if (bmp != null) {
-                cover.setImageBitmap(bmp)
-            } else {
-                // Solid fallback still beats flashing blank/black WebView.
-                cover.setImageDrawable(null)
-                cover.setBackgroundColor(Color.parseColor(BG))
-            }
-            cover.alpha = 1f
-            cover.visibility = View.VISIBLE
-            coverShownAt = System.currentTimeMillis()
-            cover.removeCallbacks(hideCoverRunnable)
-            // Safety: never leave cover forever.
-            cover.postDelayed(hideCoverRunnable, 2_500L)
-        } catch (_: Throwable) {
-        }
-    }
-
-    private fun captureWebView(wv: WebView): Bitmap? {
-        return try {
-            if (wv.width <= 0 || wv.height <= 0) return null
-            val bmp = Bitmap.createBitmap(wv.width, wv.height, Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bmp)
-            canvas.drawColor(Color.parseColor(BG))
-            wv.draw(canvas)
-            bmp
-        } catch (_: Throwable) {
-            null
-        }
+    /**
+     * Solid-color navigation mask. Soft-fades out to avoid a hard flash when
+     * revealing the settled page.
+     */
+    private fun showNavCover(minHoldMs: Long = 360L) {
+        val cover = navCover ?: return
+        coverGen += 1
+        coverMinHoldMs = minHoldMs
+        cover.animate().cancel()
+        cover.setBackgroundColor(Color.parseColor(BG))
+        cover.alpha = 1f
+        cover.visibility = View.VISIBLE
+        coverShownAt = System.currentTimeMillis()
+        cover.removeCallbacks(hideCoverRunnable)
+        hideCoverGen = coverGen
+        cover.postDelayed(hideCoverRunnable, 2_800L)
+        progressBar?.visibility = View.GONE
     }
 
     private fun hideNavCover(force: Boolean = false) {
         val cover = navCover ?: return
         if (cover.visibility != View.VISIBLE) return
-        if (!force && System.currentTimeMillis() - coverShownAt < 90L) {
-            // Avoid flicker on instant BFCache restores.
-            cover.postDelayed({ hideNavCover(force = true) }, 90L)
+        val held = System.currentTimeMillis() - coverShownAt
+        if (!force && held < coverMinHoldMs) {
+            hideCoverGen = coverGen
+            cover.removeCallbacks(hideCoverRunnable)
+            cover.postDelayed(hideCoverRunnable, coverMinHoldMs - held)
             return
         }
+        val gen = coverGen
         cover.removeCallbacks(hideCoverRunnable)
+        cover.animate().cancel()
+        // Short fade beats a hard cut (hard cut reads as flicker).
         cover.animate()
             .alpha(0f)
             .setDuration(120L)
             .withEndAction {
+                if (gen != coverGen) return@withEndAction
                 cover.visibility = View.GONE
-                cover.setImageDrawable(null)
                 cover.alpha = 1f
             }
             .start()
@@ -432,8 +432,43 @@ class MainActivity : AppCompatActivity() {
     private fun scheduleHideNavCover(delayMs: Long) {
         val cover = navCover ?: return
         if (cover.visibility != View.VISIBLE) return
+        hideCoverGen = coverGen
         cover.removeCallbacks(hideCoverRunnable)
         cover.postDelayed(hideCoverRunnable, delayMs.coerceAtLeast(0L))
+    }
+
+    /** Ask the page to signal when two frames have painted after a route change. */
+    private fun armNavSettleProbe(wv: WebView) {
+        if (navCover?.visibility != View.VISIBLE) return
+        wv.evaluateJavascript(
+            """
+            (function(){
+              try {
+                var done = false;
+                var fire = function(){
+                  if (done) return;
+                  done = true;
+                  try { AgentsShell.onNavSettled(); } catch (e) {}
+                };
+                requestAnimationFrame(function(){
+                  requestAnimationFrame(function(){ setTimeout(fire, 140); });
+                });
+                setTimeout(fire, 900);
+              } catch (e) {}
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    private inner class AgentsBridge {
+        @android.webkit.JavascriptInterface
+        fun onNavSettled() {
+            runOnUiThread {
+                // Small extra beat so late layout thrash stays under the mask.
+                scheduleHideNavCover(80L)
+            }
+        }
     }
 
     /** When landing back on Agents list, refresh disk/profile prefetch (not login/CF). */
@@ -459,7 +494,8 @@ class MainActivity : AppCompatActivity() {
                 if (canonicalizeUrl(item.url ?: continue) == target) {
                     val steps = i - list.currentIndex
                     if (steps != 0) {
-                        showNavCoverFromWebView(wv)
+                        showNavCover(minHoldMs = 380L)
+                        armNavSettleProbe(wv)
                         wv.goBackOrForward(steps)
                         return
                     }
@@ -467,7 +503,8 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (_: Throwable) {
         }
-        showNavCoverFromWebView(wv)
+        showNavCover(minHoldMs = 380L)
+        armNavSettleProbe(wv)
         wv.loadUrl(url)
     }
 
@@ -546,6 +583,11 @@ class MainActivity : AppCompatActivity() {
         applyCacheMode(wv)
         wv.webViewClient = ShellWebViewClient()
         wv.webChromeClient = ShellWebChromeClient()
+        try {
+            wv.removeJavascriptInterface("AgentsShell")
+        } catch (_: Throwable) {
+        }
+        wv.addJavascriptInterface(AgentsBridge(), "AgentsShell")
         wv.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             handleDownload(url, userAgent, contentDisposition, mimeType)
         }
@@ -589,6 +631,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyCacheMode(wv: WebView) {
+        // LOAD_CACHE_ELSE_NETWORK can flash stale→fresh documents (feels like stretch).
+        // Keep Chromium defaults; our interceptor still aggressively caches static/HTML.
         wv.settings.cacheMode = if (isOnline()) {
             WebSettings.LOAD_DEFAULT
         } else {
@@ -625,7 +669,8 @@ class MainActivity : AppCompatActivity() {
         val wv = webView ?: return
         applyCacheMode(wv)
         val url = wv.url?.takeIf { it.startsWith("http") } ?: resolveStartUrl()
-        showNavCoverFromWebView(wv)
+        showNavCover(minHoldMs = 380L)
+        armNavSettleProbe(wv)
         wv.loadUrl(url)
     }
 
@@ -650,12 +695,12 @@ class MainActivity : AppCompatActivity() {
             val scheme = uri.scheme?.lowercase() ?: return true
             return when (scheme) {
                 "http", "https", "about", "blob", "data" -> {
-                    // Full navigations: freeze last frame to avoid black flash.
                     if (request.isForMainFrame && view != null) {
                         val next = uri.toString()
                         val cur = view.url
                         if (!cur.isNullOrBlank() && canonicalizeUrl(cur) != canonicalizeUrl(next)) {
-                            showNavCoverFromWebView(view)
+                            showNavCover(minHoldMs = 380L)
+                            armNavSettleProbe(view)
                         }
                     }
                     false
@@ -671,15 +716,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+            super.doUpdateVisitedHistory(view, url, isReload)
+            if (isReload || view == null || url.isNullOrBlank()) return
+            val prev = lastSeenUrl
+            lastSeenUrl = url
+            if (!prev.isNullOrBlank() && canonicalizeUrl(prev) != canonicalizeUrl(url)) {
+                // SPA soft-route: mask until the next paint settles (no bitmap stretch).
+                if (navCover?.visibility != View.VISIBLE) {
+                    showNavCover(minHoldMs = 420L)
+                }
+                armNavSettleProbe(view)
+                StaticAssetCache.prefetchAgentsHtml(url)
+                maybeRewarmAgentsList(url)
+            }
+        }
+
         override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-            progressBar?.visibility = View.VISIBLE
+            // Keep progress hidden under the solid mask — it adds flicker otherwise.
             maybeHintSession(url)
-            // If navigation started without a cover (e.g. SPA), keep dark bg only.
         }
 
         override fun onPageCommitVisible(view: WebView?, url: String?) {
-            // First paint of new document — safer moment to drop the freeze frame.
-            scheduleHideNavCover(60L)
+            if (navCover?.visibility == View.VISIBLE) {
+                armNavSettleProbe(view ?: return)
+            }
             fadeSplashIfNeeded()
             maybeRewarmAgentsList(url)
         }
@@ -688,14 +749,17 @@ class MainActivity : AppCompatActivity() {
             fadeSplashIfNeeded()
             progressBar?.visibility = View.GONE
             hideError()
-            scheduleHideNavCover(80L)
-            // textZoom is sticky on the WebView; only clear leftover CSS zoom once.
+            if (navCover?.visibility == View.VISIBLE) {
+                armNavSettleProbe(view ?: return)
+            }
             clearLegacyCssZoom(view)
             rememberUrl(url)
+            lastSeenUrl = url
             WebViewHost.markLoaded()
             PersistScheduler.scheduleFlush()
             PersistScheduler.schedulePersist()
             maybeRewarmAgentsList(url)
+            url?.let { StaticAssetCache.prefetchAgentsHtml(it) }
         }
 
         override fun onReceivedError(
@@ -743,10 +807,10 @@ class MainActivity : AppCompatActivity() {
 
     private inner class ShellWebChromeClient : WebChromeClient() {
         override fun onProgressChanged(view: WebView?, newProgress: Int) {
-            progressBar?.progress = newProgress
-            progressBar?.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
-            if (newProgress >= 90) {
-                scheduleHideNavCover(50L)
+            progressBar?.visibility = View.GONE
+            // Don't yank the mask at mid-progress — that causes flicker.
+            if (newProgress >= 100 && navCover?.visibility == View.VISIBLE) {
+                scheduleHideNavCover(100L)
             }
             if (newProgress >= 95) {
                 fadeSplashIfNeeded()
