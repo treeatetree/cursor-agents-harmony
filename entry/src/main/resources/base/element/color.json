@@ -11,6 +11,7 @@
     { "name": "text_primary", "value": "#18181B" },
     { "name": "text_secondary", "value": "#52525B" },
     { "name": "text_tertiary", "value": "#71717A" },
+    { "name": "text_link", "value": "#2C4A6E" },
     { "name": "muted", "value": "#52525B" },
     { "name": "primary", "value": "#18181B" },
     { "name": "primary_on", "value": "#FAFAFA" },

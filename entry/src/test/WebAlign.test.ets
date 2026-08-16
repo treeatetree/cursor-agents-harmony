@@ -1,6 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { gitCompareUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
 import { applyInboxQuery, groupAgents } from '../main/ets/utils/InboxGrouping';
+import { clipNotice, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
 import { AgentSummary } from '../main/ets/models/Api';
 import { fileNameOf, isImagePath, isVideoPath } from '../main/ets/utils/DisplayFmt';
 import { sniffMime } from '../main/ets/utils/ImagePicker';
@@ -67,12 +68,31 @@ export default function webAlignTest() {
       expect(applyInboxQuery(items, 'web', 'all', 'name')[0].id).assertEqual('b');
     });
 
-    it('pins in-flight agents when sorting by updated', 0, () => {
+    it('sorts by updatedAt newest first', 0, () => {
       const items = [
         agent({ id: 'old', latestRunStatus: 'FINISHED', updatedAt: '2026-08-14T12:00:00.000Z' }),
-        agent({ id: 'run', latestRunStatus: 'CREATING', updatedAt: '2026-08-14T11:00:00.000Z' })
+        agent({ id: 'run', latestRunStatus: 'CREATING', updatedAt: '2026-08-14T11:00:00.000Z' }),
+        agent({ id: 'fresh', latestRunStatus: 'FINISHED', updatedAt: '2026-08-16T09:00:00.000Z' })
       ];
-      expect(applyInboxQuery(items, '', 'all', 'updated')[0].id).assertEqual('run');
+      expect(applyInboxQuery(items, '', 'all', 'updated')[0].id).assertEqual('fresh');
+      expect(applyInboxQuery(items, '', 'all', 'updated')[1].id).assertEqual('old');
+    });
+
+    it('keeps recency inside repo groups', 0, () => {
+      const items = applyInboxQuery([
+        agent({
+          id: 'older',
+          repo: 'https://github.com/acme/app',
+          updatedAt: '2026-08-10T12:00:00.000Z'
+        }),
+        agent({
+          id: 'newer',
+          repo: 'https://github.com/acme/app',
+          updatedAt: '2026-08-16T12:00:00.000Z'
+        })
+      ], '', 'all', 'updated');
+      const buckets = groupAgents(items, 'repo');
+      expect(buckets[0].items[0].id).assertEqual('newer');
     });
 
     it('groups by status', 0, () => {
@@ -173,6 +193,42 @@ export default function webAlignTest() {
       const d = subagentDetail('{"description":"Scan auth","subagent_type":"explore","prompt":"look around"}');
       expect(d.indexOf('explore') >= 0).assertTrue();
       expect(d.indexOf('Scan auth') >= 0).assertTrue();
+    });
+  });
+
+  describe('MarkdownParse', () => {
+    it('keeps markdown links as label not raw syntax', 0, () => {
+      const blocks = parseMarkdown('见 [PR #1](https://github.com/acme/app/pull/1) 和正文');
+      expect(blocks.length).assertEqual(1);
+      const segs = tokenizeInline(blocks[0].text);
+      let found = false;
+      for (let i = 0; i < segs.length; i++) {
+        if (segs[i].url.indexOf('github.com') >= 0 && segs[i].text === 'PR #1') {
+          found = true;
+        }
+      }
+      expect(found).assertTrue();
+    });
+
+    it('does not treat [PR] list items as tasks', 0, () => {
+      const blocks = parseMarkdown('- [PR #2](https://github.com/acme/app/pull/2)');
+      expect(blocks[0].kind).assertEqual('li');
+      const segs = tokenizeInline(blocks[0].text);
+      expect(segs[0].text).assertEqual('PR #2');
+      expect(segs[0].url.indexOf('/pull/2') >= 0).assertTrue();
+    });
+
+    it('parses table cells with inline code', 0, () => {
+      const md = '| 轨道 | 路径 |\n| --- | --- |\n| Notion | `product/` |';
+      const blocks = parseMarkdown(md);
+      expect(blocks[0].kind).assertEqual('table');
+      expect(blocks[0].text.indexOf('product/') >= 0).assertTrue();
+    });
+
+    it('clips notice without raw markdown', 0, () => {
+      const s = clipNotice('## 结论\n修好了 [Inbox](https://example.com) 排序', 40);
+      expect(s.indexOf('http') < 0).assertTrue();
+      expect(s.indexOf('Inbox') >= 0).assertTrue();
     });
   });
 
