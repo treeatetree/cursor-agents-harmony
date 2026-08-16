@@ -11,6 +11,8 @@ import { PrefStore } from '../store/PrefStore';
 import { Throttle } from '../utils/Throttle';
 import { Haptics } from '../utils/Haptics';
 import { Notify } from '../utils/Notify';
+import { clipNotice } from '../utils/MarkdownParse';
+import { UnreadStore } from '../store/UnreadStore';
 import { LiveIsland } from '../utils/LiveIsland';
 import { ThemeStore } from '../store/ThemeStore';
 import { Log } from '../utils/Log';
@@ -483,6 +485,18 @@ export class DetailVM {
     await this.sendFollowUp(q, imgs);
   }
 
+  private announceFinished(status: string, raw: string): void {
+    const zh = runStatusZh(status);
+    const snippet = clipNotice(raw.length > 0 ? raw : this.resultText, 72);
+    Notify.runFinished(this.name, zh, this.agentId, snippet);
+    AppStorage.setOrCreate('pendingNotice',
+      snippet.length > 0 ? `${this.name} ${zh} · ${snippet}` : `${this.name} ${zh}`);
+    if (DetailVM.activeInstance !== this) {
+      UnreadStore.getInstance().markFinished(this.agentId, this.name, zh, snippet).catch(() => {
+      });
+    }
+  }
+
   private afterRunSettled(): void {
     ThemeStore.getInstance().setKeepScreenOn(false);
     LiveIsland.finish(runStatusZh(this.runStatus)).catch(() => {
@@ -634,7 +648,7 @@ export class DetailVM {
           this.streamNotice = '';
           this.clearPoll();
           Haptics.success();
-          Notify.runFinished(this.name, runStatusZh(run.status), this.agentId);
+          this.announceFinished(run.status, run.result ?? this.resultText);
           this.afterRunSettled();
           this.notify();
         }
@@ -843,7 +857,7 @@ export class DetailVM {
         git: { branches: this.branches }
       });
       Haptics.success();
-      Notify.runFinished(this.name, runStatusZh(status), this.agentId);
+      this.announceFinished(status, this.resultText);
       this.eventIdFlush.flush();
       this.afterRunSettled();
       this.notify();

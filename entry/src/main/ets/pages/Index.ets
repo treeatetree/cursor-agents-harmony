@@ -11,6 +11,7 @@ import { AgentSummary } from '../models/Api';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { PrefStore } from '../store/PrefStore';
 import { AgentCache } from '../store/AgentCache';
+import { UnreadStore } from '../store/UnreadStore';
 import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { Haptics } from '../utils/Haptics';
 import { NetworkBanner } from '../components/NetworkBanner';
@@ -99,6 +100,9 @@ struct Index {
   @State buckets: GroupBucket[] = [];
   @State filteredCount: number = 0;
   @State runningCount: number = 0;
+  @State unreadLine: string = '';
+  @State unreadIds: string[] = [];
+  @State unreadFirstId: string = '';
 
   aboutToAppear(): void {
     const ctx = getContext(this) as common.UIAbilityContext;
@@ -120,6 +124,9 @@ struct Index {
       this.syncBreakpoint();
     });
     // Split mode keeps Index painted — Settings save must push state via SessionVM.onChange.
+    this.inbox.onChange(() => {
+      this.pullInboxUi();
+    });
     this.session.onChange(() => {
       const hadKey = this.hasKey;
       this.refreshSession();
@@ -173,7 +180,7 @@ struct Index {
       this.pinnedIds = ids;
       this.recomputeView();
     });
-    if (this.hasKey && this.session.keyReady && this.inbox.shouldRefresh(10000)) {
+    if (this.hasKey && this.session.keyReady && this.inbox.shouldRefresh(2500)) {
       this.inbox.refresh(true).then(() => {
         this.pullInboxUi();
       });
@@ -190,12 +197,16 @@ struct Index {
   private startPoll(): void {
     this.stopPoll();
     this.pollTimer = setInterval(() => {
-      if (this.hasKey && this.inbox.source.hasActiveLatest()) {
+      if (!this.hasKey) {
+        return;
+      }
+      const busy = this.inbox.source.hasActiveLatest() || this.inbox.dirty;
+      if (busy || this.inbox.shouldRefresh(20000)) {
         this.inbox.refresh(true).then(() => {
           this.pullInboxUi();
         });
       }
-    }, 15000) as number;
+    }, 12000) as number;
   }
 
   private stopPoll(): void {
@@ -247,6 +258,10 @@ struct Index {
     this.authExpired = this.inbox.authExpired;
     this.needsPlanUpgrade = this.inbox.needsPlanUpgrade;
     this.runningCount = this.inbox.runningCount();
+    const unread = UnreadStore.getInstance();
+    this.unreadLine = unread.headline();
+    this.unreadIds = unread.ids();
+    this.unreadFirstId = unread.firstId();
     this.recomputeView();
   }
 
@@ -374,6 +389,9 @@ struct Index {
   private openAgent(id: string): void {
     Haptics.click();
     this.selectedId = id;
+    UnreadStore.getInstance().markSeen(id).then(() => {
+      this.pullInboxUi();
+    });
     const param: Record<string, Object> = {};
     param['agentId'] = id;
     this.navStack.pushPath({ name: 'AgentDetail', param: param });
@@ -659,6 +677,23 @@ struct Index {
           }
         })
 
+        if (this.unreadLine.length > 0) {
+          Text(this.unreadLine)
+            .fontSize(Tokens.typeCaption)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(2)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .width('100%')
+            .constraintSize({ minHeight: Tokens.touchMin })
+            .padding({ left: this.pagePad, right: this.pagePad, top: 8, bottom: 8 })
+            .backgroundColor($r('app.color.bg2'))
+            .onClick(() => {
+              if (this.unreadFirstId.length > 0) {
+                this.openAgent(this.unreadFirstId);
+              }
+            })
+        }
+
         if (this.showPrFilter) {
           Row({ space: 8 }) {
             TextInput({ text: this.prUrlInput, placeholder: '粘贴 PR URL 按此筛选' })
@@ -815,6 +850,7 @@ struct Index {
           preview: AgentCache.getInstance().peekMemSummary(item.id),
           list: true,
           pinned: isPinnedId(item.id, this.pinnedIds),
+          unread: this.unreadIds.indexOf(item.id) >= 0,
           active: item.id === this.selectedId,
           onOpen: (id: string) => {
             this.openAgent(id);
@@ -966,6 +1002,7 @@ struct Index {
       showRepo: this.groupMode !== 'repo',
       preview: AgentCache.getInstance().peekMemSummary(item.id),
       pinned: isPinnedId(item.id, this.pinnedIds),
+      unread: this.unreadIds.indexOf(item.id) >= 0,
       onOpen: (id: string) => {
         this.openAgent(id);
       },

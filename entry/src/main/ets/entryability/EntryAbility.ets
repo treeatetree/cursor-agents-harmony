@@ -13,6 +13,7 @@ import { DetailVM } from '../viewmodels/DetailVM';
 import { InboxVM } from '../viewmodels/InboxVM';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Notify } from '../utils/Notify';
+import { UnreadStore } from '../store/UnreadStore';
 
 const DOMAIN = 0x435552;
 const TAG = 'CursorMobile';
@@ -30,6 +31,7 @@ export default class EntryAbility extends UIAbility {
     PrefStore.getInstance().init(this.context).then(async () => {
       await ThemeStore.getInstance().loadPref();
       await ReadPrefStore.getInstance().load();
+      await UnreadStore.getInstance().load();
       ThemeStore.getInstance().applyToApp(this.context.getApplicationContext());
       Notify.ensureChannel().catch(() => {
       });
@@ -200,6 +202,9 @@ export default class EntryAbility extends UIAbility {
       const raw = want.parameters;
       if (raw && raw['agentId']) {
         AppStorage.setOrCreate('pendingAgentId', `${raw['agentId']}`);
+      }
+      if (raw && raw['noticeText']) {
+        AppStorage.setOrCreate('pendingNotice', `${raw['noticeText']}`);
       }
     } catch (_e) {
     }

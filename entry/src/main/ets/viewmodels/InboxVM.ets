@@ -8,6 +8,9 @@ import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Log } from '../utils/Log';
 import { Notify } from '../utils/Notify';
 import { WidgetBridge } from '../utils/WidgetBridge';
+import { UnreadStore } from '../store/UnreadStore';
+import { clipNotice } from '../utils/MarkdownParse';
+import { DetailVM } from './DetailVM';
 
 const TAG = 'InboxVM';
 
@@ -25,7 +28,20 @@ export class InboxVM {
   authExpired: boolean = false;
   needsPlanUpgrade: boolean = false;
   lastRefreshAt: number = 0;
+  dirty: boolean = false;
   private ctx: common.UIAbilityContext | undefined = undefined;
+  private heldIds: string[] = [];
+  private listeners: Array<() => void> = [];
+
+  onChange(cb: () => void): void {
+    this.listeners.push(cb);
+  }
+
+  private emitChange(): void {
+    for (let i = 0; i < this.listeners.length; i++) {
+      this.listeners[i]();
+    }
+  }
 
   static getInstance(): InboxVM {
     if (!InboxVM.instance) {
@@ -49,6 +65,9 @@ export class InboxVM {
   }
 
   shouldRefresh(minIntervalMs: number = 10000): boolean {
+    if (this.dirty || this.heldIds.length > 0) {
+      return true;
+    }
     if (this.lastRefreshAt <= 0) {
       return true;
     }
@@ -82,15 +101,19 @@ export class InboxVM {
       }
       this.nextCursor = unwrapped.nextCursor ?? '';
       this.mergeRunStatus(agents);
+      const prev = this.source.snapshot();
+      agents = this.mergeHeld(agents);
+      this.noteStatusChanges(prev, agents);
       this.source.replaceAll(agents);
       AgentCache.getInstance().saveInbox(agents);
       this.loadedOnce = true;
       this.lastRefreshAt = Date.now();
+      this.dirty = this.heldIds.length > 0;
       Log.info(TAG, `inbox ${agents.length}`);
-      this.enrichRunStatuses(agents.slice(0, 6));
-      Notify.setRunningBadge(this.runningCount()).catch(() => {
-      });
+      this.enrichRunStatuses(agents.slice(0, 8));
+      UnreadStore.getInstance().syncBadge();
       this.pushWidget();
+      this.emitChange();
     } catch (e) {
       this.applyError(e, '刷新失败');
     } finally {
@@ -143,10 +166,12 @@ export class InboxVM {
           const snap = this.source.snapshot();
           for (let j = 0; j < snap.length; j++) {
             if (snap[j].id === agentId) {
+              const oldStatus = `${snap[j].latestRunStatus ?? ''}`;
               snap[j].latestRunStatus = run.status;
               applyRunGit(snap[j], run);
               applyRunResult(snap[j], run);
               this.source.updateAt(j, snap[j]);
+              this.noteTerminal(snap[j], oldStatus);
               break;
             }
           }
@@ -157,9 +182,9 @@ export class InboxVM {
     if (tasks.length > 0) {
       await Promise.all(tasks);
       AgentCache.getInstance().saveInbox(this.source.snapshot());
-      Notify.setRunningBadge(this.runningCount()).catch(() => {
-      });
+      UnreadStore.getInstance().syncBadge();
       this.pushWidget();
+      this.emitChange();
     }
   }
 
@@ -180,6 +205,7 @@ export class InboxVM {
       const merged = this.source.snapshot().concat(more);
       this.source.replaceAll(merged);
       AgentCache.getInstance().saveInbox(merged);
+      this.emitChange();
     } catch (e) {
       this.applyError(e, '加载更多失败');
     } finally {
@@ -208,15 +234,81 @@ export class InboxVM {
   }
 
   prependOptimistic(agent: AgentSummary): void {
+    this.heldIds = [agent.id].concat(this.heldIds.filter((id: string) => id !== agent.id));
+    this.dirty = true;
     this.source.prepend(agent);
     AgentCache.getInstance().saveInbox(this.source.snapshot());
     this.pushWidget();
+    this.emitChange();
+  }
+
+  private mergeHeld(remote: AgentSummary[]): AgentSummary[] {
+    const seen: Record<string, boolean> = {};
+    for (let i = 0; i < remote.length; i++) {
+      seen[remote[i].id] = true;
+    }
+    const still: string[] = [];
+    const extra: AgentSummary[] = [];
+    const prev = this.source.snapshot();
+    for (let i = 0; i < this.heldIds.length; i++) {
+      const id = this.heldIds[i];
+      if (seen[id]) {
+        continue;
+      }
+      still.push(id);
+      for (let j = 0; j < prev.length; j++) {
+        if (prev[j].id === id) {
+          extra.push(prev[j]);
+          break;
+        }
+      }
+    }
+    this.heldIds = still;
+    if (extra.length === 0) {
+      return remote;
+    }
+    return extra.concat(remote);
+  }
+
+  private noteStatusChanges(prev: AgentSummary[], next: AgentSummary[]): void {
+    for (let i = 0; i < next.length; i++) {
+      const a = next[i];
+      let old = '';
+      for (let j = 0; j < prev.length; j++) {
+        if (prev[j].id === a.id) {
+          old = `${prev[j].latestRunStatus ?? ''}`;
+          break;
+        }
+      }
+      this.noteTerminal(a, old);
+    }
+  }
+
+  private noteTerminal(a: AgentSummary, oldStatus: string): void {
+    const now = `${a.latestRunStatus ?? ''}`;
+    if (!isTerminalRun(now)) {
+      return;
+    }
+    if (oldStatus === now || (oldStatus.length > 0 && isTerminalRun(oldStatus))) {
+      return;
+    }
+    const watching = DetailVM.getActive()?.agentId ?? '';
+    if (watching === a.id) {
+      return;
+    }
+    const zh = runStatusLabel(now);
+    const snippet = clipNotice(a.latestResult ?? a.name ?? '', 56);
+    UnreadStore.getInstance().markFinished(a.id, a.name ?? '', zh, snippet).catch(() => {
+    });
+    Notify.runFinished(a.name ?? '', zh, a.id, snippet).catch(() => {
+    });
   }
 
   removeLocal(agentId: string): void {
     this.source.removeById(agentId);
     AgentCache.getInstance().saveInbox(this.source.snapshot());
     this.pushWidget();
+    this.emitChange();
   }
 
   private pushWidget(): void {
@@ -301,6 +393,26 @@ function applyRunGit(agent: AgentSummary, run: Run): void {
     return;
   }
   agent.repos = [{ url: url, prUrl: pr.length > 0 ? pr : undefined }];
+}
+
+function isTerminalRun(status: string): boolean {
+  return status === 'FINISHED' || status === 'ERROR' || status === 'CANCELLED' || status === 'EXPIRED';
+}
+
+function runStatusLabel(status: string): string {
+  if (status === 'FINISHED') {
+    return '已完成';
+  }
+  if (status === 'ERROR') {
+    return '失败';
+  }
+  if (status === 'CANCELLED') {
+    return '已取消';
+  }
+  if (status === 'EXPIRED') {
+    return '已过期';
+  }
+  return status;
 }
 
 function applyRunResult(agent: AgentSummary, run: Run): void {

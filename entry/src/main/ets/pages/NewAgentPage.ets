@@ -386,14 +386,17 @@ struct NewAgentPage {
         await PrefStore.getInstance().setDefaultModel(this.selectedModel);
       }
       const a = resp.agent;
+      const nowIso = a.updatedAt && a.updatedAt.length > 0 ? a.updatedAt :
+        (a.createdAt && a.createdAt.length > 0 ? a.createdAt : new Date().toISOString());
       const summary: AgentSummary = {
         id: a.id,
         name: a.name,
         status: a.status,
         url: a.url,
-        createdAt: a.createdAt,
-        updatedAt: a.updatedAt,
-        latestRunId: resp.run?.id
+        createdAt: a.createdAt && a.createdAt.length > 0 ? a.createdAt : nowIso,
+        updatedAt: nowIso,
+        latestRunId: resp.run?.id,
+        latestRunStatus: 'CREATING'
       };
       InboxVM.getInstance().prependOptimistic(summary);
       Haptics.success();

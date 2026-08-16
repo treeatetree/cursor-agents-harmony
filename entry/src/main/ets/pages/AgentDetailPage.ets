@@ -19,6 +19,7 @@ import { ArtifactRow } from '../components/ArtifactRow';
 import { McpListEditor } from '../components/CapabilityEditors';
 import { countMcp, isMcpReady, parseToolsPref, toolsChipLabel, defaultEnv } from '../utils/AgentCapabilities';
 import { PrefStore } from '../store/PrefStore';
+import { UnreadStore } from '../store/UnreadStore';
 import { HuIcon } from '../components/HuIcon';
 import { HuIconButton } from '../components/HuIconButton';
 import { dropPreviewMap, maxPromptImages, pickPromptImages, previewSrc, PromptImage } from '../utils/ImagePicker';
@@ -46,6 +47,7 @@ struct AgentDetailPage {
   private bp: BreakpointStore = BreakpointStore.getInstance();
   private listScroller: Scroller = new Scroller();
 
+  @State noticeLine: string = '';
   @State agentId: string = '';
   @State name: string = '';
   @State status: string = '';
@@ -165,6 +167,25 @@ struct AgentDetailPage {
         }
       }, 16);
     }
+  }
+
+  private consumeNotice(): void {
+    let line = '';
+    try {
+      const raw = AppStorage.get<string>('pendingNotice');
+      if (raw && raw.length > 0) {
+        line = raw;
+        AppStorage.setOrCreate('pendingNotice', '');
+      }
+    } catch (_e) {
+    }
+    if (line.length > 0) {
+      this.noticeLine = line;
+    }
+  }
+
+  private dismissNotice(): void {
+    this.noticeLine = '';
   }
 
   private openLink(link: string, title: string = 'Web'): void {
@@ -542,6 +563,20 @@ struct AgentDetailPage {
           top: this.topInset
         })
 
+        if (this.noticeLine.length > 0) {
+          Text(this.noticeLine)
+            .width('100%')
+            .fontSize(Tokens.typeCaption)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(3)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .padding({ left: this.pagePad, right: this.pagePad, top: 8, bottom: 8 })
+            .backgroundColor($r('app.color.bg2'))
+            .onClick(() => {
+              this.dismissNotice();
+            })
+        }
+
         if (this.needsPlanUpgrade) {
           Text('套餐不足，打开 Dashboard 升级 ↗')
             .width('100%')
@@ -647,6 +682,9 @@ struct AgentDetailPage {
         });
         this.vm.open(this.agentId).then(() => {
           this.sync();
+          this.consumeNotice();
+        });
+        UnreadStore.getInstance().markSeen(this.agentId).catch(() => {
         });
         PrefStore.getInstance().getPinnedIds().then((ids: string[]) => {
           this.pinned = ids.indexOf(this.agentId) >= 0;
@@ -667,6 +705,7 @@ struct AgentDetailPage {
       }
     })
     .onShown(() => {
+      this.consumeNotice();
       this.vm.resumeIfNeeded().then(() => {
         this.sync();
       });

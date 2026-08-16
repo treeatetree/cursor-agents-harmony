@@ -23,24 +23,42 @@ export class Notify {
     }
   }
 
-  static async setRunningBadge(count: number): Promise<void> {
+  static async setBadge(count: number): Promise<void> {
     try {
       await notificationManager.setBadgeNumber(Math.max(0, count));
     } catch (_e) {
     }
   }
 
-  static async runFinished(agentName: string, statusZh: string, agentId: string): Promise<void> {
+  /** @deprecated use setBadge — kept so older call sites compile during the cutover. */
+  static async setRunningBadge(count: number): Promise<void> {
+    await Notify.setBadge(count);
+  }
+
+  private static lastSent: Record<string, number> = {};
+
+  static async runFinished(agentName: string, statusZh: string, agentId: string,
+    snippet: string = ''): Promise<void> {
     if (!Notify.enabled) {
       return;
     }
+    const now = Date.now();
+    const prev = Notify.lastSent[agentId] ?? 0;
+    if (now - prev < 25000) {
+      return;
+    }
+    Notify.lastSent[agentId] = now;
     try {
-      const title = agentName.length > 0 ? agentName : 'Cursor Agent';
+      const title = agentName.length > 0 ? `${agentName} · ${statusZh}` : `任务${statusZh}`;
+      const body = snippet.length > 0 ? snippet : '点按查看对话';
       const info: wantAgent.WantAgentInfo = {
         wants: [{
           bundleName: 'com.brian.cursor.mobile',
           abilityName: 'EntryAbility',
-          parameters: { 'agentId': agentId }
+          parameters: {
+            'agentId': agentId,
+            'noticeText': `${title}${snippet.length > 0 ? ` · ${snippet}` : ''}`
+          }
         }],
         operationType: wantAgent.OperationType.START_ABILITY,
         requestCode: Math.abs(hashCode(agentId)) % 100000
@@ -53,7 +71,7 @@ export class Notify {
           notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
           normal: {
             title: title,
-            text: `运行${statusZh}`,
+            text: body,
             additionalText: '点按打开对话'
           }
         }

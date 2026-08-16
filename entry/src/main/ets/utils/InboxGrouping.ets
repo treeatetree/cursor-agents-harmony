@@ -87,15 +87,7 @@ export function groupAgents(items: AgentSummary[], mode: GroupMode, pinned: stri
   } else {
     buckets = groupByTime(rest);
   }
-  for (let i = 0; i < buckets.length; i++) {
-    buckets[i].items.sort((x: AgentSummary, y: AgentSummary) => {
-      const urg = urgencyOf(x) - urgencyOf(y);
-      if (urg !== 0) {
-        return urg;
-      }
-      return stamp(y.updatedAt || y.createdAt) - stamp(x.updatedAt || x.createdAt);
-    });
-  }
+  // Keep the incoming item order (applyInboxQuery already sorted).
   if (mode === 'repo') {
     buckets.sort((g: GroupBucket, h: GroupBucket) => bucketLatest(h) - bucketLatest(g));
   } else {
@@ -230,10 +222,6 @@ function compareAgents(x: AgentSummary, y: AgentSummary, sort: SortMode): number
   }
   if (sort === 'created') {
     return stamp(y.createdAt) - stamp(x.createdAt);
-  }
-  const urg = urgencyOf(x) - urgencyOf(y);
-  if (urg !== 0) {
-    return urg;
   }
   return stamp(y.updatedAt || y.createdAt) - stamp(x.updatedAt || x.createdAt);
 }

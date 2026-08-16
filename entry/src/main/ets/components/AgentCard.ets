@@ -20,6 +20,7 @@ export struct AgentCard {
   @Prop preview: string = '';
   @Prop list: boolean = false;
   @Prop pinned: boolean = false;
+  @Prop unread: boolean = false;
   @Prop active: boolean = false;
   @State private pressed: boolean = false;
   @State private tick: number = 0;
@@ -169,6 +170,13 @@ export struct AgentCard {
       Blank().layoutWeight(1)
 
       Row({ space: 8 }) {
+        if (this.unread) {
+          Column()
+            .width(6)
+            .height(6)
+            .borderRadius(3)
+            .backgroundColor($r('app.color.text_primary'))
+        }
         if (this.pinned) {
           Text('置顶')
             .fontSize(Tokens.typeMicro)

@@ -21,6 +21,7 @@ const KEY_LAST_TOOLS = 'last_agent_tools';
 const KEY_TYPE = 'type_pref';
 const KEY_DENSITY = 'density_pref';
 const KEY_AVATAR = 'avatar_preset';
+const KEY_UNREAD = 'unread_items';
 
 export class PrefStore {
   private static instance: PrefStore | undefined = undefined;
@@ -290,6 +291,27 @@ export class PrefStore {
     await this.pref.flush();
   }
 
+  async getUnreadItems(): Promise<UnreadRow[]> {
+    if (!this.pref) {
+      return [];
+    }
+    try {
+      const raw = (await this.pref.get(KEY_UNREAD, '[]')) as string;
+      const parsed = JSON.parse(raw) as UnreadRow[];
+      return parsed ?? [];
+    } catch (_e) {
+      return [];
+    }
+  }
+
+  async setUnreadItems(items: UnreadRow[]): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    await this.pref.put(KEY_UNREAD, JSON.stringify(items));
+    await this.pref.flush();
+  }
+
   async getLastEventId(agentId: string, runId: string): Promise<string> {
     const map = await this.loadEventMap();
     return map[`${agentId}:${runId}`] ?? '';
@@ -316,4 +338,12 @@ export class PrefStore {
       return {};
     }
   }
+}
+
+export interface UnreadRow {
+  id: string;
+  name: string;
+  statusZh: string;
+  snippet: string;
+  at: number;
 }
