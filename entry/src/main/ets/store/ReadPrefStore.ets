@@ -1,7 +1,7 @@
 import { PrefStore } from './PrefStore';
 import { Tokens } from '../theme/Tokens';
 
-export type TypePref = 'default' | 'large';
+export type TypePref = 'small' | 'default' | 'large';
 export type DensityPref = 'comfortable' | 'compact';
 
 /**
@@ -39,7 +39,13 @@ export class ReadPrefStore {
   }
 
   private apply(type: string, density: string): void {
-    this.typePref = type === 'large' ? 'large' : 'default';
+    if (type === 'small') {
+      this.typePref = 'small';
+    } else if (type === 'large') {
+      this.typePref = 'large';
+    } else {
+      this.typePref = 'default';
+    }
     this.densityPref = density === 'compact' ? 'compact' : 'comfortable';
     Tokens.applyReadPref(this.typePref, this.densityPref);
     this.rev += 1;

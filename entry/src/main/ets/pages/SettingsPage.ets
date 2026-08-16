@@ -40,7 +40,7 @@ struct SettingsPage {
   @State topInset: number = 0;
   @State bottomInset: number = 0;
   @State showReplace: boolean = false;
-  @State typeLarge: boolean = false;
+  @State typePref: string = 'default';
   @State densityCompact: boolean = false;
   @State pressKey: string = '';
   @State avatarPreset: string = 'iridescent';
@@ -66,7 +66,7 @@ struct SettingsPage {
     this.defaultModel = await prefs.getDefaultModel();
     this.avatarPreset = normalizeAvatarId(await prefs.getAvatarPreset());
     const read = ReadPrefStore.getInstance();
-    this.typeLarge = read.typePref === 'large';
+    this.typePref = read.typePref;
     this.densityCompact = read.densityPref === 'compact';
   }
 
@@ -238,15 +238,32 @@ struct SettingsPage {
               .padding(3)
               .backgroundColor($r('app.color.bg2'))
               .borderRadius(Tokens.radiusMd)
-              HuSwitch({
-                on: this.typeLarge,
-                label: '偏大字',
-                hint: '正文大约 1.12 倍',
-                onToggle: async () => {
-                  this.typeLarge = !this.typeLarge;
-                  await ReadPrefStore.getInstance().setType(this.typeLarge ? 'large' : 'default');
+              Column({ space: 6 }) {
+                Text('字号')
+                  .fontSize(Tokens.typeCaption)
+                  .fontColor($r('app.color.text_tertiary'))
+                  .width('100%')
+                Row() {
+                  Column() {
+                    this.typeSeg('small', '偏小')
+                  }
+                  .layoutWeight(1)
+                  Column() {
+                    this.typeSeg('default', '默认')
+                  }
+                  .layoutWeight(1)
+                  Column() {
+                    this.typeSeg('large', '偏大')
+                  }
+                  .layoutWeight(1)
                 }
-              })
+                .width('100%')
+                .height(36)
+                .padding(3)
+                .backgroundColor($r('app.color.bg2'))
+                .borderRadius(Tokens.radiusMd)
+              }
+              .width('100%')
               HuSwitch({
                 on: this.densityCompact,
                 label: '紧凑',
@@ -425,6 +442,30 @@ struct SettingsPage {
     }
     .width('100%')
     .padding({ top: 8, bottom: 12 })
+  }
+
+  @Builder
+  typeSeg(value: string, label: string) {
+    Text(label)
+      .fontSize(Tokens.typeCaption)
+      .fontWeight(this.typePref === value ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.typePref === value ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+      .width('100%')
+      .height(30)
+      .textAlign(TextAlign.Center)
+      .backgroundColor(this.typePref === value ? $r('app.color.bg1') : Color.Transparent)
+      .borderRadius(8)
+      .onClick(async () => {
+        Haptics.toggle();
+        this.typePref = value;
+        if (value === 'small') {
+          await ReadPrefStore.getInstance().setType('small');
+        } else if (value === 'large') {
+          await ReadPrefStore.getInstance().setType('large');
+        } else {
+          await ReadPrefStore.getInstance().setType('default');
+        }
+      })
   }
 
   @Builder

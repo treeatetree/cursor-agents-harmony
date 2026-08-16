@@ -62,7 +62,12 @@ export class Tokens {
   static readonly shadowY: number = 0;
 
   static applyReadPref(type: string, density: string): void {
-    const k = type === 'large' ? 1.12 : 1.0;
+    let k = 1.0;
+    if (type === 'small') {
+      k = 0.88;
+    } else if (type === 'large') {
+      k = 1.12;
+    }
     Tokens.typeDisplay = Math.round(28 * k);
     Tokens.typeTitle = Math.round(22 * k);
     Tokens.typeHeadline = Math.round(17 * k);
@@ -70,11 +75,11 @@ export class Tokens {
     Tokens.typeBody = Math.round(15 * k);
     Tokens.typeCallout = Math.round(14 * k);
     Tokens.typeCaption = Math.round(13 * k);
-    Tokens.typeMicro = type === 'large' ? 13 : 12;
-    Tokens.lineBody = type === 'large' ? 22 : 20;
-    Tokens.lineProse = type === 'large' ? 26 : 24;
-    Tokens.lineCaption = type === 'large' ? 20 : 18;
-    Tokens.lineList = type === 'large' ? 24 : 22;
+    Tokens.typeMicro = type === 'large' ? 13 : (type === 'small' ? 11 : 12);
+    Tokens.lineBody = type === 'large' ? 22 : (type === 'small' ? 18 : 20);
+    Tokens.lineProse = type === 'large' ? 26 : (type === 'small' ? 22 : 24);
+    Tokens.lineCaption = type === 'large' ? 20 : (type === 'small' ? 16 : 18);
+    Tokens.lineList = type === 'large' ? 24 : (type === 'small' ? 20 : 22);
     if (density === 'compact') {
       Tokens.pagePad = 12;
       Tokens.cardPad = 10;
@@ -87,6 +92,7 @@ export class Tokens {
       Tokens.cardPad = 12;
       Tokens.sec = 12;
       Tokens.chromePad = 12;
+      // Keep the locked 116 card for default / small so the dual grid stays even.
       Tokens.cardH = type === 'large' ? 124 : 116;
       Tokens.listCardH = type === 'large' ? 72 : 68;
     }
