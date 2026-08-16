@@ -45,12 +45,12 @@ export struct HuChip {
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;
+        Haptics.tick();
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressed = false;
       }
     })
     .onClick(() => {
-      Haptics.tick();
       this.onTap();
     })
   }
@@ -83,12 +83,12 @@ export struct HuActionChip {
       .onTouch((e: TouchEvent) => {
         if (e.type === TouchType.Down) {
           this.pressed = true;
+          Haptics.click();
         } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
           this.pressed = false;
         }
       })
       .onClick(() => {
-        Haptics.click();
         this.onTap();
       })
   }

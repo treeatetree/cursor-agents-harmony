@@ -26,21 +26,21 @@ export struct HuAvatar {
       color: $r('app.color.accent')
     })
     .scale({
-      x: pressScaleOf(this.pressed),
-      y: pressScaleOf(this.pressed)
+      x: pressScaleOf(this.pressed, true),
+      y: pressScaleOf(this.pressed, true)
     })
-    .opacity(this.pressed ? 0.85 : 1)
+    .opacity(this.pressed ? 0.78 : 1)
     .animation({ duration: pressMs(), curve: Curve.EaseOut })
     .accessibilityText(avatarLabel(this.preset))
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;
+        Haptics.click();
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressed = false;
       }
     })
     .onClick(() => {
-      Haptics.click();
       this.onTap();
     })
   }

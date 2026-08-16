@@ -243,6 +243,7 @@ export struct AgentCard {
         this.skipOpen = false;
         return;
       }
+      Haptics.soft();
       this.onOpen(this.agent.id);
     })
     .gesture(

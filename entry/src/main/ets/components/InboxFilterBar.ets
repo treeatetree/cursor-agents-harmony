@@ -234,12 +234,12 @@ struct InboxSeg {
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;
+        Haptics.tick();
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressed = false;
       }
     })
     .onClick(() => {
-      Haptics.tick();
       this.onTap();
     })
   }

@@ -1,6 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
-import { pressMs } from '../utils/Motion';
+import { pressMs, pressScaleOf } from '../utils/Motion';
 import { HuIcon } from './HuIcon';
 
 @Component
@@ -31,8 +31,8 @@ export struct HuIconButton {
     .borderRadius(Tokens.radiusPill)
     .backgroundColor(this.filled ? this.accentFill : Color.Transparent)
     .scale({
-      x: this.isEnabled && this.pressed ? Tokens.pressScale : 1,
-      y: this.isEnabled && this.pressed ? Tokens.pressScale : 1
+      x: pressScaleOf(this.isEnabled && this.pressed, this.filled),
+      y: pressScaleOf(this.isEnabled && this.pressed, this.filled)
     })
     .opacity(this.isEnabled ? (this.pressed ? 0.7 : 1) : 0.4)
     .animation({ duration: pressMs(), curve: Curve.EaseOut })
@@ -43,6 +43,7 @@ export struct HuIconButton {
       }
       if (e.type === TouchType.Down) {
         this.pressed = true;
+        Haptics.down();
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressed = false;
       }
@@ -51,8 +52,6 @@ export struct HuIconButton {
       if (this.isEnabled) {
         if (this.filled) {
           Haptics.commit();
-        } else {
-          Haptics.click();
         }
         this.onTap();
       }

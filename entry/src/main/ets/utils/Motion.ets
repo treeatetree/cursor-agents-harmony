@@ -1,5 +1,5 @@
 /**
- * Two speeds only: press 90ms EaseOut, layout 200ms FastOutSlowIn.
+ * Two speeds only: press 110ms EaseOut, layout 240ms FastOutSlowIn.
  * No spring, no stagger. prefers-reduced-motion → 0 / IDENTITY.
  */
 import { mediaquery } from '@kit.ArkUI';
@@ -20,14 +20,14 @@ export function motionMs(): number {
 
 /** Finger-down feedback — shorter than layout motion. */
 export function pressMs(): number {
-  return prefersReducedMotion() ? 0 : 90;
+  return prefersReducedMotion() ? 0 : 110;
 }
 
-export function pressScaleOf(pressed: boolean): number {
+export function pressScaleOf(pressed: boolean, strong: boolean = false): number {
   if (prefersReducedMotion() || !pressed) {
     return 1;
   }
-  return Tokens.pressScale;
+  return strong ? Tokens.pressScaleStrong : Tokens.pressScale;
 }
 
 export function shakeSeq(): number[] {
@@ -56,7 +56,7 @@ export function chromeTransition(): TransitionEffect {
     return TransitionEffect.IDENTITY;
   }
   return TransitionEffect.OPACITY
-    .combine(TransitionEffect.translate({ y: -6 }))
+    .combine(TransitionEffect.translate({ y: -10 }))
     .animation({ duration: ms, curve: Curve.EaseOut });
 }
 
@@ -66,7 +66,9 @@ export function fadeTransition(): TransitionEffect {
   if (ms <= 0) {
     return TransitionEffect.IDENTITY;
   }
-  return TransitionEffect.OPACITY.animation({ duration: ms, curve: Curve.EaseOut });
+  return TransitionEffect.OPACITY
+    .combine(TransitionEffect.translate({ y: 4 }))
+    .animation({ duration: ms, curve: Curve.EaseOut });
 }
 
 /** Inbox group cards appearing under a section. */
@@ -76,7 +78,7 @@ export function expandTransition(): TransitionEffect {
     return TransitionEffect.IDENTITY;
   }
   return TransitionEffect.OPACITY
-    .combine(TransitionEffect.translate({ y: 6 }))
+    .combine(TransitionEffect.translate({ y: 10 }))
     .animation({ duration: ms, curve: Curve.FastOutSlowIn });
 }
 

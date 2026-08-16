@@ -40,8 +40,9 @@ export class Tokens {
   static readonly controlH: number = 44;
   static readonly controlHLg: number = 44;
   static readonly iconMd: number = 22;
-  static readonly pressScale: number = 0.97;
-  static readonly motionMs: number = 200;
+  static readonly pressScale: number = 0.94;
+  static readonly pressScaleStrong: number = 0.91;
+  static readonly motionMs: number = 240;
 
   /** UI stays on HarmonyOS Sans. Geist Latin + CJK mix looked wrong. */
   static readonly fontUi: string = 'HarmonyOS Sans';

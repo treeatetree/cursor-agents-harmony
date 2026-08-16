@@ -1,6 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
-import { motionMs, prefersReducedMotion, pressMs } from '../utils/Motion';
+import { motionMs, prefersReducedMotion, pressMs, pressScaleOf } from '../utils/Motion';
 
 @Component
 export struct HuSwitch {
@@ -52,6 +52,7 @@ export struct HuSwitch {
     .width('100%')
     .constraintSize({ minHeight: Tokens.touchMin })
     .alignItems(VerticalAlign.Center)
+    .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
     .opacity(this.pressed ? 0.7 : 1)
     .animation({ duration: pressMs(), curve: Curve.EaseOut })
     .onTouch((e: TouchEvent) => {

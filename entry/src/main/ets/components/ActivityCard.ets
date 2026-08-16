@@ -2,6 +2,7 @@ import { TimelineItem } from '../models/Timeline';
 import { Tokens } from '../theme/Tokens';
 import { lastNonEmptyLine } from '../utils/StreamText';
 import { fadeTransition, motionMs, pressMs, pressScaleOf, runLayout, shimmerMs, shimmerOpacity } from '../utils/Motion';
+import { Haptics } from '../utils/Haptics';
 import { HuIcon } from './HuIcon';
 import { MarkdownLite } from './MarkdownLite';
 import { ToolCallRow } from './ToolCallRow';
@@ -128,6 +129,9 @@ export struct ActivityCard {
         }
       })
       .onClick(() => {
+        if (this.hasBody()) {
+          Haptics.tick();
+        }
         this.toggleOpen();
       })
 

@@ -15,14 +15,19 @@ export class Haptics {
     Haptics.enabled = value;
   }
 
+  /** Finger-down, synced with press scale. */
+  static down(): void {
+    Haptics.fire('haptic.effect.sharp', 70, 'touch');
+  }
+
   /** Chip / filter / light selection. */
   static tick(): void {
-    Haptics.fire('haptic.effect.sharp', 72, 'touch');
+    Haptics.fire('haptic.effect.sharp', 78, 'touch');
   }
 
   /** Toolbar icon, secondary control. Sound stays off — too frequent. */
   static click(): void {
-    Haptics.fire('haptic.effect.hard', 86, 'touch');
+    Haptics.fire('haptic.effect.hard', 92, 'touch');
   }
 
   /** Open a card or push a page. */

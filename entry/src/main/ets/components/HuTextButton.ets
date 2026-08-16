@@ -1,6 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
-import { pressMs } from '../utils/Motion';
+import { pressMs, pressScaleOf } from '../utils/Motion';
 
 @Component
 export struct HuTextButton {
@@ -24,6 +24,10 @@ export struct HuTextButton {
       })
       .padding({ left: this.compact ? 6 : 8, right: this.compact ? 6 : 8 })
       .textAlign(TextAlign.Center)
+      .scale({
+        x: pressScaleOf(this.isEnabled && this.pressed),
+        y: pressScaleOf(this.isEnabled && this.pressed)
+      })
       .opacity(this.isEnabled ? (this.pressed ? 0.55 : 1) : 0.4)
       .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onTouch((e: TouchEvent) => {
@@ -32,17 +36,17 @@ export struct HuTextButton {
         }
         if (e.type === TouchType.Down) {
           this.pressed = true;
+          if (this.active) {
+            Haptics.click();
+          } else {
+            Haptics.tick();
+          }
         } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
           this.pressed = false;
         }
       })
       .onClick(() => {
         if (this.isEnabled) {
-          if (this.active) {
-            Haptics.click();
-          } else {
-            Haptics.tick();
-          }
           this.onTap();
         }
       })

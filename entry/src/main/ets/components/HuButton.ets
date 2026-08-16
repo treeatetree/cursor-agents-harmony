@@ -3,7 +3,7 @@ import { Haptics } from '../utils/Haptics';
 import { pressMs, pressScaleOf } from '../utils/Motion';
 
 /**
- * HeroUI-style button: accent fill, 24 radius, press scale 0.97.
+ * HeroUI-style button: accent fill, 24 radius, press scale 0.94.
  * variant: primary | secondary | danger
  */
 @Component
@@ -55,8 +55,11 @@ export struct HuButton {
         width: this.isEnabled ? 0 : 1,
         color: $r('app.color.border_strong')
       })
-      .scale({ x: pressScaleOf(this.isEnabled && this.pressed), y: pressScaleOf(this.isEnabled && this.pressed) })
-      .opacity(this.isEnabled ? (this.pressed ? 0.82 : 1) : 1)
+      .scale({
+        x: pressScaleOf(this.isEnabled && this.pressed, this.variant !== 'secondary'),
+        y: pressScaleOf(this.isEnabled && this.pressed, this.variant !== 'secondary')
+      })
+      .opacity(this.isEnabled ? (this.pressed ? 0.78 : 1) : 1)
       .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onTouch((e: TouchEvent) => {
         if (!this.isEnabled) {
@@ -64,6 +67,7 @@ export struct HuButton {
         }
         if (e.type === TouchType.Down) {
           this.pressed = true;
+          Haptics.down();
         } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
           this.pressed = false;
         }
