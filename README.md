@@ -1,35 +1,41 @@
-# HM_APP — Cursor Agents on Harmony / 卓易通
+# Cursor Agents — HarmonyOS Native
 
-Personal shell to open `https://cursor.com/agents` with an app-like experience on a Huawei phone (via 卓易通 for Android APKs).
+Cursor Cloud Agents 的鸿蒙原生指挥台。直连 `api.cursor.com`，不走 WebView。
 
-## Layout
+## 功能
 
-| Path | Role |
-|------|------|
-| [`android-shell/`](android-shell/) | **Current deliverable** — Android WebView shell APK (`com.brian.agents.shell`, display name Agents) |
-| [`entry/`](entry/) + Harmony project files | ArkWeb attempt — **parked** (Cloudflare Turnstile); see [`PARKED.txt`](PARKED.txt) |
-| [`scripts/install-android.sh`](scripts/install-android.sh) | Build signed release + push APK to device Downloads |
-| [`DELIVERY.txt`](DELIVERY.txt) | Delivery notes / version changelog |
+- API Key 加密存储 + `/v1/me` 校验
+- Inbox（缓存优先 / 刷新 / 空态）
+- 新建 Agent（仓库、分支、模型、Agent/Plan、自动 PR）
+- Agent 详情：SSE 流式时间线、Outcome（PR/分支）、追问、取消
+- Pura X Max：外屏 / 内屏展开 / 横竖屏断点（Stack ↔ Split）
+- 网络断开横幅、轻触觉、键盘 RESIZE
 
-## Android shell (quick start)
+## 环境
+
+- DevEco Studio + HarmonyOS SDK（工程 target `6.1.1(24)`）
+- 真机：华为 Pura X Max（亦兼容 phone/tablet）
+
+## 构建与安装
 
 ```bash
-export JAVA_HOME="/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home"
-export ANDROID_HOME="$HOME/Library/Android/sdk"
+# WiFi 调试（手机「无线调试」页的 IP:端口）
+./scripts/wifi-connect.sh connect <ip:port>
 
-# Signing (local only — not committed): android-shell/local.properties
-# RELEASE_STORE_PASSWORD=...
-# RELEASE_KEY_PASSWORD=...
-# RELEASE_KEY_ALIAS=cursor
-# Place keystore at android-shell/keystore/cursor-release.jks (gitignored)
+# 编译
+./scripts/build.sh
 
-cd android-shell && ./gradlew assembleRelease
-# or from repo root:
-./scripts/install-android.sh
+# 安装并启动
+./scripts/install.sh
 ```
 
-Install the APK from phone Downloads via 卓易通 (`Agents-shell.apk`).
+## 获取 API Key
 
-## Compliance
+打开 [cursor.com/dashboard/api](https://cursor.com/dashboard/api) 创建 User API Key（`crsr_…`），在 App 设置页粘贴验证。
 
-Official Cursor pages only; no proxy; no password storage; no DOM injection to fake UI; reject bad SSL.
+## 产品边界
+
+做：启动 / 跟进 / 追问 / 取消云端 Agent，查看结果与 PR。  
+不做：IDE、Secrets/MCP 管理、Remote Desktop、网页壳。
+
+详见验收清单 `ACCEPTANCE_CHECKLIST.txt`。

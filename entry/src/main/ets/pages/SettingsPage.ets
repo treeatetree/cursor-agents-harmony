@@ -1,0 +1,448 @@
+import { Tokens } from '../theme/Tokens';
+import { ThemePref, ThemeStore } from '../store/ThemeStore';
+import { PrefStore } from '../store/PrefStore';
+import { ReadPrefStore } from '../store/ReadPrefStore';
+import { Haptics } from '../utils/Haptics';
+import { BreakpointStore } from '../store/BreakpointStore';
+import { common } from '@kit.AbilityKit';
+import { HuAvatarPicker } from '../components/HuAvatar';
+import { HuButton } from '../components/HuButton';
+import { HuIconButton } from '../components/HuIconButton';
+import { HuSwitch } from '../components/HuSwitch';
+import { normalizeAvatarId } from '../utils/AvatarPresets';
+import { SessionVM } from '../viewmodels/SessionVM';
+import { confirmDanger } from '../utils/AppDialog';
+import { showToast } from '../utils/AppToast';
+import { readClipboardText } from '../utils/Clipboard';
+
+@Builder
+export function SettingsPageBuilder() {
+  SettingsPage()
+}
+
+@Component
+struct SettingsPage {
+  @Consume('navPathStack') navStack: NavPathStack;
+  private session: SessionVM = SessionVM.getInstance();
+  @State inputKey: string = '';
+  @State hasKey: boolean = false;
+  @State email: string = '';
+  @State keyName: string = '';
+  @State userName: string = '';
+  @State maskedKey: string = '';
+  @State busy: boolean = false;
+  @State errorMsg: string = '';
+  @State themePref: string = 'system';
+  @State defaultAutoPR: boolean = false;
+  @State hapticsEnabled: boolean = true;
+  @State defaultModel: string = '';
+  @State appVersion: string = '1.0.0';
+  @State topInset: number = 0;
+  @State bottomInset: number = 0;
+  @State showReplace: boolean = false;
+  @State typeLarge: boolean = false;
+  @State densityCompact: boolean = false;
+  @State pressKey: string = '';
+  @State avatarPreset: string = 'iridescent';
+
+  aboutToAppear(): void {
+    const bp = BreakpointStore.getInstance();
+    this.topInset = bp.safeTop();
+    this.bottomInset = bp.composerBottom();
+    bp.onChange(() => {
+      this.topInset = bp.safeTop();
+      this.bottomInset = bp.composerBottom();
+    });
+    this.pull();
+    this.themePref = ThemeStore.getInstance().pref;
+    this.loadPrefs();
+    this.appVersion = '1.0.0';
+  }
+
+  private async loadPrefs(): Promise<void> {
+    const prefs = PrefStore.getInstance();
+    this.defaultAutoPR = await prefs.getDefaultAutoPR();
+    this.hapticsEnabled = await prefs.getHapticsEnabled();
+    this.defaultModel = await prefs.getDefaultModel();
+    this.avatarPreset = normalizeAvatarId(await prefs.getAvatarPreset());
+    const read = ReadPrefStore.getInstance();
+    this.typeLarge = read.typePref === 'large';
+    this.densityCompact = read.densityPref === 'compact';
+  }
+
+  private pull(): void {
+    this.session.syncFromStore();
+    this.hasKey = this.session.hasKey;
+    this.email = this.session.email;
+    this.keyName = this.session.keyName;
+    this.userName = this.session.userName;
+    this.maskedKey = this.session.maskedKey;
+    this.busy = this.session.busy;
+    this.errorMsg = this.session.errorMsg;
+  }
+
+  private modelLine(): string {
+    if (this.defaultModel.length === 0) {
+      return '自动';
+    }
+    const s = this.defaultModel.replace(/^Cursor\s+/i, '').replace(/-/g, ' ');
+    if (s.length === 0) {
+      return this.defaultModel;
+    }
+    return s.charAt(0).toUpperCase() + s.substring(1);
+  }
+
+  build() {
+    NavDestination() {
+      Column() {
+        Row() {
+          HuIconButton({
+            name: 'back',
+            label: '返回',
+            onTap: () => {
+              this.session.notifyUi();
+              this.navStack.pop();
+            }
+          })
+          Text('设置')
+            .fontSize(Tokens.typeHeadline)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .layoutWeight(1)
+            .height(Tokens.touchMin)
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .padding({
+          left: Tokens.chromePad,
+          right: Tokens.chromePad,
+          top: this.topInset + 2,
+          bottom: 6
+        })
+
+        Scroll() {
+          Column({ space: Tokens.sec }) {
+            this.sectionLabel('账号')
+            Column() {
+              Text('头像')
+                .fontSize(Tokens.typeCaption)
+                .fontColor($r('app.color.text_tertiary'))
+                .width('100%')
+                .padding({ top: 12, bottom: 4 })
+              HuAvatarPicker({
+                selected: this.avatarPreset,
+                onPick: async (id: string) => {
+                  this.avatarPreset = normalizeAvatarId(id);
+                  await PrefStore.getInstance().setAvatarPreset(this.avatarPreset);
+                }
+              })
+              this.hair()
+              if (this.hasKey) {
+                if (this.userName.length > 0) {
+                  this.infoRow('姓名', this.userName)
+                }
+                if (this.email.length > 0) {
+                  this.infoRow('邮箱', this.email)
+                }
+                if (this.maskedKey.length > 0) {
+                  this.infoRow('Key', this.keyName.length > 0 ?
+                    `${this.maskedKey} · ${this.keyName}` : this.maskedKey)
+                }
+                this.hair()
+                this.actionRow(this.showReplace ? '取消更换' : '更换 Key', $r('app.color.text_primary'),
+                  false, () => {
+                    this.showReplace = !this.showReplace;
+                  })
+                if (this.showReplace) {
+                  this.keyPaste()
+                }
+                this.actionRow('重新验证', $r('app.color.text_primary'), this.busy, async () => {
+                  this.busy = true;
+                  await this.session.validateExisting();
+                  this.pull();
+                })
+                this.actionRow('清除 Key', $r('app.color.err'), false, () => {
+                  confirmDanger('清除 API Key', '清除后需要重新粘贴才能同步任务。', '清除', () => {
+                    this.session.clearKey().then(() => {
+                      this.inputKey = '';
+                      this.pull();
+                      showToast('已清除');
+                    });
+                  });
+                })
+              } else {
+                this.keyPaste()
+              }
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16 })
+            .backgroundColor($r('app.color.bg1'))
+            .borderRadius(Tokens.radiusCard)
+            .border({ width: 1, color: $r('app.color.border') })
+            .clip(true)
+
+            this.sectionLabel('任务')
+            Column() {
+              HuSwitch({
+                on: this.defaultAutoPR,
+                label: '默认自动创建 PR',
+                onToggle: async () => {
+                  this.defaultAutoPR = !this.defaultAutoPR;
+                  await PrefStore.getInstance().setDefaultAutoPR(this.defaultAutoPR);
+                }
+              })
+              HuSwitch({
+                on: this.hapticsEnabled,
+                label: '触感反馈',
+                onToggle: async () => {
+                  this.hapticsEnabled = !this.hapticsEnabled;
+                  await PrefStore.getInstance().setHapticsEnabled(this.hapticsEnabled);
+                  if (this.hapticsEnabled) {
+                    Haptics.toggle();
+                  }
+                }
+              })
+              this.hair()
+              this.infoRow('默认模型', this.modelLine())
+              if (this.defaultModel.length > 0) {
+                this.actionRow('清除默认模型', $r('app.color.text_secondary'), false, async () => {
+                  await PrefStore.getInstance().setDefaultModel('');
+                  this.defaultModel = '';
+                })
+              }
+            }
+            .width('100%')
+            .padding({ left: 16, right: 12, top: 4, bottom: 4 })
+            .backgroundColor($r('app.color.bg1'))
+            .borderRadius(Tokens.radiusCard)
+            .border({ width: 1, color: $r('app.color.border') })
+
+            this.sectionLabel('显示')
+            Column({ space: 10 }) {
+              Row() {
+                Column() {
+                  this.themeSeg('system', '跟随')
+                }
+                .layoutWeight(1)
+                Column() {
+                  this.themeSeg('light', '浅色')
+                }
+                .layoutWeight(1)
+                Column() {
+                  this.themeSeg('dark', '深色')
+                }
+                .layoutWeight(1)
+              }
+              .width('100%')
+              .height(36)
+              .padding(3)
+              .backgroundColor($r('app.color.bg2'))
+              .borderRadius(Tokens.radiusMd)
+              HuSwitch({
+                on: this.typeLarge,
+                label: '偏大字',
+                hint: '正文大约 1.12 倍',
+                onToggle: async () => {
+                  this.typeLarge = !this.typeLarge;
+                  await ReadPrefStore.getInstance().setType(this.typeLarge ? 'large' : 'default');
+                }
+              })
+              HuSwitch({
+                on: this.densityCompact,
+                label: '紧凑',
+                hint: '只收卡片和页边距',
+                onToggle: async () => {
+                  this.densityCompact = !this.densityCompact;
+                  await ReadPrefStore.getInstance().setDensity(this.densityCompact ? 'compact' : 'comfortable');
+                }
+              })
+            }
+            .width('100%')
+            .padding({ left: 16, right: 12, top: 12, bottom: 8 })
+            .backgroundColor($r('app.color.bg1'))
+            .borderRadius(Tokens.radiusCard)
+            .border({ width: 1, color: $r('app.color.border') })
+
+            this.sectionLabel('关于')
+            Column() {
+              this.infoRow('应用', 'Cursor Cloud Agents')
+              this.infoRow('版本', this.appVersion)
+            }
+            .width('100%')
+            .padding({ left: 16, right: 16 })
+            .backgroundColor($r('app.color.bg1'))
+            .borderRadius(Tokens.radiusCard)
+            .border({ width: 1, color: $r('app.color.border') })
+            .clip(true)
+          }
+          .padding({
+            left: Tokens.pagePad,
+            right: Tokens.pagePad,
+            bottom: this.bottomInset + 16
+          })
+        }
+        .layoutWeight(1)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor($r('app.color.bg0'))
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+    }
+    .hideTitleBar(true)
+    .backgroundColor($r('app.color.bg0'))
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+  }
+
+  @Builder
+  sectionLabel(title: string) {
+    Text(title)
+      .fontSize(Tokens.typeCaption)
+      .fontColor($r('app.color.text_secondary'))
+      .width('100%')
+      .margin({ top: 4, left: 4 })
+  }
+
+  @Builder
+  hair() {
+    Divider()
+      .color($r('app.color.separator'))
+      .width('100%')
+  }
+
+  @Builder
+  infoRow(label: string, value: string) {
+    Row() {
+      Text(label)
+        .fontSize(Tokens.typeBody)
+        .fontColor($r('app.color.text_primary'))
+      Blank().layoutWeight(1)
+      Text(value)
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: '62%' })
+        .textAlign(TextAlign.End)
+    }
+    .width('100%')
+    .height(48)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  actionRow(label: string, color: Resource, disabled: boolean, action: () => void) {
+    Text(label)
+      .fontSize(Tokens.typeBody)
+      .fontColor(color)
+      .width('100%')
+      .height(48)
+      .textAlign(TextAlign.Start)
+      .opacity(disabled ? 0.4 : (this.pressKey === `act:${label}` ? 0.7 : 1))
+      .onTouch((e: TouchEvent) => {
+        if (disabled) {
+          return;
+        }
+        if (e.type === TouchType.Down) {
+          this.pressKey = `act:${label}`;
+        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          this.pressKey = '';
+        }
+      })
+      .onClick(() => {
+        if (!disabled) {
+          Haptics.click();
+          action();
+        }
+      })
+  }
+
+  @Builder
+  keyPaste() {
+    Column({ space: 8 }) {
+      TextArea({
+        text: this.inputKey,
+        placeholder: '粘贴 crsr_… Key'
+      })
+        .height(88)
+        .width('100%')
+        .fontSize(Tokens.typeCallout)
+        .fontColor($r('app.color.text_primary'))
+        .placeholderColor($r('app.color.text_tertiary'))
+        .backgroundColor($r('app.color.field_bg'))
+        .borderRadius(Tokens.radiusField)
+        .padding(12)
+        .caretColor($r('app.color.accent'))
+        .border({ width: 1, color: $r('app.color.border') })
+        .onChange((v: string) => {
+          this.inputKey = v;
+        })
+      Row() {
+        PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE })
+          .height(Tokens.touchMin)
+          .fontSize(Tokens.typeCaption)
+          .fontColor($r('app.color.text_secondary'))
+          .backgroundColor(Color.Transparent)
+          .onClick(async (_e: ClickEvent, result: PasteButtonOnClickResult) => {
+            if (result !== PasteButtonOnClickResult.SUCCESS) {
+              showToast('未授权读取剪贴板');
+              return;
+            }
+            const text = (await readClipboardText()).trim();
+            if (text.length === 0) {
+              showToast('剪贴板是空的');
+              return;
+            }
+            this.inputKey = text;
+          })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.End)
+      if (this.errorMsg.length > 0) {
+        Text(this.errorMsg)
+          .fontSize(Tokens.typeCaption)
+          .fontColor($r('app.color.err'))
+          .width('100%')
+      }
+      HuButton({
+        label: this.busy ? '验证中…' : '验证并保存',
+        variant: 'primary',
+        fillWidth: true,
+        isEnabled: !this.busy && this.inputKey.trim().length > 8,
+        onTap: async () => {
+          this.busy = true;
+          this.errorMsg = '';
+          const ok: boolean = await this.session.saveAndValidate(this.inputKey);
+          this.pull();
+          if (ok) {
+            this.inputKey = '';
+            this.showReplace = false;
+            this.navStack.pop();
+          }
+        }
+      })
+    }
+    .width('100%')
+    .padding({ top: 8, bottom: 12 })
+  }
+
+  @Builder
+  themeSeg(value: string, label: string) {
+    Text(label)
+      .fontSize(Tokens.typeCaption)
+      .fontWeight(this.themePref === value ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.themePref === value ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+      .width('100%')
+      .height(30)
+      .textAlign(TextAlign.Center)
+      .backgroundColor(this.themePref === value ? $r('app.color.bg1') : Color.Transparent)
+      .borderRadius(8)
+      .onClick(async () => {
+        Haptics.toggle();
+        this.themePref = value;
+        const ctx = getContext(this) as common.UIAbilityContext;
+        await ThemeStore.getInstance().setPref(value as ThemePref, ctx.getApplicationContext());
+      })
+  }
+}

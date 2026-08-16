@@ -1,12 +1,15 @@
 {
   "string": [
-    { "name": "module_desc", "value": "Parked: Cloudflare blocks ArkWeb; use android-shell APK via 卓易通" },
-    { "name": "EntryAbility_desc", "value": "Cursor Mobile (parked)" },
-    { "name": "EntryAbility_label", "value": "Cursor (鸿蒙搁置)" },
-    { "name": "load_failed", "value": "连接 Cursor 失败" },
+    { "name": "module_desc", "value": "Cursor Cloud Agents 鸿蒙原生客户端" },
+    { "name": "EntryAbility_desc", "value": "Cursor Cloud Agents" },
+    { "name": "EntryAbility_label", "value": "Cursor Agents" },
+    { "name": "load_failed", "value": "请求失败" },
     { "name": "load_failed_hint", "value": "请检查网络后重试" },
     { "name": "offline_title", "value": "网络已断开" },
-    { "name": "retry", "value": "重新加载" },
-    { "name": "microphone_reason", "value": "用于 Cursor 网页中的语音输入" }
+    { "name": "retry", "value": "重试" },
+    { "name": "pasteboard_reason", "value": "用于粘贴 API Key 与复制分支名" },
+    { "name": "widget_display_name", "value": "Cursor Agents" },
+    { "name": "widget_desc", "value": "运行中数量与最近一条任务" },
+    { "name": "live_lock_desc", "value": "运行中任务的锁屏实况" }
   ]
 }

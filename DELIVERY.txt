@@ -1,22 +1,21 @@
-# Cursor Mobile — 交付与调研说明
+交付说明（2026-08-08）
 
-## 现状（2026-07-12）
+主路径：鸿蒙原生 Cloud Agents 客户端（com.brian.cursor.mobile）
+  - 直连 https://api.cursor.com
+  - 已替换原 ArkWeb / 卓易通网页壳方案
+  - HUKS 存 Key；Inbox/Detail/新建/设置；SSE；Artifacts/usage；分页/归档恢复
 
-| 路径 | 状态 | 说明 |
-|------|------|------|
-| 鸿蒙 ArkWeb 壳（本目录） | **因 Cloudflare 暂搁置** | 见 `PARKED.txt` |
-| Android 壳 APK（`android-shell/`） | **当前主交付** | 全屏 WebView + 常驻实例 + 深度缓存 |
+2026-08-08 晚：假 WebView 入口已清场，三页原生主路径已收紧。
+  → 完整交接见 HANDOFF.txt（给下一个 agent 必读）
+  → 后置能力见 PARKED.txt
 
-产物：`dist/cursor-android-release.apk` → 手机下载 **`Agents-shell.apk`**
+本地门禁（装机前）：
+  ./scripts/build.sh
+  CURSOR_API_KEY=… python3 ./scripts/api-smoke.py
 
-## Android 壳 v1.7.4
+真机安装：
+  ./scripts/wifi-connect.sh connect <手机无线调试 IP:端口>
+  ./scripts/build.sh && ./scripts/install.sh
 
-- **减少闪烁**：遮罩短淡出揭开；揭开更晚；忽略过期 settle 回调
-- 包名 `com.brian.agents.shell`  **1.7.4** (24)
-
-构建：`scripts/install-android.sh` 或 `android-shell/./gradlew assembleRelease`
-
-## 合规边界
-
-- 只打开 Cursor 官方页；不中转、不存密码、不注入改页面
-- 不伪造登录、不跳过证书错误
+适配重点：HUAWEI Pura X Max 外屏 / 内屏展开 / 横竖屏断点。
+备用：android-shell APK 仍保留，不再作为默认路径。

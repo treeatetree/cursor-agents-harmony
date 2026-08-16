@@ -1,0 +1,49 @@
+html, body { margin: 0; height: 100%; overscroll-behavior: none; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "HarmonyOS Sans", system-ui, sans-serif;
+  background: #111;
+  color: var(--ink);
+}
+#root { min-height: 100%; display: grid; place-items: center; }
+#app {
+  width: 100vw;
+  height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@media (min-width: 700px) {
+  #app {
+    width: 459px;
+    height: 672px;
+    border-radius: 36px;
+    box-shadow: 0 24px 64px rgba(0,0,0,.4);
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  #app[data-frame="inner-p"] { width: 664px; height: 939px; }
+  #app[data-frame="inner-l"] { width: 939px; height: 664px; }
+}
+.frame-dock {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+  display: flex; gap: 6px; z-index: 20;
+  background: #1a1a1a; padding: 4px; border-radius: 12px;
+}
+.frame-dock button {
+  border: 0; background: transparent; color: #bbb;
+  font-size: 12px; padding: 6px 10px; border-radius: 8px; cursor: pointer;
+}
+.frame-dock button.on { background: #fff; color: #111; }
+.frame-dock span { display: flex; gap: 6px; }
+.split {
+  display: flex; height: 100%; width: 100%;
+}
+.split-master {
+  width: 38%; min-width: 0; height: 100%;
+  border-right: 1px solid var(--line);
+}
+.split-detail { flex: 1; min-width: 0; height: 100%; }

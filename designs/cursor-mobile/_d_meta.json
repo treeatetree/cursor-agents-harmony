@@ -1,0 +1,174 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "Inbox 方向板": {
+      "versions": [
+        {
+          "path": "board.html",
+          "createdAt": "2026-08-16T00:42:15.446Z",
+          "status": "needs-review",
+          "subtitle": "Ink / Signal / Studio 三版封面 Inbox",
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          },
+          "section": "方向"
+        }
+      ]
+    },
+    "Signal 四屏原型": {
+      "versions": [
+        {
+          "path": "App.html",
+          "createdAt": "2026-08-16T00:42:15.487Z",
+          "status": "needs-review",
+          "subtitle": "Inbox · 新任务 · 详情 · 设置",
+          "viewport": {
+            "width": 459,
+            "height": 672
+          },
+          "section": "原型"
+        }
+      ]
+    },
+    "折叠三态方向板": {
+      "versions": [
+        {
+          "path": "board.html",
+          "createdAt": "2026-08-16T00:51:35.399Z",
+          "status": "needs-review",
+          "subtitle": "Ink / Signal / Hero · 外屏竖 + Signal/Hero 内屏竖横",
+          "viewport": {
+            "width": 1600,
+            "height": 900
+          },
+          "section": "方向"
+        }
+      ]
+    },
+    "三态可交互原型": {
+      "versions": [
+        {
+          "path": "App.html",
+          "createdAt": "2026-08-16T00:51:35.443Z",
+          "status": "needs-review",
+          "subtitle": "皮肤切换 + 外屏/内屏竖/内屏横",
+          "viewport": {
+            "width": 939,
+            "height": 664
+          },
+          "section": "原型"
+        }
+      ]
+    },
+    "一套系统方向板": {
+      "versions": [
+        {
+          "path": "board.html",
+          "createdAt": "2026-08-16T00:59:56.186Z",
+          "status": "needs-review",
+          "subtitle": "浅深 · 折叠三态 · 输出层级",
+          "viewport": {
+            "width": 1800,
+            "height": 1100
+          },
+          "section": "方向"
+        }
+      ]
+    },
+    "一套系统原型": {
+      "versions": [
+        {
+          "path": "App.html",
+          "createdAt": "2026-08-16T00:59:56.227Z",
+          "status": "needs-review",
+          "subtitle": "点已完成卡看正文层级，点运行中看过程收束",
+          "viewport": {
+            "width": 664,
+            "height": 939
+          },
+          "section": "原型"
+        }
+      ]
+    },
+    "输出层级对比": {
+      "versions": [
+        {
+          "path": "hierarchy.html",
+          "createdAt": "2026-08-16T01:03:38.093Z",
+          "status": "needs-review",
+          "subtitle": "运行中收束 · 已完成正文分阶",
+          "viewport": {
+            "width": 1400,
+            "height": 1000
+          },
+          "section": "详情"
+        }
+      ]
+    },
+    "输入三版对比": {
+      "versions": [
+        {
+          "path": "composer-compare.html",
+          "createdAt": "2026-08-16T01:07:20.758Z",
+          "status": "needs-review",
+          "subtitle": "现在 · HeroUI PromptInput · beUI Input",
+          "viewport": {
+            "width": 1600,
+            "height": 900
+          },
+          "section": "输入"
+        }
+      ]
+    },
+    "三套系统方向板": {
+      "versions": [
+        {
+          "path": "systems.html",
+          "createdAt": "2026-08-16T01:14:17.388Z",
+          "status": "needs-review",
+          "subtitle": "Now · HeroUI · beUI Agent 全屏",
+          "viewport": {
+            "width": 1800,
+            "height": 1100
+          },
+          "section": "系统"
+        }
+      ]
+    },
+    "三套可切换原型": {
+      "versions": [
+        {
+          "path": "App.html",
+          "createdAt": "2026-08-16T01:14:17.435Z",
+          "status": "needs-review",
+          "subtitle": "底栏切 Now/Hero/beUI",
+          "viewport": {
+            "width": 459,
+            "height": 672
+          },
+          "section": "原型"
+        }
+      ]
+    },
+    "beUI 精致化原型": {
+      "versions": [
+        {
+          "path": "Be.html",
+          "createdAt": "2026-08-16T01:21:54.858Z",
+          "status": "needs-review",
+          "subtitle": "场景审查：分诊排序、详情对得上卡、失败去设置、PR 可点",
+          "viewport": {
+            "width": 459,
+            "height": 672
+          },
+          "section": "beUI"
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-08-16T00:42:15.451Z",
+  "updatedAt": "2026-08-16T01:21:54.862Z"
+}

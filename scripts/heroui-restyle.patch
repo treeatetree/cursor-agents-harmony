@@ -1,0 +1,1845 @@
+From 4d3b30a637e521d9f2d3eb138c188005caa348ef Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Fri, 14 Aug 2026 14:29:31 +0000
+Subject: [PATCH] feat(ui): HeroUI-native restyle with large repo-grouped cards
+
+Translate HeroUI v3 tokens into ArkUI (sky accent, 24vp cards, surface
+shadow). Inbox defaults to full-width cards grouped by repository, with
+richer status/preview/branch/PR chips. Shared HuButton/Chip/Field chrome
+lands on detail, new-agent, settings, and composer.
+
+Co-authored-by: treeatetree <37009839+treeatetree@users.noreply.github.com>
+---
+ entry/src/main/ets/components/AgentCard.ets   | 170 +++++++--
+ entry/src/main/ets/components/ComposerBar.ets |  29 +-
+ entry/src/main/ets/components/EmptyState.ets  |  19 +-
+ entry/src/main/ets/components/HuButton.ets    |  74 ++++
+ entry/src/main/ets/components/HuField.ets     |   8 +
+ .../main/ets/components/InboxFilterBar.ets    | 100 +++--
+ .../src/main/ets/components/OutcomeStrip.ets  |  24 +-
+ entry/src/main/ets/components/StatusChip.ets  |   4 +-
+ entry/src/main/ets/pages/AgentDetailPage.ets  |  12 +-
+ entry/src/main/ets/pages/Index.ets            | 347 ++++++++++--------
+ entry/src/main/ets/pages/NewAgentPage.ets     |  60 +--
+ entry/src/main/ets/pages/SettingsPage.ets     |  47 ++-
+ entry/src/main/ets/store/AgentCache.ets       |   9 +
+ entry/src/main/ets/store/PrefStore.ets        |  48 +++
+ entry/src/main/ets/theme/Tokens.ets           |  31 +-
+ entry/src/main/ets/utils/InboxGrouping.ets    |   7 +-
+ .../main/resources/base/element/color.json    |  53 +--
+ .../main/resources/dark/element/color.json    |  53 +--
+ entry/src/test/WebAlign.test.ets              |  11 +
+ 19 files changed, 748 insertions(+), 358 deletions(-)
+ create mode 100644 entry/src/main/ets/components/HuButton.ets
+ create mode 100644 entry/src/main/ets/components/HuField.ets
+
+diff --git a/entry/src/main/ets/components/AgentCard.ets b/entry/src/main/ets/components/AgentCard.ets
+index e3745fd..3146378 100644
+--- a/entry/src/main/ets/components/AgentCard.ets
++++ b/entry/src/main/ets/components/AgentCard.ets
+@@ -1,7 +1,8 @@
+ import { AgentSummary } from '../models/Api';
+ import { Tokens } from '../theme/Tokens';
++import { StatusChip } from './StatusChip';
+ import { relativeTime } from '../utils/TimeFmt';
+-import { shortRepoName } from '../utils/DisplayFmt';
++import { shortAgentId, shortRepoName } from '../utils/DisplayFmt';
+ import { isRunInFlight } from '../utils/InboxGrouping';
+ 
+ @Component
+@@ -14,10 +15,16 @@ export struct AgentCard {
+     createdAt: '',
+     updatedAt: ''
+   };
++  @Prop showRepo: boolean = false;
++  @Prop preview: string = '';
++  @State private pressed: boolean = false;
++  private skipOpen: boolean = false;
+   onOpen: (id: string) => void = () => {
+   };
+   onLong: (agent: AgentSummary) => void = () => {
+   };
++  onOpenPr: (url: string) => void = () => {
++  };
+ 
+   private statusLabel(): string {
+     if (this.agent.status === 'ARCHIVED') {
+@@ -36,50 +43,82 @@ export struct AgentCard {
+     if (r === 'EXPIRED') {
+       return '已过期';
+     }
+-    return '';
++    if (r === 'FINISHED') {
++      return '已完成';
++    }
++    return '空闲';
+   }
+ 
+-  private statusTone(): Resource {
++  private statusTone(): string {
+     if (this.agent.status === 'ARCHIVED') {
+-      return $r('app.color.text_tertiary');
++      return 'neutral';
+     }
+     const r = `${this.agent.latestRunStatus ?? ''}`;
+     if (isRunInFlight(r)) {
+-      return $r('app.color.accent');
++      return 'running';
+     }
+     if (r === 'ERROR' || r === 'EXPIRED') {
+-      return $r('app.color.err');
++      return 'err';
+     }
+     if (r === 'CANCELLED') {
+-      return $r('app.color.warn');
++      return 'warn';
+     }
+-    return $r('app.color.ok');
++    if (r === 'FINISHED') {
++      return 'ok';
++    }
++    return 'neutral';
++  }
++
++  private titleText(): string {
++    return this.agent.name.length > 0 ? this.agent.name : shortAgentId(this.agent.id);
+   }
+ 
+   private repoLine(): string {
++    if (!this.showRepo) {
++      return '';
++    }
+     if (this.agent.repos && this.agent.repos.length > 0) {
+       return shortRepoName(this.agent.repos[0].url ?? '');
+     }
+-    if (this.agent.env?.name && this.agent.env.name.length > 0) {
+-      return this.agent.env.name;
++    return '';
++  }
++
++  private previewText(): string {
++    if (this.preview.length > 0) {
++      return this.preview;
++    }
++    const env = this.agent.env;
++    if (env && env.name && env.name.length > 0) {
++      if (env.type && env.type.length > 0) {
++        return `${env.name} · ${env.type}`;
++      }
++      return env.name;
++    }
++    if (env && env.type && env.type.length > 0) {
++      return env.type;
++    }
++    return '';
++  }
++
++  private branchLabel(): string {
++    if (this.agent.repos && this.agent.repos.length > 0) {
++      return this.agent.repos[0].startingRef ?? '';
++    }
++    return '';
++  }
++
++  private prUrl(): string {
++    if (this.agent.repos && this.agent.repos.length > 0) {
++      return this.agent.repos[0].prUrl ?? '';
+     }
+     return '';
+   }
+ 
+   build() {
+-    Column({ space: 6 }) {
++    Column({ space: Tokens.space2 }) {
+       Row() {
+-        Column()
+-          .width(8)
+-          .height(8)
+-          .borderRadius(4)
+-          .backgroundColor(this.statusTone())
+-          .margin({ right: 6 })
+-        Text(this.statusLabel().length > 0 ? this.statusLabel() : '空闲')
+-          .fontSize(Tokens.typeMicro)
+-          .fontColor(this.statusTone())
+-          .layoutWeight(1)
+-          .maxLines(1)
++        StatusChip({ label: this.statusLabel(), tone: this.statusTone() })
++        Blank()
+         Text(relativeTime(this.agent.updatedAt || this.agent.createdAt))
+           .fontSize(Tokens.typeMicro)
+           .fontColor($r('app.color.text_tertiary'))
+@@ -87,8 +126,8 @@ export struct AgentCard {
+       .width('100%')
+       .alignItems(VerticalAlign.Center)
+ 
+-      Text(this.agent.name.length > 0 ? this.agent.name : this.agent.id)
+-        .fontSize(Tokens.typeCallout)
++      Text(this.titleText())
++        .fontSize(Tokens.typeHeadline)
+         .fontWeight(FontWeight.Medium)
+         .fontColor($r('app.color.text_primary'))
+         .maxLines(2)
+@@ -97,22 +136,84 @@ export struct AgentCard {
+ 
+       if (this.repoLine().length > 0) {
+         Text(this.repoLine())
+-          .fontSize(Tokens.typeMicro)
++          .fontSize(Tokens.typeCaption)
+           .fontColor($r('app.color.text_secondary'))
+           .fontFamily('monospace')
+           .maxLines(1)
+           .textOverflow({ overflow: TextOverflow.Ellipsis })
+           .width('100%')
+       }
++
++      if (this.previewText().length > 0) {
++        Text(this.previewText())
++          .fontSize(Tokens.typeCallout)
++          .fontColor($r('app.color.muted'))
++          .maxLines(2)
++          .textOverflow({ overflow: TextOverflow.Ellipsis })
++          .width('100%')
++      }
++
++      Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
++        Text(shortAgentId(this.agent.id))
++          .fontSize(Tokens.typeMicro)
++          .fontColor($r('app.color.text_tertiary'))
++          .fontFamily('monospace')
++          .margin({ right: 8, bottom: 4 })
++        if (this.branchLabel().length > 0) {
++          this.metaChip(this.branchLabel())
++        }
++        if (this.agent.autoCreatePR === true) {
++          this.metaChip('AutoPR')
++        }
++        if (this.agent.workOnCurrentBranch === true) {
++          this.metaChip('当前分支')
++        }
++        if (this.prUrl().length > 0) {
++          Text('PR')
++            .fontSize(Tokens.typeMicro)
++            .fontWeight(FontWeight.Medium)
++            .fontColor($r('app.color.accent'))
++            .padding({ left: 10, right: 10, top: 4, bottom: 4 })
++            .margin({ right: 8, bottom: 4 })
++            .backgroundColor($r('app.color.accent_soft'))
++            .borderRadius(Tokens.radiusChip)
++            .onClick(() => {
++              this.skipOpen = true;
++              this.onOpenPr(this.prUrl());
++            })
++        }
++      }
++      .width('100%')
+     }
+     .width('100%')
+     .alignItems(HorizontalAlign.Start)
+-    .padding(Tokens.space3)
++    .padding(Tokens.space4)
++    .constraintSize({ minHeight: Tokens.cardMinH })
+     .backgroundColor($r('app.color.bg1'))
+-    .border({ width: 1, color: $r('app.color.border') })
+-    .borderRadius(Tokens.radiusCtl)
+-    .constraintSize({ minHeight: 96 })
++    .borderRadius(Tokens.radiusCard)
++    .shadow({
++      radius: Tokens.shadowRadius,
++      color: $r('app.color.shadow'),
++      offsetX: 0,
++      offsetY: Tokens.shadowY
++    })
++    .scale({
++      x: this.pressed ? Tokens.pressScale : 1,
++      y: this.pressed ? Tokens.pressScale : 1
++    })
++    .animation({ duration: 90, curve: Curve.EaseOut })
++    .onTouch((e: TouchEvent) => {
++      if (e.type === TouchType.Down) {
++        this.pressed = true;
++      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
++        this.pressed = false;
++      }
++    })
+     .onClick(() => {
++      if (this.skipOpen) {
++        this.skipOpen = false;
++        return;
++      }
+       this.onOpen(this.agent.id);
+     })
+     .gesture(
+@@ -122,4 +223,15 @@ export struct AgentCard {
+         })
+     )
+   }
++
++  @Builder
++  metaChip(label: string) {
++    Text(label)
++      .fontSize(Tokens.typeMicro)
++      .fontColor($r('app.color.text_secondary'))
++      .padding({ left: 10, right: 10, top: 4, bottom: 4 })
++      .margin({ right: 8, bottom: 4 })
++      .backgroundColor($r('app.color.bg2'))
++      .borderRadius(Tokens.radiusChip)
++  }
+ }
+diff --git a/entry/src/main/ets/components/ComposerBar.ets b/entry/src/main/ets/components/ComposerBar.ets
+index 83a82ab..483f0b8 100644
+--- a/entry/src/main/ets/components/ComposerBar.ets
++++ b/entry/src/main/ets/components/ComposerBar.ets
+@@ -60,9 +60,12 @@ export struct ComposerBar {
+         if (this.runActive) {
+           Text(this.cancelling ? '取消中…' : '停止')
+             .fontSize(Tokens.typeCaption)
++            .fontWeight(FontWeight.Medium)
+             .fontColor($r('app.color.err'))
+             .height(Tokens.controlH)
+-            .padding({ left: 10, right: 4 })
++            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
++            .backgroundColor($r('app.color.chip_err_bg'))
++            .borderRadius(Tokens.radiusChip)
+             .enabled(!this.cancelling)
+             .onClick(() => {
+               this.onCancel();
+@@ -100,24 +103,30 @@ export struct ComposerBar {
+           .fontSize(Tokens.typeBody)
+           .fontColor($r('app.color.text_primary'))
+           .placeholderColor($r('app.color.text_tertiary'))
+-          .backgroundColor($r('app.color.bg1'))
+-          .border({ width: 1, color: $r('app.color.border') })
+-          .borderRadius(Tokens.radiusCtl)
++          .backgroundColor($r('app.color.field_bg'))
++          .borderRadius(Tokens.radiusField)
+           .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+           .caretColor($r('app.color.accent'))
++          .shadow({
++            radius: Tokens.shadowRadius,
++            color: $r('app.color.shadow'),
++            offsetX: 0,
++            offsetY: 1
++          })
+           .enabled(!this.busy)
+           .onChange((v: string) => {
+             this.draft = v;
+           })
+ 
+         Button(this.sendLabel())
+-          .width(64)
+-          .height(40)
++          .constraintSize({ minWidth: 72 })
++          .height(Tokens.controlHLg)
++          .padding({ left: 16, right: 16 })
+           .fontSize(Tokens.typeCaption)
+           .fontWeight(FontWeight.Medium)
+-          .fontColor(this.canSend() ? $r('app.color.primary_on') : $r('app.color.text_tertiary'))
+-          .backgroundColor(this.canSend() ? $r('app.color.primary') : $r('app.color.bg2'))
+-          .borderRadius(Tokens.radiusMd)
++          .fontColor(this.canSend() ? $r('app.color.accent_on') : $r('app.color.text_tertiary'))
++          .backgroundColor(this.canSend() ? $r('app.color.accent') : $r('app.color.bg2'))
++          .borderRadius(Tokens.radiusCard)
+           .enabled(this.canSend())
+           .onClick(() => {
+             this.onSend();
+@@ -145,7 +154,7 @@ export struct ComposerBar {
+       .fontColor(this.followUpMode === mode ? $r('app.color.accent') : $r('app.color.text_tertiary'))
+       .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+       .backgroundColor(this.followUpMode === mode ? $r('app.color.accent_soft') : Color.Transparent)
+-      .borderRadius(Tokens.radiusPill)
++      .borderRadius(Tokens.radiusChip)
+       .onClick(() => {
+         this.onModeChange(mode);
+       })
+diff --git a/entry/src/main/ets/components/EmptyState.ets b/entry/src/main/ets/components/EmptyState.ets
+index 2580e90..fe6cfb6 100644
+--- a/entry/src/main/ets/components/EmptyState.ets
++++ b/entry/src/main/ets/components/EmptyState.ets
+@@ -1,4 +1,5 @@
+ import { Tokens } from '../theme/Tokens';
++import { HuButton } from './HuButton';
+ 
+ @Component
+ export struct EmptyState {
+@@ -24,18 +25,14 @@ export struct EmptyState {
+           .padding({ left: 28, right: 28 })
+       }
+       if (this.actionLabel.length > 0) {
+-        Button(this.actionLabel)
+-          .height(Tokens.controlHLg)
+-          .padding({ left: 18, right: 18 })
+-          .fontSize(Tokens.typeCallout)
+-          .fontWeight(FontWeight.Medium)
+-          .fontColor($r('app.color.primary_on'))
+-          .backgroundColor($r('app.color.primary'))
+-          .borderRadius(Tokens.radiusMd)
+-          .margin({ top: 10 })
+-          .onClick(() => {
++        HuButton({
++          label: this.actionLabel,
++          variant: 'primary',
++          onTap: () => {
+             this.onAction();
+-          })
++          }
++        })
++          .margin({ top: 10 })
+       }
+     }
+     .width('100%')
+diff --git a/entry/src/main/ets/components/HuButton.ets b/entry/src/main/ets/components/HuButton.ets
+new file mode 100644
+index 0000000..795c40a
+--- /dev/null
++++ b/entry/src/main/ets/components/HuButton.ets
+@@ -0,0 +1,74 @@
++import { Tokens } from '../theme/Tokens';
++
++/**
++ * HeroUI-style button: accent fill, 24 radius, press scale 0.97.
++ * variant: primary | secondary | danger
++ */
++@Component
++export struct HuButton {
++  @Prop label: string = '';
++  @Prop variant: string = 'primary';
++  @Prop enabled: boolean = true;
++  @Prop fillWidth: boolean = false;
++  @State private pressed: boolean = false;
++  onTap: () => void = () => {
++  };
++
++  private fg(): Resource {
++    if (!this.enabled) {
++      return $r('app.color.text_tertiary');
++    }
++    if (this.variant === 'secondary') {
++      return $r('app.color.text_primary');
++    }
++    return $r('app.color.accent_on');
++  }
++
++  private bg(): Resource {
++    if (!this.enabled) {
++      return $r('app.color.bg2');
++    }
++    if (this.variant === 'danger') {
++      return $r('app.color.err');
++    }
++    if (this.variant === 'secondary') {
++      return $r('app.color.bg2');
++    }
++    return $r('app.color.accent');
++  }
++
++  build() {
++    Text(this.label)
++      .fontSize(Tokens.typeCallout)
++      .fontWeight(FontWeight.Medium)
++      .fontColor(this.fg())
++      .textAlign(TextAlign.Center)
++      .height(Tokens.controlHLg)
++      .padding({ left: 18, right: 18 })
++      .constraintSize({ minWidth: this.fillWidth ? 0 : 88 })
++      .width(this.fillWidth ? '100%' : 'auto')
++      .backgroundColor(this.bg())
++      .borderRadius(Tokens.radiusCard)
++      .scale({
++        x: this.pressed && this.enabled ? Tokens.pressScale : 1,
++        y: this.pressed && this.enabled ? Tokens.pressScale : 1
++      })
++      .animation({ duration: 90, curve: Curve.EaseOut })
++      .opacity(this.enabled ? 1 : 0.55)
++      .onTouch((e: TouchEvent) => {
++        if (!this.enabled) {
++          return;
++        }
++        if (e.type === TouchType.Down) {
++          this.pressed = true;
++        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
++          this.pressed = false;
++        }
++      })
++      .onClick(() => {
++        if (this.enabled) {
++          this.onTap();
++        }
++      })
++  }
++}
+diff --git a/entry/src/main/ets/components/HuField.ets b/entry/src/main/ets/components/HuField.ets
+new file mode 100644
+index 0000000..19ba637
+--- /dev/null
++++ b/entry/src/main/ets/components/HuField.ets
+@@ -0,0 +1,8 @@
++import { Tokens } from '../theme/Tokens';
++
++/** HeroUI field metrics — apply field_bg + radiusField + optional surface shadow on inputs. */
++export class HuField {
++  static radius(): number {
++    return Tokens.radiusField;
++  }
++}
+diff --git a/entry/src/main/ets/components/InboxFilterBar.ets b/entry/src/main/ets/components/InboxFilterBar.ets
+index e3d6430..c56cd64 100644
+--- a/entry/src/main/ets/components/InboxFilterBar.ets
++++ b/entry/src/main/ets/components/InboxFilterBar.ets
+@@ -2,15 +2,15 @@ import { Tokens } from '../theme/Tokens';
+ import { FilterMode, GroupMode, SortMode, ViewMode } from '../utils/InboxGrouping';
+ 
+ /**
+- * Inbox chrome: search, status chips, then view/sort.
++ * HeroUI tabs + segments for Inbox chrome.
+  */
+ @Component
+ export struct InboxFilterBar {
+   @Prop query: string = '';
+   @Prop filter: FilterMode = 'all';
+   @Prop sort: SortMode = 'updated';
+-  @Prop view: ViewMode = 'list';
+-  @Prop group: GroupMode = 'time';
++  @Prop view: ViewMode = 'cards';
++  @Prop group: GroupMode = 'repo';
+   @Prop count: number = 0;
+   @Prop total: number = 0;
+   @Prop refreshing: boolean = false;
+@@ -35,95 +35,113 @@ export struct InboxFilterBar {
+   };
+ 
+   build() {
+-    Column({ space: Tokens.space2 }) {
++    Column({ space: Tokens.space3 }) {
+       TextInput({ text: this.query, placeholder: '搜索名称 / 仓库' })
+         .width('100%')
+-        .height(Tokens.controlH)
+-        .fontSize(Tokens.typeCaption)
++        .height(Tokens.controlHLg)
++        .fontSize(Tokens.typeBody)
+         .fontColor($r('app.color.text_primary'))
+         .placeholderColor($r('app.color.text_tertiary'))
+-        .backgroundColor($r('app.color.bg1'))
+-        .border({ width: 1, color: $r('app.color.border') })
+-        .borderRadius(Tokens.radiusMd)
+-        .padding({ left: 10, right: 10 })
++        .backgroundColor($r('app.color.field_bg'))
++        .borderRadius(Tokens.radiusField)
++        .padding({ left: 14, right: 14 })
++        .shadow({
++          radius: Tokens.shadowRadius,
++          color: $r('app.color.shadow'),
++          offsetX: 0,
++          offsetY: 1
++        })
+         .onChange((v: string) => {
+           this.onQuery(v);
+         })
+ 
+-      Row({ space: Tokens.space1 }) {
+-        this.chip('全部', 'all')
+-        this.chip('运行中', 'running')
+-        this.chip('失败', 'error')
+-        this.chip('已完成', 'done')
+-        Blank().layoutWeight(1)
+-        if (this.count !== this.total && this.total > 0) {
+-          Text(`${this.count}/${this.total}`)
+-            .fontSize(Tokens.typeMicro)
+-            .fontColor($r('app.color.text_tertiary'))
++      Scroll() {
++        Row({ space: Tokens.space2 }) {
++          this.seg('全部', 'all')
++          this.seg('运行中', 'running')
++          this.seg('失败', 'error')
++          this.seg('已完成', 'done')
++          if (this.count !== this.total && this.total > 0) {
++            Text(`${this.count}/${this.total}`)
++              .fontSize(Tokens.typeMicro)
++              .fontColor($r('app.color.text_tertiary'))
++              .margin({ left: 4 })
++          }
+         }
++        .constraintSize({ minHeight: 32 })
+       }
++      .scrollable(ScrollDirection.Horizontal)
++      .scrollBar(BarState.Off)
++      .edgeEffect(EdgeEffect.None)
+       .width('100%')
++      .height(32)
+ 
+       Scroll() {
+         Row({ space: Tokens.space2 }) {
++          this.viewChip('大卡片', 'cards')
+           this.viewChip('列表', 'list')
+-          this.viewChip('卡片', 'cards')
+-          this.viewChip('分组', 'grouped')
++          Text('·')
++            .fontSize(Tokens.typeMicro)
++            .fontColor($r('app.color.text_tertiary'))
++          this.groupChip('仓库', 'repo')
++          this.groupChip('时间', 'time')
++          this.groupChip('状态', 'status')
++          this.groupChip('无分组', 'none')
+           Text('·')
+             .fontSize(Tokens.typeMicro)
+             .fontColor($r('app.color.text_tertiary'))
+           this.sortChip('更新', 'updated')
+           this.sortChip('创建', 'created')
+           this.sortChip('名称', 'name')
+-          if (this.view === 'grouped') {
+-            Text('·')
+-              .fontSize(Tokens.typeMicro)
+-              .fontColor($r('app.color.text_tertiary'))
+-            this.groupChip('时间', 'time')
+-            this.groupChip('仓库', 'repo')
+-            this.groupChip('状态', 'status')
+-          }
+-          Blank().width(12)
++          Blank().width(8)
+           Text('PR')
+             .fontSize(Tokens.typeMicro)
++            .fontWeight(this.prActive ? FontWeight.Medium : FontWeight.Regular)
+             .fontColor(this.prActive ? $r('app.color.accent') : $r('app.color.text_tertiary'))
++            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
++            .backgroundColor(this.prActive ? $r('app.color.accent_soft') : Color.Transparent)
++            .borderRadius(Tokens.radiusChip)
+             .onClick(() => {
+               this.onTogglePr();
+             })
+           Text(this.includeArchived ? '含归档' : '归档')
+             .fontSize(Tokens.typeMicro)
++            .fontWeight(this.includeArchived ? FontWeight.Medium : FontWeight.Regular)
+             .fontColor(this.includeArchived ? $r('app.color.accent') : $r('app.color.text_tertiary'))
++            .padding({ left: 10, right: 10, top: 5, bottom: 5 })
++            .backgroundColor(this.includeArchived ? $r('app.color.accent_soft') : Color.Transparent)
++            .borderRadius(Tokens.radiusChip)
+             .onClick(() => {
+               this.onToggleArchived();
+             })
+         }
+-        .constraintSize({ minHeight: 22 })
++        .constraintSize({ minHeight: 32 })
+         .padding({ right: 4 })
+       }
+       .scrollable(ScrollDirection.Horizontal)
+       .scrollBar(BarState.Off)
+       .edgeEffect(EdgeEffect.None)
+       .width('100%')
+-      .height(22)
++      .height(32)
+     }
+     .width('100%')
+     .padding({
+       left: this.pad,
+       right: this.pad,
+       top: Tokens.space2,
+-      bottom: Tokens.space2
++      bottom: Tokens.space3
+     })
+   }
+ 
+   @Builder
+-  chip(label: string, mode: FilterMode) {
++  seg(label: string, mode: FilterMode) {
+     Text(label)
+-      .fontSize(Tokens.typeMicro)
++      .fontSize(Tokens.typeCaption)
+       .fontWeight(this.filter === mode ? FontWeight.Medium : FontWeight.Regular)
+       .fontColor(this.filter === mode ? $r('app.color.accent') : $r('app.color.text_secondary'))
+-      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+-      .backgroundColor(this.filter === mode ? $r('app.color.accent_soft') : $r('app.color.bg2'))
+-      .borderRadius(Tokens.radiusPill)
++      .padding({ left: 12, right: 12, top: 6, bottom: 6 })
++      .backgroundColor(this.filter === mode ? $r('app.color.accent_soft') : $r('app.color.bg1'))
++      .borderRadius(Tokens.radiusChip)
+       .onClick(() => {
+         this.onFilter(mode);
+       })
+@@ -133,7 +151,11 @@ export struct InboxFilterBar {
+   viewChip(label: string, mode: ViewMode) {
+     Text(label)
+       .fontSize(Tokens.typeMicro)
++      .fontWeight(this.view === mode ? FontWeight.Medium : FontWeight.Regular)
+       .fontColor(this.view === mode ? $r('app.color.text_primary') : $r('app.color.text_tertiary'))
++      .padding({ left: 10, right: 10, top: 5, bottom: 5 })
++      .backgroundColor(this.view === mode ? $r('app.color.bg1') : Color.Transparent)
++      .borderRadius(Tokens.radiusChip)
+       .onClick(() => {
+         this.onView(mode);
+       })
+diff --git a/entry/src/main/ets/components/OutcomeStrip.ets b/entry/src/main/ets/components/OutcomeStrip.ets
+index a0fa478..d800fc2 100644
+--- a/entry/src/main/ets/components/OutcomeStrip.ets
++++ b/entry/src/main/ets/components/OutcomeStrip.ets
+@@ -129,7 +129,7 @@ export struct OutcomeStrip {
+                 width: 1,
+                 color: $r('app.color.accent')
+               })
+-              .borderRadius(Tokens.radiusMd)
++              .borderRadius(Tokens.radiusChip)
+               .onClick(() => {
+                 this.onOpenPr(this.firstPr());
+               })
+@@ -142,7 +142,7 @@ export struct OutcomeStrip {
+               .fontSize(Tokens.typeCaption)
+               .fontColor($r('app.color.text_primary'))
+               .backgroundColor($r('app.color.bg2'))
+-              .borderRadius(Tokens.radiusMd)
++              .borderRadius(Tokens.radiusChip)
+               .onClick(() => {
+                 this.onOpenCompare(this.compareUrl);
+               })
+@@ -155,7 +155,7 @@ export struct OutcomeStrip {
+               .fontSize(Tokens.typeCaption)
+               .fontColor($r('app.color.text_primary'))
+               .backgroundColor($r('app.color.bg2'))
+-              .borderRadius(Tokens.radiusMd)
++              .borderRadius(Tokens.radiusChip)
+               .onClick(() => {
+                 this.onArtifacts();
+               })
+@@ -165,13 +165,19 @@ export struct OutcomeStrip {
+       }
+       .width('100%')
+       .padding({
+-        left: Tokens.space3,
+-        right: Tokens.space3,
+-        top: Tokens.space3,
+-        bottom: Tokens.space3
++        left: Tokens.space4,
++        right: Tokens.space4,
++        top: Tokens.space4,
++        bottom: Tokens.space4
++      })
++      .backgroundColor(this.highlight ? $r('app.color.outcome_hi_bg') : $r('app.color.bg1'))
++      .borderRadius(Tokens.radiusCard)
++      .shadow({
++        radius: Tokens.shadowRadius,
++        color: $r('app.color.shadow'),
++        offsetX: 0,
++        offsetY: Tokens.shadowY
+       })
+-      .backgroundColor(this.highlight ? $r('app.color.accent_soft') : $r('app.color.bg0'))
+-      .border({ width: { bottom: 1 }, color: $r('app.color.border') })
+       .animation({ duration: 280, curve: Curve.EaseOut })
+     }
+   }
+diff --git a/entry/src/main/ets/components/StatusChip.ets b/entry/src/main/ets/components/StatusChip.ets
+index 5feb472..6de3e3a 100644
+--- a/entry/src/main/ets/components/StatusChip.ets
++++ b/entry/src/main/ets/components/StatusChip.ets
+@@ -81,8 +81,8 @@ export struct StatusChip {
+       .fontWeight(FontWeight.Medium)
+       .fontColor(this.fg())
+       .opacity(this.tone === 'running' ? this.pulse : 1.0)
+-      .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+-      .borderRadius(Tokens.radiusSm)
++      .padding({ left: 10, right: 10, top: 4, bottom: 4 })
++      .borderRadius(Tokens.radiusChip)
+       .backgroundColor(this.bg())
+   }
+ }
+diff --git a/entry/src/main/ets/pages/AgentDetailPage.ets b/entry/src/main/ets/pages/AgentDetailPage.ets
+index 72a836c..7d27e66 100644
+--- a/entry/src/main/ets/pages/AgentDetailPage.ets
++++ b/entry/src/main/ets/pages/AgentDetailPage.ets
+@@ -307,8 +307,8 @@ struct AgentDetailPage {
+         .padding({
+           left: 4,
+           right: 8,
+-          top: this.topInset + 2,
+-          bottom: 10
++          top: this.topInset + 6,
++          bottom: 12
+         })
+         .border({ width: { bottom: 1 }, color: $r('app.color.border') })
+ 
+@@ -425,7 +425,7 @@ struct AgentDetailPage {
+                   .fontColor($r('app.color.primary_on'))
+                   .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+                   .backgroundColor($r('app.color.primary'))
+-                  .borderRadius(Tokens.radiusMd)
++                  .borderRadius(Tokens.radiusChip)
+                   .margin({ bottom: 12 })
+                   .onClick(() => {
+                     this.vm.stickToBottom = true;
+@@ -500,17 +500,17 @@ struct AgentDetailPage {
+       .bindSheet($$this.showMenu, this.detailMenu(), {
+         height: SheetSize.FIT_CONTENT,
+         dragBar: true,
+-        backgroundColor: $r('app.color.bg1')
++        backgroundColor: $r('app.color.overlay')
+       })
+       .bindSheet($$this.showArtifacts, this.artifactsSheet(), {
+         height: SheetSize.MEDIUM,
+         dragBar: true,
+-        backgroundColor: $r('app.color.bg1')
++        backgroundColor: $r('app.color.overlay')
+       })
+       .bindSheet($$this.showUsage, this.usageSheet(), {
+         height: SheetSize.FIT_CONTENT,
+         dragBar: true,
+-        backgroundColor: $r('app.color.bg1')
++        backgroundColor: $r('app.color.overlay')
+       })
+     }
+     .hideTitleBar(true)
+diff --git a/entry/src/main/ets/pages/Index.ets b/entry/src/main/ets/pages/Index.ets
+index 49b32d4..49785b6 100644
+--- a/entry/src/main/ets/pages/Index.ets
++++ b/entry/src/main/ets/pages/Index.ets
+@@ -10,8 +10,11 @@ import { EmptyState } from '../components/EmptyState';
+ import { SkeletonList } from '../components/SkeletonList';
+ import { AgentSummary } from '../models/Api';
+ import { BreakpointStore } from '../store/BreakpointStore';
++import { PrefStore } from '../store/PrefStore';
++import { AgentCache } from '../store/AgentCache';
+ import { NetworkMonitor } from '../utils/NetworkMonitor';
+ import { NetworkBanner } from '../components/NetworkBanner';
++import { HuButton } from '../components/HuButton';
+ import { SettingsPageBuilder } from './SettingsPage';
+ import { NewAgentPageBuilder } from './NewAgentPage';
+ import { AgentDetailPageBuilder } from './AgentDetailPage';
+@@ -71,8 +74,8 @@ struct Index {
+   @State query: string = '';
+   @State filterMode: FilterMode = 'all';
+   @State sortMode: SortMode = 'updated';
+-  @State viewMode: ViewMode = 'list';
+-  @State groupMode: GroupMode = 'time';
++  @State viewMode: ViewMode = 'cards';
++  @State groupMode: GroupMode = 'repo';
+ 
+   // Computed view models — re-derived whenever query/filter/sort/group/source changes.
+   @State flatItems: AgentSummary[] = [];
+@@ -118,7 +121,8 @@ struct Index {
+       this.session.hydrate(ctx),
+       this.inbox.bootstrap(ctx)
+     ]);
+-    ctxReady.then(() => {
++    ctxReady.then(async () => {
++      await this.loadInboxPrefs();
+       this.refreshSession();
+       this.pullInboxUi();
+       this.session.unlockAndValidate().then(() => {
+@@ -222,24 +226,56 @@ struct Index {
+   /** Recompute flat / grouped view models from the inbox source + current toolbar state. */
+   private recomputeView(): void {
+     const all = this.inbox.source.snapshot();
+-    if (this.viewMode === 'grouped') {
+-      this.buckets = groupAgents(
+-        applyQueryInternal(all, this.query, this.filterMode, this.sortMode),
+-        this.groupMode
+-      );
++    const filtered = applyQueryInternal(all, this.query, this.filterMode, this.sortMode);
++    if (this.groupMode === 'none') {
++      this.flatItems = filtered;
++      this.filteredCount = filtered.length;
++      this.buckets = [];
++    } else {
++      this.buckets = groupAgents(filtered, this.groupMode);
+       let n = 0;
+       for (let i = 0; i < this.buckets.length; i++) {
+         n += this.buckets[i].items.length;
+       }
+       this.filteredCount = n;
+       this.flatItems = [];
+-    } else {
+-      this.flatItems = applyQueryInternal(all, this.query, this.filterMode, this.sortMode);
+-      this.filteredCount = this.flatItems.length;
+-      this.buckets = [];
+     }
+   }
+ 
++  private async loadInboxPrefs(): Promise<void> {
++    const prefs = PrefStore.getInstance();
++    const view = await prefs.getInboxView();
++    this.viewMode = view === 'list' ? 'list' : 'cards';
++    const group = await prefs.getInboxGroup();
++    if (group === 'time' || group === 'status' || group === 'none' || group === 'repo') {
++      this.groupMode = group as GroupMode;
++    }
++    const sort = await prefs.getInboxSort();
++    if (sort === 'created' || sort === 'name' || sort === 'updated') {
++      this.sortMode = sort as SortMode;
++    }
++  }
++
++  private persistInboxChrome(): void {
++    const prefs = PrefStore.getInstance();
++    prefs.setInboxView(this.viewMode);
++    prefs.setInboxGroup(this.groupMode);
++    prefs.setInboxSort(this.sortMode);
++  }
++
++  private openPr(url: string): void {
++    this.openBrowser(url, 'Pull Request');
++  }
++
++  private bindLong(agent: AgentSummary): void {
++    this.menuAgentId = agent.id;
++    this.menuAgentName = agent.name.length > 0 ? agent.name : shortAgentId(agent.id);
++    this.menuAgentUrl = agent.url;
++    this.menuAgentStatus = agent.status;
++    this.confirmDelete = false;
++    this.showAgentMenu = true;
++  }
++
+   private openAgent(id: string): void {
+     const param: Record<string, Object> = {};
+     param['agentId'] = id;
+@@ -280,7 +316,7 @@ struct Index {
+               .fontColor($r('app.color.text_primary'))
+               .backgroundColor($r('app.color.bg1'))
+               .border({ width: 1, color: $r('app.color.border') })
+-              .borderRadius(Tokens.radiusMd)
++              .borderRadius(Tokens.radiusField)
+               .height(36)
+               .layoutWeight(1)
+               .onChange((v: string) => {
+@@ -405,18 +441,14 @@ struct Index {
+         .textAlign(TextAlign.Center)
+         .lineHeight(Tokens.lineBody)
+         .padding({ left: 28, right: 28 })
+-      Button('粘贴 API Key')
+-        .height(Tokens.controlHLg)
+-        .padding({ left: 20, right: 20 })
+-        .fontSize(Tokens.typeCallout)
+-        .fontWeight(FontWeight.Medium)
+-        .fontColor($r('app.color.primary_on'))
+-        .backgroundColor($r('app.color.primary'))
+-        .borderRadius(Tokens.radiusMd)
+-        .margin({ top: 8 })
+-        .onClick(() => {
++      HuButton({
++        label: '粘贴 API Key',
++        variant: 'primary',
++        onTap: () => {
+           this.navStack.pushPath({ name: 'Settings' });
+-        })
++        }
++      })
++        .margin({ top: 8 })
+     }
+     .layoutWeight(1)
+     .justifyContent(FlexAlign.Center)
+@@ -501,14 +533,17 @@ struct Index {
+           },
+           onSort: (m: SortMode) => {
+             this.sortMode = m;
++            this.persistInboxChrome();
+             this.recomputeView();
+           },
+           onGroup: (m: GroupMode) => {
+             this.groupMode = m;
++            this.persistInboxChrome();
+             this.recomputeView();
+           },
+           onView: (m: ViewMode) => {
+             this.viewMode = m;
++            this.persistInboxChrome();
+             this.recomputeView();
+           },
+           onToggleArchived: async () => {
+@@ -583,66 +618,107 @@ struct Index {
+       .layoutWeight(1)
+       .width('100%')
+ 
+-      // Floating Action Button — compact circular + (no text), calmer than pill.
+-      Button('+')
+-        .height(56)
+-        .width(56)
+-        .padding({ left: 0, right: 0, top: 0, bottom: 0 })
+-        .fontSize(28)
+-        .fontWeight(FontWeight.Medium)
+-        .fontColor($r('app.color.primary_on'))
+-        .backgroundColor($r('app.color.accent'))
+-        .borderRadius(28)
+-        .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
+-        .margin({ right: this.pagePad, bottom: 24 })
+-        .onClick(() => {
+-          this.navStack.pushPath({ name: 'NewAgent' });
+-        })
++      if (this.bpLabel === 'sm') {
++        Button('+')
++          .height(56)
++          .width(56)
++          .padding({ left: 0, right: 0, top: 0, bottom: 0 })
++          .fontSize(28)
++          .fontWeight(FontWeight.Medium)
++          .fontColor($r('app.color.accent_on'))
++          .backgroundColor($r('app.color.accent'))
++          .borderRadius(28)
++          .shadow({
++            radius: Tokens.shadowRadius,
++            color: $r('app.color.shadow'),
++            offsetX: 0,
++            offsetY: 4
++          })
++          .margin({ right: this.pagePad, bottom: 24 })
++          .onClick(() => {
++            this.navStack.pushPath({ name: 'NewAgent' });
++          })
++      } else {
++        Button('新建')
++          .height(Tokens.controlHLg)
++          .padding({ left: 20, right: 20 })
++          .fontSize(Tokens.typeCallout)
++          .fontWeight(FontWeight.Medium)
++          .fontColor($r('app.color.accent_on'))
++          .backgroundColor($r('app.color.accent'))
++          .borderRadius(Tokens.radiusCard)
++          .shadow({
++            radius: Tokens.shadowRadius,
++            color: $r('app.color.shadow'),
++            offsetX: 0,
++            offsetY: 4
++          })
++          .margin({ right: this.pagePad, bottom: 24 })
++          .onClick(() => {
++            this.navStack.pushPath({ name: 'NewAgent' });
++          })
++      }
+     }
+     .width('100%')
+     .layoutWeight(1)
+     .bindSheet($$this.showAgentMenu, this.agentMenuSheet(), {
+       height: SheetSize.FIT_CONTENT,
+       dragBar: true,
+-      backgroundColor: $r('app.color.bg1')
++      backgroundColor: $r('app.color.overlay')
+     })
+   }
+ 
+-  /** Render the current view mode (list / grouped / cards). */
+   @Builder
+   renderView() {
+-    if (this.viewMode === 'cards') {
+-      this.cardsView()
+-    } else if (this.viewMode === 'grouped') {
+-      this.groupedView()
++    if (this.viewMode === 'list') {
++      this.listFeed()
+     } else {
+-      this.listView()
++      this.cardFeed()
+     }
+   }
+ 
+   @Builder
+-  listView() {
++  listFeed() {
+     Refresh({ refreshing: $$this.isRefreshing }) {
+       List({ space: 0 }) {
+-        ForEach(this.flatItems, (item: AgentSummary) => {
+-          ListItem() {
+-            AgentRow({
+-              agent: item,
+-              subtitle: '',
+-              onOpen: (id: string) => {
+-                this.openAgent(id);
+-              },
+-              onLong: (agent: AgentSummary) => {
+-                this.menuAgentId = agent.id;
+-                this.menuAgentName = agent.name.length > 0 ? agent.name : shortAgentId(agent.id);
+-                this.menuAgentUrl = agent.url;
+-                this.menuAgentStatus = agent.status;
+-                this.confirmDelete = false;
+-                this.showAgentMenu = true;
++        if (this.groupMode === 'none') {
++          ForEach(this.flatItems, (item: AgentSummary) => {
++            ListItem() {
++              AgentRow({
++                agent: item,
++                subtitle: '',
++                onOpen: (id: string) => {
++                  this.openAgent(id);
++                },
++                onLong: (agent: AgentSummary) => {
++                  this.bindLong(agent);
++                }
++              })
++            }
++          }, (item: AgentSummary) => item.id)
++        } else {
++          ForEach(this.buckets, (bucket: GroupBucket) => {
++            if (bucket.label.length > 0) {
++              ListItem() {
++                this.sectionHeader(bucket.label, bucket.items.length)
+               }
+-            })
+-          }
+-        }, (item: AgentSummary) => item.id)
++            }
++            ForEach(bucket.items, (item: AgentSummary) => {
++              ListItem() {
++                AgentRow({
++                  agent: item,
++                  subtitle: '',
++                  onOpen: (id: string) => {
++                    this.openAgent(id);
++                  },
++                  onLong: (agent: AgentSummary) => {
++                    this.bindLong(agent);
++                  }
++                })
++              }
++            }, (item: AgentSummary) => item.id)
++          }, (bucket: GroupBucket) => bucket.key)
++        }
+         ListItem() {
+           Column()
+             .width('100%')
+@@ -653,6 +729,7 @@ struct Index {
+       .scrollBar(BarState.Off)
+       .edgeEffect(EdgeEffect.Spring)
+       .cachedCount(8)
++      .sticky(StickyStyle.Header)
+       .onReachEnd(() => {
+         this.inbox.loadMore().then(() => {
+           this.pullInboxUi();
+@@ -669,48 +746,29 @@ struct Index {
+   }
+ 
+   @Builder
+-  groupedView() {
++  cardFeed() {
+     Refresh({ refreshing: $$this.isRefreshing }) {
+       List({ space: 0 }) {
+-        ForEach(this.buckets, (bucket: GroupBucket) => {
+-          // Section header
+-          ListItem() {
+-            Row() {
+-              Text(bucket.label)
+-                .fontSize(Tokens.typeMicro)
+-                .fontWeight(FontWeight.Medium)
+-                .fontColor($r('app.color.text_secondary'))
+-                .letterSpacing(0.5)
+-              Blank()
+-              Text(`${bucket.items.length}`)
+-                .fontSize(Tokens.typeMicro)
+-                .fontColor($r('app.color.text_tertiary'))
+-            }
+-            .width('100%')
+-            .padding({ left: this.pagePad, right: this.pagePad, top: 12, bottom: 6 })
+-            .backgroundColor($r('app.color.bg0'))
+-          }
+-
+-          ForEach(bucket.items, (item: AgentSummary) => {
++        if (this.groupMode === 'none') {
++          ForEach(this.flatItems, (item: AgentSummary) => {
+             ListItem() {
+-              AgentRow({
+-                agent: item,
+-                subtitle: '',
+-                onOpen: (id: string) => {
+-                  this.openAgent(id);
+-                },
+-                onLong: (agent: AgentSummary) => {
+-                  this.menuAgentId = agent.id;
+-                  this.menuAgentName = agent.name.length > 0 ? agent.name : shortAgentId(agent.id);
+-                  this.menuAgentUrl = agent.url;
+-                  this.menuAgentStatus = agent.status;
+-                  this.confirmDelete = false;
+-                  this.showAgentMenu = true;
+-                }
+-              })
++              this.largeCard(item)
+             }
+           }, (item: AgentSummary) => item.id)
+-        }, (bucket: GroupBucket) => bucket.key)
++        } else {
++          ForEach(this.buckets, (bucket: GroupBucket) => {
++            if (bucket.label.length > 0) {
++              ListItem() {
++                this.sectionHeader(bucket.label, bucket.items.length)
++              }
++            }
++            ForEach(bucket.items, (item: AgentSummary) => {
++              ListItem() {
++                this.largeCard(item)
++              }
++            }, (item: AgentSummary) => item.id)
++          }, (bucket: GroupBucket) => bucket.key)
++        }
+         ListItem() {
+           Column()
+             .width('100%')
+@@ -718,10 +776,20 @@ struct Index {
+         }
+       }
+       .width('100%')
++      .padding({
++        left: this.pagePad,
++        right: this.pagePad,
++        top: Tokens.space2
++      })
+       .scrollBar(BarState.Off)
+       .edgeEffect(EdgeEffect.Spring)
+-      .cachedCount(8)
++      .cachedCount(6)
+       .sticky(StickyStyle.Header)
++      .onReachEnd(() => {
++        this.inbox.loadMore().then(() => {
++          this.pullInboxUi();
++        });
++      })
+     }
+     .layoutWeight(1)
+     .onRefreshing(async () => {
+@@ -733,50 +801,39 @@ struct Index {
+   }
+ 
+   @Builder
+-  cardsView() {
+-    Refresh({ refreshing: $$this.isRefreshing }) {
+-      Scroll() {
+-        Grid() {
+-          ForEach(this.flatItems, (item: AgentSummary) => {
+-            GridItem() {
+-              AgentCard({
+-                agent: item,
+-                onOpen: (id: string) => {
+-                  this.openAgent(id);
+-                },
+-                onLong: (agent: AgentSummary) => {
+-                  this.menuAgentId = agent.id;
+-                  this.menuAgentName = agent.name.length > 0 ? agent.name : shortAgentId(agent.id);
+-                  this.menuAgentUrl = agent.url;
+-                  this.menuAgentStatus = agent.status;
+-                  this.confirmDelete = false;
+-                  this.showAgentMenu = true;
+-                }
+-              })
+-            }
+-          }, (item: AgentSummary) => item.id)
+-        }
+-        .columnsTemplate('1fr 1fr')
+-        .columnsGap(Tokens.space3)
+-        .rowsGap(Tokens.space3)
+-        .padding({
+-          left: this.pagePad,
+-          right: this.pagePad,
+-          top: Tokens.space3,
+-          bottom: 120
+-        })
+-        .width('100%')
+-      }
+-      .scrollBar(BarState.Off)
+-      .edgeEffect(EdgeEffect.Spring)
++  sectionHeader(label: string, count: number) {
++    Row() {
++      Text(label)
++        .fontSize(Tokens.typeCaption)
++        .fontWeight(FontWeight.Medium)
++        .fontColor($r('app.color.text_secondary'))
++      Blank()
++      Text(`${count}`)
++        .fontSize(Tokens.typeMicro)
++        .fontColor($r('app.color.text_tertiary'))
+     }
+-    .layoutWeight(1)
+-    .onRefreshing(async () => {
+-      this.isRefreshing = true;
+-      await this.inbox.refresh(false);
+-      this.pullInboxUi();
+-      this.isRefreshing = false;
++    .width('100%')
++    .padding({ top: 12, bottom: 8 })
++    .backgroundColor($r('app.color.bg0'))
++  }
++
++  @Builder
++  largeCard(item: AgentSummary) {
++    AgentCard({
++      agent: item,
++      showRepo: this.groupMode !== 'repo',
++      preview: AgentCache.getInstance().peekMemSummary(item.id),
++      onOpen: (id: string) => {
++        this.openAgent(id);
++      },
++      onLong: (agent: AgentSummary) => {
++        this.bindLong(agent);
++      },
++      onOpenPr: (url: string) => {
++        this.openPr(url);
++      }
+     })
++      .margin({ bottom: Tokens.space3 })
+   }
+ 
+   @Builder
+diff --git a/entry/src/main/ets/pages/NewAgentPage.ets b/entry/src/main/ets/pages/NewAgentPage.ets
+index 02ad686..6d21542 100644
+--- a/entry/src/main/ets/pages/NewAgentPage.ets
++++ b/entry/src/main/ets/pages/NewAgentPage.ets
+@@ -5,7 +5,7 @@ import { Tokens } from '../theme/Tokens';
+ import { BreakpointStore } from '../store/BreakpointStore';
+ import { PrefStore } from '../store/PrefStore';
+ import { AgentSummary, ModelInfo, ModelVariant, RepoInfo } from '../models/Api';
+-import { maxPromptImages, pickPromptImages, PromptImage, toApiImages } from '../utils/ImagePicker';
++import { HuButton } from '../components/HuButton';
+ 
+ @Builder
+ export function NewAgentPageBuilder() {
+@@ -235,10 +235,16 @@ struct NewAgentPage {
+               .fontSize(16)
+               .fontColor($r('app.color.text_primary'))
+               .placeholderColor($r('app.color.text_tertiary'))
+-              .backgroundColor($r('app.color.bg1'))
+-              .borderRadius(Tokens.radiusCtl)
++              .backgroundColor($r('app.color.field_bg'))
++              .borderRadius(Tokens.radiusField)
+               .padding(16)
+               .caretColor($r('app.color.accent'))
++              .shadow({
++                radius: Tokens.shadowRadius,
++                color: $r('app.color.shadow'),
++                offsetX: 0,
++                offsetY: 1
++              })
+               .onChange((v: string) => {
+                 this.prompt = v;
+                 this.vm.prompt = v;
+@@ -296,8 +302,14 @@ struct NewAgentPage {
+             .width('100%')
+             .height(48)
+             .padding({ left: 14, right: 14 })
+-            .backgroundColor($r('app.color.bg1'))
+-            .borderRadius(Tokens.radiusCtl)
++            .backgroundColor($r('app.color.field_bg'))
++            .borderRadius(Tokens.radiusField)
++            .shadow({
++              radius: Tokens.shadowRadius,
++              color: $r('app.color.shadow'),
++              offsetX: 0,
++              offsetY: 1
++            })
+             .onClick(() => {
+               this.showRepoSheet = true;
+               this.repoQuery = '';
+@@ -327,18 +339,18 @@ struct NewAgentPage {
+                   .height(40)
+                   .fontSize(13)
+                   .fontColor($r('app.color.text_primary'))
+-                  .backgroundColor($r('app.color.bg1'))
+-                  .borderRadius(Tokens.radiusCtl)
++                  .backgroundColor($r('app.color.field_bg'))
++                  .borderRadius(Tokens.radiusField)
+                   .padding({ left: 12, right: 12 })
+                   .onChange((v: string) => {
+                     this.manualRepoUrl = v;
+                   })
+                 Text('应用')
+                   .fontSize(Tokens.typeCaption)
+-                  .fontColor($r('app.color.primary_on'))
++                  .fontColor($r('app.color.accent_on'))
+                   .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+-                  .backgroundColor($r('app.color.primary'))
+-                  .borderRadius(Tokens.radiusMd)
++                  .backgroundColor($r('app.color.accent'))
++                  .borderRadius(Tokens.radiusChip)
+                   .onClick(() => {
+                     this.vm.setManualRepoUrl(this.manualRepoUrl);
+                     this.selectedRepo = this.vm.selectedRepo;
+@@ -358,8 +370,8 @@ struct NewAgentPage {
+               .width('100%')
+               .fontSize(15)
+               .fontColor($r('app.color.text_primary'))
+-              .backgroundColor($r('app.color.bg1'))
+-              .borderRadius(Tokens.radiusCtl)
++              .backgroundColor($r('app.color.field_bg'))
++              .borderRadius(Tokens.radiusField)
+               .padding({ left: 14, right: 14 })
+               .onChange((v: string) => {
+                 this.selectedBranch = v;
+@@ -515,18 +527,12 @@ struct NewAgentPage {
+                 .width('100%')
+             }
+ 
+-            Button(this.busy ? '创建中…' : '启动 Agent')
+-              .width('100%')
+-              .height(Tokens.controlHLg)
+-              .fontSize(Tokens.typeCallout)
+-              .fontWeight(FontWeight.Medium)
+-              .fontColor($r('app.color.primary_on'))
+-              .backgroundColor($r('app.color.primary'))
+-              .borderRadius(Tokens.radiusMd)
+-              .enabled(this.canSubmit && !this.busy)
+-              .opacity(this.canSubmit && !this.busy ? 1 : 0.45)
+-              .margin({ top: 8 })
+-              .onClick(async () => {
++            HuButton({
++              label: this.busy ? '创建中…' : '启动 Agent',
++              variant: 'primary',
++              fillWidth: true,
++              enabled: this.canSubmit && !this.busy,
++              onTap: async () => {
+                 this.busy = true;
+                 this.vm.prompt = this.prompt;
+                 this.vm.selectedRepo = this.selectedRepo;
+@@ -561,7 +567,9 @@ struct NewAgentPage {
+                   param['agentId'] = a.id;
+                   this.navStack.replacePath({ name: 'AgentDetail', param: param });
+                 }
+-              })
++              }
++            })
++              .margin({ top: 8 })
+           }
+           .padding({ left: this.pagePad, right: this.pagePad, bottom: 40 })
+           .constraintSize({ maxWidth: this.bp.contentMaxVp })
+@@ -578,7 +586,7 @@ struct NewAgentPage {
+       .bindSheet($$this.showRepoSheet, this.repoSheet(), {
+         height: SheetSize.MEDIUM,
+         dragBar: true,
+-        backgroundColor: $r('app.color.bg1')
++        backgroundColor: $r('app.color.overlay')
+       })
+     }
+     .hideTitleBar(true)
+diff --git a/entry/src/main/ets/pages/SettingsPage.ets b/entry/src/main/ets/pages/SettingsPage.ets
+index 555aa05..29891e3 100644
+--- a/entry/src/main/ets/pages/SettingsPage.ets
++++ b/entry/src/main/ets/pages/SettingsPage.ets
+@@ -4,7 +4,7 @@ import { PrefStore } from '../store/PrefStore';
+ import { Haptics } from '../utils/Haptics';
+ import { BreakpointStore } from '../store/BreakpointStore';
+ import { common } from '@kit.AbilityKit';
+-import { SessionVM } from '../viewmodels/SessionVM';
++import { HuButton } from '../components/HuButton';
+ 
+ @Builder
+ export function SettingsPageBuilder() {
+@@ -149,7 +149,13 @@ struct SettingsPage {
+               .width('100%')
+               .padding(16)
+               .backgroundColor($r('app.color.bg1'))
+-              .borderRadius(Tokens.radiusCtl)
++              .borderRadius(Tokens.radiusCard)
++              .shadow({
++                radius: Tokens.shadowRadius,
++                color: $r('app.color.shadow'),
++                offsetX: 0,
++                offsetY: Tokens.shadowY
++              })
+             }
+ 
+             Text(this.hasKey ? '更换 API Key' : '粘贴 API Key')
+@@ -167,11 +173,16 @@ struct SettingsPage {
+               .fontSize(Tokens.typeCallout)
+               .fontColor($r('app.color.text_primary'))
+               .placeholderColor($r('app.color.text_tertiary'))
+-              .backgroundColor($r('app.color.bg1'))
+-              .border({ width: 1, color: $r('app.color.border') })
+-              .borderRadius(Tokens.radiusMd)
++              .backgroundColor($r('app.color.field_bg'))
++              .borderRadius(Tokens.radiusField)
+               .padding(12)
+               .caretColor($r('app.color.accent'))
++              .shadow({
++                radius: Tokens.shadowRadius,
++                color: $r('app.color.shadow'),
++                offsetX: 0,
++                offsetY: 1
++              })
+               .onChange((v: string) => {
+                 this.inputKey = v;
+               })
+@@ -188,16 +199,12 @@ struct SettingsPage {
+                 .width('100%')
+             }
+ 
+-            Button(this.busy ? '验证中…' : '验证并保存')
+-              .width('100%')
+-              .height(Tokens.controlHLg)
+-              .fontSize(Tokens.typeCallout)
+-              .fontWeight(FontWeight.Medium)
+-              .fontColor($r('app.color.primary_on'))
+-              .backgroundColor($r('app.color.primary'))
+-              .borderRadius(Tokens.radiusMd)
+-              .enabled(!this.busy && this.inputKey.trim().length > 8)
+-              .onClick(async () => {
++            HuButton({
++              label: this.busy ? '验证中…' : '验证并保存',
++              variant: 'primary',
++              fillWidth: true,
++              enabled: !this.busy && this.inputKey.trim().length > 8,
++              onTap: async () => {
+                 this.busy = true;
+                 this.errorMsg = '';
+                 const ok = await this.session.saveAndValidate(this.inputKey);
+@@ -205,10 +212,10 @@ struct SettingsPage {
+                 if (ok) {
+                   this.inputKey = '';
+                   this.confirmClear = false;
+-                  // Return to Inbox; Index refreshes via SessionVM.onChange (critical in split mode).
+                   this.navStack.pop();
+                 }
+-              })
++              }
++            })
+ 
+             Text('偏好')
+               .fontSize(13)
+@@ -270,7 +277,7 @@ struct SettingsPage {
+             .width('100%')
+             .padding({ left: 16, right: 16, top: 4, bottom: 4 })
+             .backgroundColor($r('app.color.bg1'))
+-            .borderRadius(Tokens.radiusCtl)
++            .borderRadius(Tokens.radiusCard)
+ 
+             Text('外观')
+               .fontSize(13)
+@@ -304,7 +311,7 @@ struct SettingsPage {
+             .width('100%')
+             .padding(16)
+             .backgroundColor($r('app.color.bg1'))
+-            .borderRadius(Tokens.radiusCtl)
++            .borderRadius(Tokens.radiusCard)
+             .alignItems(HorizontalAlign.Start)
+           }
+           .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 40 })
+@@ -332,7 +339,7 @@ struct SettingsPage {
+         width: 1,
+         color: this.themePref === value ? $r('app.color.border_strong') : $r('app.color.border')
+       })
+-      .borderRadius(Tokens.radiusMd)
++      .borderRadius(Tokens.radiusChip)
+       .onClick(async () => {
+         this.themePref = value;
+         const ctx = getContext(this) as common.UIAbilityContext;
+diff --git a/entry/src/main/ets/store/AgentCache.ets b/entry/src/main/ets/store/AgentCache.ets
+index a46106d..2b00e1c 100644
+--- a/entry/src/main/ets/store/AgentCache.ets
++++ b/entry/src/main/ets/store/AgentCache.ets
+@@ -158,6 +158,15 @@ export class AgentCache {
+     return data;
+   }
+ 
++  /** Memory-only preview — never hits disk (Inbox cards). */
++  peekMemSummary(agentId: string): string {
++    const hit = this.memGet(agentId);
++    if (hit && hit.timelineSummary && hit.timelineSummary.length > 0) {
++      return hit.timelineSummary;
++    }
++    return '';
++  }
++
+   saveAgent(agentId: string, detail?: AgentDetail, runs?: Run[], timelineSummary?: string,
+     messages?: ConversationMessage[]): void {
+     if (!agentId || agentId.length === 0) {
+diff --git a/entry/src/main/ets/store/PrefStore.ets b/entry/src/main/ets/store/PrefStore.ets
+index 9650311..6d49535 100644
+--- a/entry/src/main/ets/store/PrefStore.ets
++++ b/entry/src/main/ets/store/PrefStore.ets
+@@ -11,6 +11,9 @@ const KEY_THEME = 'theme_pref'; // system | dark | light
+ const KEY_DEFAULT_MODEL = 'default_model';
+ const KEY_DEFAULT_AUTO_PR = 'default_auto_pr';
+ const KEY_HAPTICS = 'haptics_enabled';
++const KEY_INBOX_VIEW = 'inbox_view';
++const KEY_INBOX_GROUP = 'inbox_group';
++const KEY_INBOX_SORT = 'inbox_sort';
+ 
+ export class PrefStore {
+   private static instance: PrefStore | undefined = undefined;
+@@ -117,6 +120,51 @@ export class PrefStore {
+     await this.pref.flush();
+   }
+ 
++  async getInboxView(): Promise<string> {
++    if (!this.pref) {
++      return 'cards';
++    }
++    return (await this.pref.get(KEY_INBOX_VIEW, 'cards')) as string;
++  }
++
++  async setInboxView(value: string): Promise<void> {
++    if (!this.pref) {
++      return;
++    }
++    await this.pref.put(KEY_INBOX_VIEW, value);
++    await this.pref.flush();
++  }
++
++  async getInboxGroup(): Promise<string> {
++    if (!this.pref) {
++      return 'repo';
++    }
++    return (await this.pref.get(KEY_INBOX_GROUP, 'repo')) as string;
++  }
++
++  async setInboxGroup(value: string): Promise<void> {
++    if (!this.pref) {
++      return;
++    }
++    await this.pref.put(KEY_INBOX_GROUP, value);
++    await this.pref.flush();
++  }
++
++  async getInboxSort(): Promise<string> {
++    if (!this.pref) {
++      return 'updated';
++    }
++    return (await this.pref.get(KEY_INBOX_SORT, 'updated')) as string;
++  }
++
++  async setInboxSort(value: string): Promise<void> {
++    if (!this.pref) {
++      return;
++    }
++    await this.pref.put(KEY_INBOX_SORT, value);
++    await this.pref.flush();
++  }
++
+   async getLastEventId(agentId: string, runId: string): Promise<string> {
+     const map = await this.loadEventMap();
+     return map[`${agentId}:${runId}`] ?? '';
+diff --git a/entry/src/main/ets/theme/Tokens.ets b/entry/src/main/ets/theme/Tokens.ets
+index e45c370..81e0f76 100644
+--- a/entry/src/main/ets/theme/Tokens.ets
++++ b/entry/src/main/ets/theme/Tokens.ets
+@@ -1,10 +1,11 @@
+ /**
+- * Layout / type tokens — Linear density + shadcn radius scale.
+- * Colors: use $r('app.color.*') for light/dark auto-switch.
++ * HeroUI v3 → HarmonyOS tokens.
++ * Colors: $r('app.color.*') for light/dark auto-switch.
+  *
+  * Visual language:
+- * - Linear: dense lists, hairline borders, indigo accent, luminance hierarchy
+- * - shadcn: semantic primary/muted/border, radius ~10vp base
++ * - Surface elevation (soft shadow in light, luminance in dark)
++ * - Large radii: card/button 24, chip 16, field 12
++ * - Press scale 0.97
+  */
+ export class Tokens {
+   /** 4px grid */
+@@ -17,19 +18,26 @@ export class Tokens {
+   static readonly space8: number = 32;
+ 
+   static readonly pagePad: number = 16;
+-  /** shadcn radius-lg ≈ 10 */
+-  static readonly radiusSm: number = 6;
+-  static readonly radiusMd: number = 8;
+-  static readonly radiusCtl: number = 10;
+-  static readonly radiusSheet: number = 16;
++
++  /** HeroUI --radius 0.5rem */
++  static readonly radiusSm: number = 8;
++  /** Field / --field-radius */
++  static readonly radiusMd: number = 12;
++  /** Alias of field radius (replaces old shadcn 10). */
++  static readonly radiusCtl: number = 12;
++  static readonly radiusField: number = 12;
++  static readonly radiusChip: number = 16;
++  static readonly radiusCard: number = 24;
++  static readonly radiusSheet: number = 24;
+   static readonly radiusPill: number = 999;
+ 
+   static readonly touchMin: number = 44;
+   static readonly rowMin: number = 56;
+   static readonly controlH: number = 36;
+   static readonly controlHLg: number = 40;
++  static readonly cardMinH: number = 148;
++  static readonly pressScale: number = 0.97;
+ 
+-  /** Type scale (HarmonyOS Sans; Linear uses Inter Variable as reference) */
+   static readonly typeDisplay: number = 28;
+   static readonly typeTitle: number = 22;
+   static readonly typeHeadline: number = 17;
+@@ -41,6 +49,7 @@ export class Tokens {
+   static readonly lineBody: number = 24;
+   static readonly lineCaption: number = 18;
+ 
+-  /** Fallback when avoid-area not ready yet (typical status bar). */
+   static readonly safeTopFallback: number = 48;
++  static readonly shadowRadius: number = 8;
++  static readonly shadowY: number = 2;
+ }
+diff --git a/entry/src/main/ets/utils/InboxGrouping.ets b/entry/src/main/ets/utils/InboxGrouping.ets
+index 43924b9..eb5c427 100644
+--- a/entry/src/main/ets/utils/InboxGrouping.ets
++++ b/entry/src/main/ets/utils/InboxGrouping.ets
+@@ -3,8 +3,8 @@ import { shortRepoName } from './DisplayFmt';
+ 
+ export type FilterMode = 'all' | 'running' | 'error' | 'done';
+ export type SortMode = 'updated' | 'created' | 'name';
+-export type ViewMode = 'list' | 'grouped' | 'cards';
+-export type GroupMode = 'time' | 'repo' | 'status';
++export type ViewMode = 'list' | 'cards';
++export type GroupMode = 'none' | 'time' | 'repo' | 'status';
+ 
+ export interface GroupBucket {
+   key: string;
+@@ -39,6 +39,9 @@ export function applyInboxQuery(
+ }
+ 
+ export function groupAgents(items: AgentSummary[], mode: GroupMode): GroupBucket[] {
++  if (mode === 'none') {
++    return [{ key: 'all', label: '', items: items }];
++  }
+   if (mode === 'repo') {
+     return groupByKey(items, (a: AgentSummary) => repoKey(a), (a: AgentSummary) => repoLabel(a));
+   }
+diff --git a/entry/src/main/resources/base/element/color.json b/entry/src/main/resources/base/element/color.json
+index c607e86..6bc960b 100644
+--- a/entry/src/main/resources/base/element/color.json
++++ b/entry/src/main/resources/base/element/color.json
+@@ -1,35 +1,40 @@
+ {
+   "color": [
+-    { "name": "start_window_background", "value": "#FAFAFA" },
+-    { "name": "bg0", "value": "#FAFAFA" },
++    { "name": "start_window_background", "value": "#F7F7F7" },
++    { "name": "bg0", "value": "#F7F7F7" },
+     { "name": "bg1", "value": "#FFFFFF" },
+-    { "name": "bg2", "value": "#F4F4F5" },
+-    { "name": "bg_hover", "value": "#F4F4F5" },
+-    { "name": "border", "value": "#E4E4E7" },
+-    { "name": "border_strong", "value": "#D4D4D8" },
++    { "name": "bg2", "value": "#F0F0F2" },
++    { "name": "bg_hover", "value": "#F0F0F2" },
++    { "name": "border", "value": "#EBEBEF" },
++    { "name": "border_strong", "value": "#E4E4E7" },
++    { "name": "separator", "value": "#EBEBEF" },
+     { "name": "text_primary", "value": "#18181B" },
+-    { "name": "text_secondary", "value": "#52525B" },
++    { "name": "text_secondary", "value": "#6B6B78" },
+     { "name": "text_tertiary", "value": "#A1A1AA" },
+-    { "name": "primary", "value": "#18181B" },
+-    { "name": "primary_on", "value": "#FAFAFA" },
+-    { "name": "accent", "value": "#5E6AD2" },
+-    { "name": "accent_soft", "value": "#EEF0FB" },
+-    { "name": "accent_on", "value": "#FFFFFF" },
+-    { "name": "ok", "value": "#16A34A" },
+-    { "name": "err", "value": "#DC2626" },
+-    { "name": "warn", "value": "#CA8A04" },
+-    { "name": "chip_running_bg", "value": "#EEF0FB" },
+-    { "name": "chip_ok_bg", "value": "#F0FDF4" },
++    { "name": "muted", "value": "#6B6B78" },
++    { "name": "primary", "value": "#3B89F5" },
++    { "name": "primary_on", "value": "#FDFDFD" },
++    { "name": "accent", "value": "#3B89F5" },
++    { "name": "accent_soft", "value": "#E8F1FE" },
++    { "name": "accent_on", "value": "#FDFDFD" },
++    { "name": "ok", "value": "#22C55E" },
++    { "name": "err", "value": "#E5484D" },
++    { "name": "warn", "value": "#E8A317" },
++    { "name": "chip_running_bg", "value": "#E8F1FE" },
++    { "name": "chip_ok_bg", "value": "#ECFDF3" },
+     { "name": "chip_err_bg", "value": "#FEF2F2" },
+-    { "name": "chip_warn_bg", "value": "#FEFCE8" },
+-    { "name": "banner_offline_bg", "value": "#FEFCE8" },
++    { "name": "chip_warn_bg", "value": "#FFF8E8" },
++    { "name": "banner_offline_bg", "value": "#FFF8E8" },
+     { "name": "banner_error_bg", "value": "#FEF2F2" },
+     { "name": "outcome_ok_bg", "value": "#FFFFFF" },
+-    { "name": "outcome_hi_bg", "value": "#EEF0FB" },
+-    { "name": "user_bubble", "value": "#E4E4E7" },
+-    { "name": "assistant_rail", "value": "#E4E4E7" },
+-    { "name": "code_bg", "value": "#F4F4F5" },
+-    { "name": "page_background", "value": "#FAFAFA" },
++    { "name": "outcome_hi_bg", "value": "#E8F1FE" },
++    { "name": "user_bubble", "value": "#F0F0F2" },
++    { "name": "assistant_rail", "value": "#EBEBEF" },
++    { "name": "code_bg", "value": "#F0F0F2" },
++    { "name": "field_bg", "value": "#FFFFFF" },
++    { "name": "overlay", "value": "#FFFFFF" },
++    { "name": "shadow", "value": "#14000000" },
++    { "name": "page_background", "value": "#F7F7F7" },
+     { "name": "sys_bar_content", "value": "#18181B" }
+   ]
+ }
+diff --git a/entry/src/main/resources/dark/element/color.json b/entry/src/main/resources/dark/element/color.json
+index 5598e31..cf0810d 100644
+--- a/entry/src/main/resources/dark/element/color.json
++++ b/entry/src/main/resources/dark/element/color.json
+@@ -1,35 +1,40 @@
+ {
+   "color": [
+-    { "name": "start_window_background", "value": "#08090A" },
+-    { "name": "bg0", "value": "#08090A" },
+-    { "name": "bg1", "value": "#0F1011" },
+-    { "name": "bg2", "value": "#18191A" },
+-    { "name": "bg_hover", "value": "#141516" },
+-    { "name": "border", "value": "#1C1D1E" },
+-    { "name": "border_strong", "value": "#2A2A2C" },
+-    { "name": "text_primary", "value": "#F7F8F8" },
+-    { "name": "text_secondary", "value": "#8A8F98" },
+-    { "name": "text_tertiary", "value": "#62666D" },
+-    { "name": "primary", "value": "#EDEEF0" },
+-    { "name": "primary_on", "value": "#08090A" },
+-    { "name": "accent", "value": "#5E6AD2" },
+-    { "name": "accent_soft", "value": "#1A1C2E" },
+-    { "name": "accent_on", "value": "#FFFFFF" },
++    { "name": "start_window_background", "value": "#1A1A1E" },
++    { "name": "bg0", "value": "#1A1A1E" },
++    { "name": "bg1", "value": "#2A2A30" },
++    { "name": "bg2", "value": "#3F3F46" },
++    { "name": "bg_hover", "value": "#323238" },
++    { "name": "border", "value": "#2E2E35" },
++    { "name": "border_strong", "value": "#3F3F46" },
++    { "name": "separator", "value": "#2E2E35" },
++    { "name": "text_primary", "value": "#FDFDFD" },
++    { "name": "text_secondary", "value": "#A1A1AA" },
++    { "name": "text_tertiary", "value": "#71717A" },
++    { "name": "muted", "value": "#A1A1AA" },
++    { "name": "primary", "value": "#5BA0F6" },
++    { "name": "primary_on", "value": "#FDFDFD" },
++    { "name": "accent", "value": "#5BA0F6" },
++    { "name": "accent_soft", "value": "#1A2744" },
++    { "name": "accent_on", "value": "#FDFDFD" },
+     { "name": "ok", "value": "#4ADE80" },
+-    { "name": "err", "value": "#F87171" },
++    { "name": "err", "value": "#E5484D" },
+     { "name": "warn", "value": "#FBBF24" },
+-    { "name": "chip_running_bg", "value": "#1A1C2E" },
++    { "name": "chip_running_bg", "value": "#1A2744" },
+     { "name": "chip_ok_bg", "value": "#0F1F16" },
+     { "name": "chip_err_bg", "value": "#2A1215" },
+     { "name": "chip_warn_bg", "value": "#2A2410" },
+     { "name": "banner_offline_bg", "value": "#2A2410" },
+     { "name": "banner_error_bg", "value": "#2A1215" },
+-    { "name": "outcome_ok_bg", "value": "#0F1011" },
+-    { "name": "outcome_hi_bg", "value": "#1A1C2E" },
+-    { "name": "user_bubble", "value": "#18191A" },
+-    { "name": "assistant_rail", "value": "#2A2A2C" },
+-    { "name": "code_bg", "value": "#141516" },
+-    { "name": "page_background", "value": "#08090A" },
+-    { "name": "sys_bar_content", "value": "#F7F8F8" }
++    { "name": "outcome_ok_bg", "value": "#2A2A30" },
++    { "name": "outcome_hi_bg", "value": "#1A2744" },
++    { "name": "user_bubble", "value": "#3F3F46" },
++    { "name": "assistant_rail", "value": "#3F3F46" },
++    { "name": "code_bg", "value": "#232328" },
++    { "name": "field_bg", "value": "#3F3F46" },
++    { "name": "overlay", "value": "#323238" },
++    { "name": "shadow", "value": "#00000000" },
++    { "name": "page_background", "value": "#1A1A1E" },
++    { "name": "sys_bar_content", "value": "#FDFDFD" }
+   ]
+ }
+diff --git a/entry/src/test/WebAlign.test.ets b/entry/src/test/WebAlign.test.ets
+index 641f69e..f8e1979 100644
+--- a/entry/src/test/WebAlign.test.ets
++++ b/entry/src/test/WebAlign.test.ets
+@@ -82,6 +82,17 @@ export default function webAlignTest() {
+       const buckets = groupAgents(items, 'status');
+       expect(buckets.length).assertEqual(2);
+     });
++
++    it('none grouping keeps a single unlabeled bucket', 0, () => {
++      const items = [
++        agent({ id: 'a', latestRunStatus: 'ERROR' }),
++        agent({ id: 'b', latestRunStatus: 'RUNNING' })
++      ];
++      const buckets = groupAgents(items, 'none');
++      expect(buckets.length).assertEqual(1);
++      expect(buckets[0].items.length).assertEqual(2);
++      expect(buckets[0].label).assertEqual('');
++    });
+   });
+ 
+   describe('ArtifactsFmt', () => {
+-- 
+2.43.0
+

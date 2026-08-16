@@ -1,0 +1,14 @@
+---
+description: 界面与视觉改动走 baoyu-design：先 designs/ 稿，再落到 ArkTS。
+globs: designs/**,entry/src/main/ets/pages/**,entry/src/main/ets/components/**,entry/src/main/ets/theme/**,entry/src/main/resources/**/element/color.json
+alwaysApply: false
+---
+
+# 设计改动
+
+做 UI / 视觉 / 动效 / 芯片与布局优化时，先读并遵循项目 skill `.cursor/skills/baoyu-design/SKILL.md`（上游 [baoyu-design](https://github.com/JimLiu/baoyu-design)）。
+
+- 新探索或系统性改版：先在 `designs/` 出 HTML 稿并预览，用户点头后再改 ArkTS。
+- 小修（间距、文案、已定 token）可以直接改实现，但仍对齐 `Tokens.ets` 与 `color.json`。
+- 封面 Inbox 保持固定双列；新建页保持空画布 + 底栏芯片。
+- 不要把 baoyu-design 上游整库克隆进本仓库。

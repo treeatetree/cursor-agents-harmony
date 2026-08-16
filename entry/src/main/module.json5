@@ -13,9 +13,9 @@
         "name": "EntryAbility",
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:EntryAbility_desc",
-        "icon": "$media:app_icon",
+        "icon": "$media:layered_image",
         "label": "$string:EntryAbility_label",
-        "startWindowIcon": "$media:app_icon",
+        "startWindowIcon": "$media:start_window_blank",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "skills": [
@@ -31,15 +31,33 @@
         "name": "ohos.permission.INTERNET"
       },
       {
-        "name": "ohos.permission.MICROPHONE",
-        "reason": "$string:microphone_reason",
-        "usedScene": {
-          "abilities": ["EntryAbility"],
-          "when": "inuse"
-        }
+        "name": "ohos.permission.GET_NETWORK_INFO"
       },
       {
-        "name": "ohos.permission.GET_NETWORK_INFO"
+        "name": "ohos.permission.VIBRATE"
+      }
+    ],
+    "extensionAbilities": [
+      {
+        "name": "EntryFormAbility",
+        "srcEntry": "./ets/widget/EntryFormAbility.ets",
+        "label": "$string:widget_display_name",
+        "description": "$string:widget_desc",
+        "type": "form",
+        "exported": true,
+        "metadata": [
+          {
+            "name": "ohos.extension.form",
+            "resource": "$profile:form_config"
+          }
+        ]
+      },
+      {
+        "name": "LiveViewLockAbility",
+        "srcEntry": "./ets/liveview/LiveViewLockAbility.ets",
+        "description": "$string:live_lock_desc",
+        "type": "liveViewLockScreen",
+        "exported": true
       }
     ]
   }

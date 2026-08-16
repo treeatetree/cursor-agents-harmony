@@ -1,9 +1,16 @@
-# PARKED — 鸿蒙 ArkWeb 壳
+历史备注（已退役）
 
-**状态：因 Cloudflare Turnstile 暂搁置（2026-07-12）**
+2026-07-12：ArkWeb 加载 cursor.com 被 Cloudflare Turnstile 阻断，曾 park 为 android-shell APK 路径。
 
-- 原因：ArkWeb 内无法完成人机验证；系统浏览器会话与 ArkWeb 不互通。
-- 保留：本仓库全部鸿蒙源码、签名配置、已签名 HAP（`dist/entry-default-signed.hap`）。
-- 日常使用：请安装 `android-shell` / `dist/cursor-android-release.apk` 到 **卓易通**。
+2026-08-08：改为 Cloud Agents API 原生客户端。
 
-详见 `DELIVERY.txt`。勿再以改 UA / 清 Cookie / 外跳浏览器回传会话作为主方案。
+2026-08-08（清场）：假 WebView「功能按钮」已全部撤回。本轮只打磨原生主路径
+（Inbox / 新建 / 详情）。MCP / 选图 / 命名环境 / 从 PR 创建等以后再做真实现。
+
+仍后置（平台或产品限制）：
+- 语音输入（需麦克风 + ASR）
+- 服务端 Push / webhook（v1 coming soon）
+- 系统剪贴板一键读写（READ_PASTEBOARD 受限）
+- MCP / Secrets / 命名环境管理
+
+原生主路径直连 api.cursor.com。InAppBrowser 代码保留备用，业务页不再挂假入口。
