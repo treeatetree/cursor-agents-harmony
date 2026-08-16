@@ -15,6 +15,7 @@ import { AgentCache } from '../store/AgentCache';
 import { UnreadItem, UnreadStore } from '../store/UnreadStore';
 import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { Haptics } from '../utils/Haptics';
+import { expandTransition, fadeTransition, motionMs, runLayout } from '../utils/Motion';
 import { NetworkBanner } from '../components/NetworkBanner';
 import { StatusBanner } from '../components/StatusBanner';
 import { CreateDraftStore } from '../store/CreateDraftStore';
@@ -370,24 +371,30 @@ struct Index {
 
   private toggleGroup(key: string): void {
     Haptics.tick();
-    if (this.openGroupKey() === key) {
-      this.expandedKey = GROUP_ALL_COLLAPSED;
-    } else {
-      this.expandedKey = key;
-    }
+    runLayout(() => {
+      if (this.openGroupKey() === key) {
+        this.expandedKey = GROUP_ALL_COLLAPSED;
+      } else {
+        this.expandedKey = key;
+      }
+    });
     PrefStore.getInstance().setInboxExpanded(this.expandedKey);
   }
 
   private setGroupMode(mode: GroupMode): void {
-    this.groupMode = mode;
-    this.expandedKey = '';
+    runLayout(() => {
+      this.groupMode = mode;
+      this.expandedKey = '';
+      this.recomputeView();
+    });
     this.persistInboxChrome();
     PrefStore.getInstance().setInboxExpanded('');
-    this.recomputeView();
   }
 
   private setInboxOpen(open: boolean): void {
-    this.inboxOpen = open;
+    runLayout(() => {
+      this.inboxOpen = open;
+    });
     PrefStore.getInstance().setInboxOpen(open);
   }
 
@@ -411,10 +418,7 @@ struct Index {
   }
 
   private newSheetHeight(): number | SheetSize {
-    if (this.keyboardInset > 16) {
-      return Math.max(this.bpStore.heightVp - this.keyboardInset, 280);
-    }
-    return SheetSize.MEDIUM;
+    return SheetSize.LARGE;
   }
 
   private retryCreateFromBanner(): void {
@@ -606,16 +610,16 @@ struct Index {
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
       .bindSheet($$this.showNewSheet, this.newAgentSheet(), {
         height: this.newSheetHeight(),
-        detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+        detents: [SheetSize.LARGE],
         dragBar: true,
         showClose: false,
-        keyboardAvoidMode: SheetKeyboardAvoidMode.TRANSLATE_AND_RESIZE,
         backgroundColor: $r('app.color.overlay')
       })
     }
     .navDestination(this.pageMap)
     .mode(this.useSplit ? NavigationMode.Split : NavigationMode.Stack)
     .navBarWidth(this.useSplit ? (this.inboxOpen ? Tokens.splitMasterVp : Tokens.splitRailVp) : '100%')
+    .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
     .hideTitleBar(true)
     .backgroundColor($r('app.color.bg0'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
@@ -796,13 +800,17 @@ struct Index {
             this.recomputeView();
           },
           onFilter: (m: FilterMode) => {
-            this.filterMode = m;
-            this.recomputeView();
+            runLayout(() => {
+              this.filterMode = m;
+              this.recomputeView();
+            });
           },
           onSort: (m: SortMode) => {
-            this.sortMode = m;
+            runLayout(() => {
+              this.sortMode = m;
+              this.recomputeView();
+            });
             this.persistInboxChrome();
-            this.recomputeView();
           },
           onGroup: (m: GroupMode) => {
             this.setGroupMode(m);
@@ -1036,6 +1044,7 @@ struct Index {
             bottom: Tokens.space2
           })
       }
+      .transition(expandTransition())
     }, (item: AgentSummary) => item.id)
   }
 
@@ -1088,11 +1097,17 @@ struct Index {
   @Builder
   sectionHeader(bucket: GroupBucket) {
     Row({ space: 6 }) {
-      HuIcon({
-        name: this.groupCollapsed(bucket.key) ? 'chevronRight' : 'chevronDown',
-        iconSize: 16,
-        tint: $r('app.color.text_tertiary')
-      })
+      Column() {
+        HuIcon({
+          name: 'chevronRight',
+          iconSize: 16,
+          tint: $r('app.color.text_tertiary')
+        })
+      }
+      .width(16)
+      .height(16)
+      .rotate({ angle: this.groupCollapsed(bucket.key) ? 0 : 90 })
+      .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
       Text(bucket.label)
         .fontSize(Tokens.typeCaption)
         .fontFamily(Tokens.fontUi)
@@ -1106,6 +1121,7 @@ struct Index {
         Text(`${bucket.items.length}`)
           .fontSize(Tokens.typeMicro)
           .fontColor($r('app.color.text_tertiary'))
+          .transition(fadeTransition())
       }
     }
     .width('100%')
@@ -1129,6 +1145,7 @@ struct Index {
       ListItem() {
         this.cardPairRow(pair)
       }
+      .transition(expandTransition())
     }, (pair: CardPair) => pair.key)
   }
 

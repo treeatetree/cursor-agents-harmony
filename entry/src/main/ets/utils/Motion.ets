@@ -1,3 +1,7 @@
+/**
+ * Two speeds only: press 90ms EaseOut, layout 200ms FastOutSlowIn.
+ * No spring, no stagger. prefers-reduced-motion → 0 / IDENTITY.
+ */
 import { mediaquery } from '@kit.ArkUI';
 import { Tokens } from '../theme/Tokens';
 
@@ -12,6 +16,11 @@ export function prefersReducedMotion(): boolean {
 
 export function motionMs(): number {
   return prefersReducedMotion() ? 0 : Tokens.motionMs;
+}
+
+/** Finger-down feedback — shorter than layout motion. */
+export function pressMs(): number {
+  return prefersReducedMotion() ? 0 : 90;
 }
 
 export function pressScaleOf(pressed: boolean): number {
@@ -36,6 +45,10 @@ export function shimmerMs(): number {
   return prefersReducedMotion() ? 0 : 1200;
 }
 
+export function motionEase(): Curve {
+  return Curve.FastOutSlowIn;
+}
+
 /** Appear/disappear for chrome bars (notice, error, queue). */
 export function chromeTransition(): TransitionEffect {
   const ms = motionMs();
@@ -54,4 +67,24 @@ export function fadeTransition(): TransitionEffect {
     return TransitionEffect.IDENTITY;
   }
   return TransitionEffect.OPACITY.animation({ duration: ms, curve: Curve.EaseOut });
+}
+
+/** Inbox group cards appearing under a section. */
+export function expandTransition(): TransitionEffect {
+  const ms = motionMs();
+  if (ms <= 0) {
+    return TransitionEffect.IDENTITY;
+  }
+  return TransitionEffect.OPACITY
+    .combine(TransitionEffect.translate({ y: 6 }))
+    .animation({ duration: ms, curve: Curve.FastOutSlowIn });
+}
+
+export function runLayout(update: () => void): void {
+  const ms = motionMs();
+  if (ms <= 0) {
+    update();
+    return;
+  }
+  animateTo({ duration: ms, curve: Curve.FastOutSlowIn }, update);
 }

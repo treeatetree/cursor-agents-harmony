@@ -9,6 +9,7 @@ import {
   AgentSummary, CustomSubagentDef, EnvTarget, EnvVarDef, McpServerDef, ModelInfo, RepoInfo
 } from '../models/Api';
 import { Haptics } from '../utils/Haptics';
+import { motionMs } from '../utils/Motion';
 import { dropPreviewMap, maxPromptImages, pickPromptImages, previewSrc, PromptImage, toApiImages } from '../utils/ImagePicker';
 import { HuIconButton } from '../components/HuIconButton';
 import { PromptShell } from '../components/PromptShell';
@@ -531,7 +532,7 @@ export struct NewAgentPage {
       .layoutWeight(1)
       .justifyContent(FlexAlign.Start)
       .padding({ top: 8, bottom: this.bottomInset })
-      .animation({ duration: Tokens.motionMs, curve: Curve.FastOutSlowIn })
+      .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
     }
     .width('100%')
     .height('100%')
@@ -801,7 +802,7 @@ export struct NewAgentPage {
           .width('100%')
         Row({ space: 6 }) {
           HuChip({
-            label: 'agent',
+            label: 'Agent',
             on: this.mode !== 'plan',
             onTap: () => {
               this.mode = 'agent';
@@ -810,7 +811,7 @@ export struct NewAgentPage {
             }
           })
           HuChip({
-            label: 'plan',
+            label: 'Plan',
             on: this.mode === 'plan',
             onTap: () => {
               this.mode = 'plan';

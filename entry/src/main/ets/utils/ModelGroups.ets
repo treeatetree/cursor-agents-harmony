@@ -26,22 +26,22 @@ export function shortModelName(name: string): string {
     .trim();
 }
 
-/** Chip: model name + effort/fast only when those params are on. */
+/** Chip: model name + English effort depth + fast when on. */
 export function formatFollowChip(name: string, params: Object[]): string {
   const bits: string[] = [];
   const short = shortModelName(name);
   if (short.length > 0) {
     bits.push(short);
   }
-  let effortOn = false;
+  let effort = '';
   let fastOn = false;
   for (let i = 0; i < params.length; i++) {
     const row = params[i] as Record<string, Object>;
     const id = `${row['id'] ?? ''}`.toLowerCase();
-    const val = `${row['value'] ?? ''}`.toLowerCase();
+    const val = `${row['value'] ?? ''}`.toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ').trim();
     if (id === 'effort' || id === 'reasoning') {
       if (isEffortOn(val)) {
-        effortOn = true;
+        effort = val;
       }
     } else if (id === 'fast' || id === 'speed') {
       if (val === 'true' || val === '1' || val === 'fast') {
@@ -49,8 +49,8 @@ export function formatFollowChip(name: string, params: Object[]): string {
       }
     }
   }
-  if (effortOn) {
-    bits.push('effort');
+  if (effort.length > 0) {
+    bits.push(effort);
   }
   if (fastOn) {
     bits.push('fast');
@@ -59,8 +59,7 @@ export function formatFollowChip(name: string, params: Object[]): string {
 }
 
 function isEffortOn(val: string): boolean {
-  return val.length > 0 && val !== 'false' && val !== '0' && val !== 'off' && val !== 'none' &&
-    val !== 'low';
+  return val.length > 0 && val !== 'false' && val !== '0' && val !== 'off' && val !== 'none';
 }
 
 /** What we actually POST as `model` — for logs and the user-bubble caption. */

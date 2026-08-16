@@ -1,5 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
+import { motionMs, pressMs, pressScaleOf } from '../utils/Motion';
 
 /**
  * Chip: visual 32 / hit 44. Selected = bg2 + border, never ink fill.
@@ -30,6 +31,7 @@ export struct HuChip {
           width: 1,
           color: this.on ? $r('app.color.border_strong') : $r('app.color.border')
         })
+        .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
     }
     .constraintSize({
       minHeight: Tokens.touchMin,
@@ -37,8 +39,9 @@ export struct HuChip {
     })
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
-    .opacity(this.pressed ? 0.7 : 1)
-    .animation({ duration: 120, curve: Curve.EaseOut })
+    .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
+    .opacity(this.pressed ? 0.82 : 1)
+    .animation({ duration: pressMs(), curve: Curve.EaseOut })
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;
@@ -72,11 +75,11 @@ export struct HuActionChip {
       .backgroundColor($r('app.color.accent'))
       .borderRadius(Tokens.radiusChip)
       .scale({
-        x: this.pressed ? Tokens.pressScale : 1,
-        y: this.pressed ? Tokens.pressScale : 1
+        x: pressScaleOf(this.pressed),
+        y: pressScaleOf(this.pressed)
       })
       .opacity(this.pressed ? 0.82 : 1)
-      .animation({ duration: 120, curve: Curve.EaseOut })
+      .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onTouch((e: TouchEvent) => {
         if (e.type === TouchType.Down) {
           this.pressed = true;

@@ -1,5 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
+import { pressMs } from '../utils/Motion';
 import { HuIcon } from './HuIcon';
 
 @Component
@@ -34,7 +35,7 @@ export struct HuIconButton {
       y: this.isEnabled && this.pressed ? Tokens.pressScale : 1
     })
     .opacity(this.isEnabled ? (this.pressed ? 0.7 : 1) : 0.4)
-    .animation({ duration: 120, curve: Curve.EaseOut })
+    .animation({ duration: pressMs(), curve: Curve.EaseOut })
     .accessibilityText(this.label)
     .onTouch((e: TouchEvent) => {
       if (!this.isEnabled) {

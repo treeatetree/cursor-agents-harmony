@@ -1,5 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
+import { pressMs, pressScaleOf } from '../utils/Motion';
 
 /**
  * HeroUI-style button: accent fill, 24 radius, press scale 0.97.
@@ -54,7 +55,9 @@ export struct HuButton {
         width: this.isEnabled ? 0 : 1,
         color: $r('app.color.border_strong')
       })
-      .opacity(this.isEnabled ? (this.pressed ? 0.7 : 1) : 1)
+      .scale({ x: pressScaleOf(this.isEnabled && this.pressed), y: pressScaleOf(this.isEnabled && this.pressed) })
+      .opacity(this.isEnabled ? (this.pressed ? 0.82 : 1) : 1)
+      .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onTouch((e: TouchEvent) => {
         if (!this.isEnabled) {
           return;

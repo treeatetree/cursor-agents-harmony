@@ -1,5 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
+import { pressMs, pressScaleOf } from '../utils/Motion';
 import { AVATAR_IDS, avatarLabel, normalizeAvatarId } from '../utils/AvatarPresets';
 
 @Component
@@ -25,11 +26,11 @@ export struct HuAvatar {
       color: $r('app.color.accent')
     })
     .scale({
-      x: this.pressed ? Tokens.pressScale : 1,
-      y: this.pressed ? Tokens.pressScale : 1
+      x: pressScaleOf(this.pressed),
+      y: pressScaleOf(this.pressed)
     })
     .opacity(this.pressed ? 0.85 : 1)
-    .animation({ duration: 120, curve: Curve.EaseOut })
+    .animation({ duration: pressMs(), curve: Curve.EaseOut })
     .accessibilityText(avatarLabel(this.preset))
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {

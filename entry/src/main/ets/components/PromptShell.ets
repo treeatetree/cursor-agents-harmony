@@ -399,7 +399,7 @@ export struct PromptShell {
         })
       } else {
         HuChip({
-          label: this.followUpMode === 'plan' ? 'plan' : 'agent',
+          label: this.followUpMode === 'plan' ? 'Plan' : 'Agent',
           on: this.followUpMode === 'plan',
           onTap: () => {
             this.onModeChange(this.followUpMode === 'plan' ? 'agent' : 'plan');

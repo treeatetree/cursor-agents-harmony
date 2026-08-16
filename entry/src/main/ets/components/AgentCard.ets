@@ -4,7 +4,7 @@ import { relativeTime } from '../utils/TimeFmt';
 import { repoTail, shortAgentId, elapsedSince } from '../utils/DisplayFmt';
 import { firstPrUrl, hasPr, isRunInFlight, userStampIso } from '../utils/InboxGrouping';
 import { Haptics } from '../utils/Haptics';
-import { motionMs, pressScaleOf } from '../utils/Motion';
+import { pressMs, pressScaleOf } from '../utils/Motion';
 
 @Component
 export struct AgentCard {
@@ -230,7 +230,7 @@ export struct AgentCard {
     })
     .borderRadius(this.list ? 12 : Tokens.radiusCard)
     .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
-    .animation({ duration: motionMs(), curve: Curve.EaseOut })
+    .animation({ duration: pressMs(), curve: Curve.EaseOut })
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;

@@ -1,6 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
-import { prefersReducedMotion } from '../utils/Motion';
+import { motionMs, prefersReducedMotion, pressMs } from '../utils/Motion';
 
 @Component
 export struct HuSwitch {
@@ -34,7 +34,7 @@ export struct HuSwitch {
           .height(26)
           .borderRadius(999)
           .backgroundColor(this.on ? $r('app.color.accent') : $r('app.color.bg2'))
-          .animation({ duration: prefersReducedMotion() ? 0 : 280, curve: Curve.FastOutSlowIn })
+          .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
         Column()
           .width(20)
           .height(20)
@@ -42,7 +42,7 @@ export struct HuSwitch {
           .backgroundColor($r('app.color.bg1'))
           .margin({ left: this.on ? 21 : 3, top: 3 })
           .animation({
-            duration: prefersReducedMotion() ? 0 : 280,
+            duration: motionMs(),
             curve: Curve.FastOutSlowIn
           })
       }
@@ -53,7 +53,7 @@ export struct HuSwitch {
     .constraintSize({ minHeight: Tokens.touchMin })
     .alignItems(VerticalAlign.Center)
     .opacity(this.pressed ? 0.7 : 1)
-    .animation({ duration: 120, curve: Curve.EaseOut })
+    .animation({ duration: pressMs(), curve: Curve.EaseOut })
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;

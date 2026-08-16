@@ -3,6 +3,7 @@ import { Tokens } from '../theme/Tokens';
 import { relativeTime } from '../utils/TimeFmt';
 import { shortRepoName } from '../utils/DisplayFmt';
 import { userStampIso } from '../utils/InboxGrouping';
+import { pressMs } from '../utils/Motion';
 
 @Reusable
 @Component
@@ -156,7 +157,7 @@ export struct AgentRow {
         bottom: Tokens.space3
       })
       .backgroundColor(this.pressed ? $r('app.color.bg_hover') : Color.Transparent)
-      .animation({ duration: 120, curve: Curve.EaseOut })
+      .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onClick(() => {
         this.onOpen(this.agent.id);
       })

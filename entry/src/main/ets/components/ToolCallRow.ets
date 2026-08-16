@@ -1,7 +1,7 @@
 import { TimelineItem } from '../models/Timeline';
 import { Tokens } from '../theme/Tokens';
 import { isSubagentTool } from '../utils/StreamText';
-import { fadeTransition, motionMs } from '../utils/Motion';
+import { fadeTransition, motionMs, runLayout } from '../utils/Motion';
 import { HuIcon } from './HuIcon';
 
 @Component
@@ -93,7 +93,7 @@ export struct ToolCallRow {
           .width(16)
           .height(16)
           .rotate({ angle: this.opened ? 90 : 0 })
-          .animation({ duration: motionMs(), curve: Curve.EaseInOut })
+          .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
         }
       }
       .width('100%')
@@ -101,7 +101,7 @@ export struct ToolCallRow {
       .alignItems(VerticalAlign.Center)
       .onClick(() => {
         if (this.canExpand()) {
-          animateTo({ duration: motionMs(), curve: Curve.EaseInOut }, () => {
+          runLayout(() => {
             this.opened = !this.opened;
           });
           this.onToggle();

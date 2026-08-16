@@ -3,6 +3,7 @@ import { ThemePref, ThemeStore } from '../store/ThemeStore';
 import { PrefStore } from '../store/PrefStore';
 import { ReadPrefStore } from '../store/ReadPrefStore';
 import { Haptics } from '../utils/Haptics';
+import { motionMs, pressMs } from '../utils/Motion';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { common } from '@kit.AbilityKit';
 import { HuAvatarPicker } from '../components/HuAvatar';
@@ -382,6 +383,7 @@ struct SettingsPage {
       .height(48)
       .textAlign(TextAlign.Start)
       .opacity(disabled ? 0.4 : (this.pressKey === `act:${label}` ? 0.7 : 1))
+      .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onTouch((e: TouchEvent) => {
         if (disabled) {
           return;
@@ -481,6 +483,7 @@ struct SettingsPage {
       .textAlign(TextAlign.Center)
       .backgroundColor(this.typePref === value ? $r('app.color.bg1') : Color.Transparent)
       .borderRadius(8)
+      .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
       .onClick(async () => {
         Haptics.toggle();
         this.typePref = value;
@@ -505,6 +508,7 @@ struct SettingsPage {
       .textAlign(TextAlign.Center)
       .backgroundColor(this.themePref === value ? $r('app.color.bg1') : Color.Transparent)
       .borderRadius(8)
+      .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
       .onClick(async () => {
         Haptics.toggle();
         this.themePref = value;

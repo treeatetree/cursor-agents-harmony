@@ -1,5 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
+import { pressMs } from '../utils/Motion';
 
 @Component
 export struct HuTextButton {
@@ -24,6 +25,7 @@ export struct HuTextButton {
       .padding({ left: this.compact ? 6 : 8, right: this.compact ? 6 : 8 })
       .textAlign(TextAlign.Center)
       .opacity(this.isEnabled ? (this.pressed ? 0.55 : 1) : 0.4)
+      .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onTouch((e: TouchEvent) => {
         if (!this.isEnabled) {
           return;

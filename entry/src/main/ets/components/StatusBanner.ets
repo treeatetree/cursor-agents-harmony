@@ -1,4 +1,5 @@
 import { Tokens } from '../theme/Tokens';
+import { chromeTransition } from '../utils/Motion';
 import { HuTextButton } from './HuTextButton';
 
 /** Inbox / detail shared strip: info, warn, danger + optional action. */
@@ -58,6 +59,7 @@ export struct StatusBanner {
       .padding({ left: Tokens.pagePad, right: Tokens.space2, top: 8, bottom: 8 })
       .backgroundColor(this.wash())
       .alignItems(VerticalAlign.Center)
+      .transition(chromeTransition())
     }
   }
 }

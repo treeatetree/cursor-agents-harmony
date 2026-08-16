@@ -1,7 +1,7 @@
 import { Tokens } from '../theme/Tokens';
 import { FilterMode, GroupMode, SortMode } from '../utils/InboxGrouping';
 import { Haptics } from '../utils/Haptics';
-import { motionMs } from '../utils/Motion';
+import { fadeTransition, motionMs, pressMs, pressScaleOf, runLayout } from '../utils/Motion';
 import { HuAvatar } from './HuAvatar';
 import { HuIcon } from './HuIcon';
 import { HuIconButton } from './HuIconButton';
@@ -91,14 +91,17 @@ export struct InboxFilterBar {
             .border({ width: 1, color: $r('app.color.border') })
             .padding({ left: 12, right: 12 })
             .defaultFocus(true)
+            .transition(fadeTransition())
             .onChange((v: string) => {
               this.onQuery(v);
             })
           HuTextButton({
             label: '取消',
             onTap: () => {
-              this.showSearch = false;
-              this.onQuery('');
+              runLayout(() => {
+                this.showSearch = false;
+                this.onQuery('');
+              });
             }
           })
         } else {
@@ -118,6 +121,7 @@ export struct InboxFilterBar {
           .layoutWeight(1)
           .height(Tokens.touchMin)
           .constraintSize({ minWidth: 0 })
+          .transition(fadeTransition())
         }
 
         if (!this.searchVisible() && !this.compact && !this.hideSearch) {
@@ -126,7 +130,9 @@ export struct InboxFilterBar {
             label: '搜索',
             iconColor: this.query.length > 0 ? $r('app.color.accent') : $r('app.color.text_secondary'),
             onTap: () => {
-              this.showSearch = true;
+              runLayout(() => {
+                this.showSearch = true;
+              });
             }
           })
         }
@@ -172,27 +178,13 @@ export struct InboxFilterBar {
 
   @Builder
   seg(label: string, mode: FilterMode) {
-    Column() {
-      Text(label)
-        .fontSize(Tokens.typeCaption)
-        .fontWeight(this.filter === mode ? FontWeight.Medium : FontWeight.Regular)
-        .fontColor(this.filter === mode ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
-        .height(32)
-        .padding({ left: this.compact ? 8 : 10, right: this.compact ? 8 : 10 })
-        .textAlign(TextAlign.Center)
-        .backgroundColor(this.filter === mode ? $r('app.color.bg2') : Color.Transparent)
-        .borderRadius(Tokens.radiusChip)
-        .border({
-          width: 1,
-          color: this.filter === mode ? $r('app.color.border_strong') : Color.Transparent
-        })
-    }
-    .constraintSize({ minHeight: Tokens.touchMin })
-    .justifyContent(FlexAlign.Center)
-    .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
-    .onClick(() => {
-      Haptics.tick();
-      this.onFilter(mode);
+    InboxSeg({
+      label: label,
+      active: this.filter === mode,
+      compact: this.compact,
+      onTap: () => {
+        this.onFilter(mode);
+      }
     })
   }
 
@@ -205,6 +197,50 @@ export struct InboxFilterBar {
       onTap: () => {
         this.onAvatar();
       }
+    })
+  }
+}
+
+@Component
+struct InboxSeg {
+  @Prop label: string = '';
+  @Prop active: boolean = false;
+  @Prop compact: boolean = false;
+  @State private pressed: boolean = false;
+  onTap: () => void = () => {
+  };
+
+  build() {
+    Column() {
+      Text(this.label)
+        .fontSize(Tokens.typeCaption)
+        .fontWeight(this.active ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.active ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+        .height(32)
+        .padding({ left: this.compact ? 8 : 10, right: this.compact ? 8 : 10 })
+        .textAlign(TextAlign.Center)
+        .backgroundColor(this.active ? $r('app.color.bg2') : Color.Transparent)
+        .borderRadius(Tokens.radiusChip)
+        .border({
+          width: 1,
+          color: this.active ? $r('app.color.border_strong') : Color.Transparent
+        })
+        .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
+    }
+    .constraintSize({ minHeight: Tokens.touchMin })
+    .justifyContent(FlexAlign.Center)
+    .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
+    .animation({ duration: pressMs(), curve: Curve.EaseOut })
+    .onTouch((e: TouchEvent) => {
+      if (e.type === TouchType.Down) {
+        this.pressed = true;
+      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        this.pressed = false;
+      }
+    })
+    .onClick(() => {
+      Haptics.tick();
+      this.onTap();
     })
   }
 }

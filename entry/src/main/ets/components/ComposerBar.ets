@@ -63,7 +63,7 @@ export struct ComposerBar {
 
       Row({ space: 4 }) {
         HuTextButton({
-          label: this.followUpMode === 'plan' ? 'plan' : 'agent',
+          label: this.followUpMode === 'plan' ? 'Plan' : 'Agent',
           compact: false,
           active: true,
           color: $r('app.color.text_secondary'),

@@ -1,7 +1,7 @@
 import { TimelineItem } from '../models/Timeline';
 import { Tokens } from '../theme/Tokens';
 import { lastNonEmptyLine } from '../utils/StreamText';
-import { fadeTransition, motionMs, pressScaleOf, shimmerMs, shimmerOpacity } from '../utils/Motion';
+import { fadeTransition, motionMs, pressMs, pressScaleOf, runLayout, shimmerMs, shimmerOpacity } from '../utils/Motion';
 import { HuIcon } from './HuIcon';
 import { MarkdownLite } from './MarkdownLite';
 import { ToolCallRow } from './ToolCallRow';
@@ -54,7 +54,7 @@ export struct ActivityCard {
     if (!this.hasBody()) {
       return;
     }
-    animateTo({ duration: motionMs(), curve: Curve.EaseInOut }, () => {
+    runLayout(() => {
       this.opened = !this.opened;
     });
     this.onToggle();
@@ -80,7 +80,7 @@ export struct ActivityCard {
             .width(16)
             .height(16)
             .rotate({ angle: this.opened ? 90 : 0 })
-            .animation({ duration: motionMs(), curve: Curve.EaseInOut })
+            .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
           }
           Text(this.title)
             .fontSize(Tokens.typeCaption)
@@ -116,7 +116,7 @@ export struct ActivityCard {
       .alignItems(HorizontalAlign.Start)
       .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
       .opacity(this.pressed ? 0.88 : 1)
-      .animation({ duration: 120, curve: Curve.EaseOut })
+      .animation({ duration: pressMs(), curve: Curve.EaseOut })
       .onTouch((e: TouchEvent) => {
         if (!this.hasBody()) {
           return;
