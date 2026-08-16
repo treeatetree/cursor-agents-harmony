@@ -340,23 +340,9 @@ export class DetailVM {
     }
     const cur = this.source.getData(idx);
     const willOpen = cur.collapsed !== false;
-    const next: TimelineItem = {
-      key: cur.key,
-      kind: cur.kind,
-      runId: cur.runId,
-      text: cur.text,
-      tool: cur.tool,
-      statusLabel: cur.statusLabel,
-      collapsed: !willOpen,
-      pinnedOpen: willOpen,
-      failed: cur.failed,
-      streaming: cur.streaming,
-      stepCount: cur.stepCount,
-      usageShort: cur.usageShort
-    };
-    this.source.updateAt(idx, next);
-    this.source.flushChanges();
-    this.notify();
+    cur.collapsed = !willOpen;
+    cur.pinnedOpen = willOpen;
+    this.stickToBottom = false;
   }
 
   async followUp(text: string, images: PromptImage[] = []): Promise<boolean> {
@@ -1039,7 +1025,9 @@ export class DetailVM {
       this.source.mutateAt(idx, (item: TimelineItem) => {
         item.text = head;
         item.streaming = false;
-        item.collapsed = true;
+        if (item.pinnedOpen !== true) {
+          item.collapsed = true;
+        }
         item.stepCount = Math.max(1, countSteps(head));
       });
       this.progressSealed = true;

@@ -88,9 +88,19 @@ export function groupAgents(items: AgentSummary[], mode: GroupMode, pinned: stri
     buckets = groupByTime(rest);
   }
   for (let i = 0; i < buckets.length; i++) {
-    buckets[i].items.sort((x: AgentSummary, y: AgentSummary) => urgencyOf(x) - urgencyOf(y));
+    buckets[i].items.sort((x: AgentSummary, y: AgentSummary) => {
+      const urg = urgencyOf(x) - urgencyOf(y);
+      if (urg !== 0) {
+        return urg;
+      }
+      return stamp(y.updatedAt || y.createdAt) - stamp(x.updatedAt || x.createdAt);
+    });
   }
-  buckets.sort((g: GroupBucket, h: GroupBucket) => bucketUrgency(g) - bucketUrgency(h));
+  if (mode === 'repo') {
+    buckets.sort((g: GroupBucket, h: GroupBucket) => bucketLatest(h) - bucketLatest(g));
+  } else {
+    buckets.sort((g: GroupBucket, h: GroupBucket) => bucketUrgency(g) - bucketUrgency(h));
+  }
   if (pinItems.length > 0) {
     const next: GroupBucket[] = [{ key: 'pinned', label: '置顶', items: pinItems }];
     for (let i = 0; i < buckets.length; i++) {
@@ -141,6 +151,17 @@ export function urgencyOf(a: AgentSummary): number {
     return 2;
   }
   return 3;
+}
+
+function bucketLatest(g: GroupBucket): number {
+  let best = 0;
+  for (let i = 0; i < g.items.length; i++) {
+    const t = stamp(g.items[i].updatedAt || g.items[i].createdAt);
+    if (t > best) {
+      best = t;
+    }
+  }
+  return best;
 }
 
 function bucketUrgency(g: GroupBucket): number {

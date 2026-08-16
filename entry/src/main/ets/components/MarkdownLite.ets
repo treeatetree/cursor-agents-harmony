@@ -55,6 +55,11 @@ export struct MarkdownLite {
     return this.compact ? 20 : Tokens.lineList;
   }
 
+  /** Process / compact rows sit back; the main answer stays ink. */
+  private bodyColor(): Resource {
+    return this.compact ? $r('app.color.text_secondary') : $r('app.color.text_primary');
+  }
+
   private blocks(): MdBlock[] {
     const out: MdBlock[] = [];
     const src = this.content ?? '';
@@ -399,15 +404,21 @@ export struct MarkdownLite {
         } else if (seg.bold) {
           Span(seg.text)
             .fontSize(size)
-            .fontColor(color)
-            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .fontWeight(FontWeight.Bold)
             .fontStyle(seg.italic ? FontStyle.Italic : FontStyle.Normal)
+        } else if (seg.italic) {
+          Span(seg.text)
+            .fontSize(size)
+            .fontColor($r('app.color.text_secondary'))
+            .fontWeight(weight)
+            .fontStyle(FontStyle.Italic)
         } else {
           Span(seg.text)
             .fontSize(size)
             .fontColor(color)
             .fontWeight(weight)
-            .fontStyle(seg.italic ? FontStyle.Italic : FontStyle.Normal)
+            .fontStyle(FontStyle.Normal)
         }
       }, (seg: InlineSeg, idx: number) => `s-${idx}-${seg.text.length}-${seg.code ? 1 : 0}-${seg.bold ? 1 : 0}`)
     }
@@ -439,7 +450,7 @@ export struct MarkdownLite {
           Column() {
             this.renderInline(b.text, this.compact ? Tokens.typeBody : Tokens.typeTitle,
               $r('app.color.text_primary'),
-              FontWeight.Medium, this.compact ? Tokens.lineBody : 26)
+              FontWeight.Bold, this.compact ? Tokens.lineBody : 26)
           }
           .width('100%')
           .margin({ top: idx > 0 ? 18 : 0, bottom: 8 })
@@ -447,13 +458,13 @@ export struct MarkdownLite {
           Column() {
             this.renderInline(b.text, this.compact ? Tokens.typeBody : Tokens.typeHeadline,
               $r('app.color.text_primary'),
-              FontWeight.Medium, this.compact ? Tokens.lineBody : Tokens.lineProse)
+              FontWeight.Bold, this.compact ? Tokens.lineBody : Tokens.lineProse)
           }
           .width('100%')
           .margin({ top: idx > 0 ? 16 : 0, bottom: 6 })
         } else if (b.kind === 'h3') {
           Column() {
-            this.renderInline(b.text, this.proseSize(), $r('app.color.text_primary'), FontWeight.Medium,
+            this.renderInline(b.text, this.proseSize(), $r('app.color.text_primary'), FontWeight.Bold,
               this.listLine())
           }
           .width('100%')
@@ -475,7 +486,7 @@ export struct MarkdownLite {
             .margin({ top: 12, bottom: 12 })
         } else {
           Column() {
-            this.renderInline(b.text, this.proseSize(), $r('app.color.text_primary'), FontWeight.Normal,
+            this.renderInline(b.text, this.proseSize(), this.bodyColor(), FontWeight.Regular,
               this.proseLine())
           }
           .width('100%')
@@ -498,7 +509,7 @@ export struct MarkdownLite {
         .lineHeight(this.listLine())
         .textAlign(TextAlign.End)
       Column() {
-        this.renderInline(text, this.proseSize(), $r('app.color.text_primary'), FontWeight.Normal,
+        this.renderInline(text, this.proseSize(), this.bodyColor(), FontWeight.Regular,
           this.listLine())
       }
       .layoutWeight(1)
@@ -512,7 +523,7 @@ export struct MarkdownLite {
   @Builder
   quoteBlock(text: string) {
     Column() {
-      this.renderInline(text, this.proseSize(), $r('app.color.text_secondary'), FontWeight.Normal,
+      this.renderInline(text, this.proseSize(), $r('app.color.text_tertiary'), FontWeight.Regular,
         this.proseLine())
     }
     .width('100%')
@@ -529,8 +540,8 @@ export struct MarkdownLite {
           ForEach(row.cells, (cell: string, ci: number) => {
             Text(cell)
               .fontSize(Tokens.typeCaption)
-              .fontWeight(ri === 0 ? FontWeight.Medium : FontWeight.Regular)
-              .fontColor($r('app.color.text_primary'))
+              .fontWeight(ri === 0 ? FontWeight.Bold : FontWeight.Regular)
+              .fontColor(ri === 0 ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
               .lineHeight(Tokens.lineCaption + 2)
               .maxLines(6)
               .textOverflow({ overflow: TextOverflow.Ellipsis })

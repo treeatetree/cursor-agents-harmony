@@ -1,6 +1,6 @@
 import { http } from '@kit.NetworkKit';
 import {
-  ApiErrorBody, ApiException, AgentsListResponse, ArtifactDownloadResponse,
+  ApiErrorDetail, ApiException, AgentsListResponse, ArtifactDownloadResponse,
   ArtifactsResponse, ConversationResponse, CreateAgentResponse, CreateRunResponse,
   MeResponse, Run, RunsListResponse, UsageResponse
 } from '../models/Api';
@@ -15,6 +15,7 @@ const MAX_BACKOFF_MS = 30000;
 
 export class CursorApiClient {
   private static instance: CursorApiClient | undefined = undefined;
+  private mutating: number = 0;
 
   static getInstance(): CursorApiClient {
     if (!CursorApiClient.instance) {
@@ -89,9 +90,19 @@ export class CursorApiClient {
     return await this.requestWithRetry<UsageResponse>('GET', path);
   }
 
+  /** True while a create/follow-up POST is in flight — Inbox must not poll then. */
+  isMutating(): boolean {
+    return this.mutating > 0;
+  }
+
   /** POST create — no auto-retry (avoid duplicate agents). */
   async createAgent(body: object): Promise<CreateAgentResponse> {
-    return await this.request<CreateAgentResponse>('POST', '/v1/agents', body);
+    this.mutating++;
+    try {
+      return await this.request<CreateAgentResponse>('POST', '/v1/agents', body);
+    } finally {
+      this.mutating--;
+    }
   }
 
   /** POST follow-up — no auto-retry (avoid duplicate runs). Keep unwrap. */
@@ -142,8 +153,9 @@ export class CursorApiClient {
   }
 
   /**
-   * GET retry helper: on 429/5xx (ApiException.retryable), backoff 1/2/4/8s
-   * capped at 30s, max 3 retries. Non-retryable errors throw immediately.
+   * GET retry helper: on 5xx (ApiException.retryable), backoff 1/2/4/8s
+   * capped at 30s, max 3 retries. 429 is not retried — repo list is 1/min,
+   * short retries burn the quota and surface as「请求繁忙」.
    */
   private async requestWithRetry<T>(method: http.RequestMethod | string, path: string,
     body?: object, overrideKey?: string): Promise<T> {
@@ -152,7 +164,8 @@ export class CursorApiClient {
       try {
         return await this.request<T>(method, path, body, overrideKey);
       } catch (e) {
-        if (!(e instanceof ApiException) || !e.retryable || attempt >= MAX_RETRIES) {
+        const rateLimited = e instanceof ApiException && e.code === 429;
+        if (!(e instanceof ApiException) || rateLimited || !e.retryable || attempt >= MAX_RETRIES) {
           if (e instanceof ApiException) {
             throw e;
           }
@@ -218,28 +231,51 @@ export class CursorApiClient {
       let message = `HTTP ${code}`;
       let apiCode = '';
       try {
-        const errBody = JSON.parse(raw) as ApiErrorBody;
-        if (errBody.error?.message) {
-          message = errBody.error.message as string;
-        } else if (errBody.message) {
-          message = errBody.message as string;
+        const errBody = JSON.parse(raw) as Record<string, Object>;
+        const errField = errBody['error'];
+        if (typeof errField === 'string' && `${errField}`.length > 0) {
+          message = `${errField}`;
+        } else if (errField) {
+          const detail = errField as ApiErrorDetail;
+          if (detail?.message) {
+            message = detail.message as string;
+          }
+          if (detail?.code) {
+            apiCode = detail.code as string;
+          }
         }
-        if (errBody.error?.code) {
-          apiCode = errBody.error.code as string;
+        if (errBody['message']) {
+          message = `${errBody['message']}`;
         }
       } catch (_e) {
         if (raw && raw.length < 200) {
           message = raw;
         }
       }
+      Log.warn(TAG, `${method} ${path} -> ${code} ${message}`);
 
-      const retryable = code === 429 || code >= 500;
+      const creating = method === 'POST' && path === '/v1/agents';
+      const retryable = code >= 500;
       if (code === 401) {
         message = 'API Key 无效或已过期';
       } else if (code === 403) {
-        message = '无权限，请检查 Cursor 订阅计划';
+        message = looksLikeConcurrencyLimit(message) ?
+          '同时运行的 Cloud Agent 已达套餐上限，先到网页归档旧任务再试' :
+          '无权限，请检查 Cursor 订阅计划';
+      } else if (code === 409 && creating) {
+        message = '这次任务可能已经建过，请回 Inbox 看一下';
       } else if (code === 429) {
-        message = '请求过于频繁，请稍后重试';
+        if (creating) {
+          message = '创建任务过于频繁，请稍等再发';
+        } else if (path.indexOf('/repositories') >= 0) {
+          message = '仓库列表每分钟只能刷新一次，请稍后再试';
+        } else {
+          message = '请求过于频繁，请稍后重试';
+        }
+      } else if (creating && (code === 500 || code === 502 || code === 503 || code === 504)) {
+        message = 'Cursor 创建任务繁忙，请稍后再发';
+      } else if (code === 503) {
+        message = '服务繁忙，请稍后重试';
       }
       throw new ApiException(code, message, apiCode, retryable);
     } catch (e) {
@@ -252,4 +288,11 @@ export class CursorApiClient {
       client.destroy();
     }
   }
+}
+
+function looksLikeConcurrencyLimit(message: string): boolean {
+  const low = message.toLowerCase();
+  return low.indexOf('limit') >= 0 || low.indexOf('upgrade') >= 0 ||
+    low.indexOf('simultaneous') >= 0 || low.indexOf('concurrent') >= 0 ||
+    message.indexOf('上限') >= 0 || message.indexOf('同时') >= 0;
 }

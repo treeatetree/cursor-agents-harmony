@@ -5,13 +5,31 @@ import { HuIcon } from './HuIcon';
 
 @Component
 export struct ToolCallRow {
-  @Prop item: TimelineItem = {
+  @Prop @Watch('onItem') item: TimelineItem = {
     key: '',
     kind: 'tool',
     runId: ''
   };
+  @State opened: boolean = false;
+  private boundKey: string = '';
   onToggle: () => void = () => {
   };
+
+  aboutToAppear(): void {
+    this.bindItem();
+  }
+
+  onItem(_name: string): void {
+    this.bindItem();
+  }
+
+  private bindItem(): void {
+    if (this.item.key === this.boundKey) {
+      return;
+    }
+    this.boundKey = this.item.key;
+    this.opened = this.item.collapsed === false;
+  }
 
   private running(): boolean {
     return (this.item.tool?.status ?? 'running') !== 'completed';
@@ -26,7 +44,7 @@ export struct ToolCallRow {
   }
 
   private folded(): boolean {
-    return this.item.collapsed !== false;
+    return !this.opened;
   }
 
   private isSub(): boolean {
@@ -76,6 +94,7 @@ export struct ToolCallRow {
       .alignItems(VerticalAlign.Center)
       .onClick(() => {
         if (this.canExpand()) {
+          this.opened = !this.opened;
           this.onToggle();
         }
       })

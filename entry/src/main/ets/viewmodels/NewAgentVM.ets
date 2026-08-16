@@ -3,7 +3,7 @@ import {
   McpServerDef, ModelInfo, ModelParamDef, ModelParamValue, ModelVariant,
   ModelVariantParam, RepoInfo
 } from '../models/Api';
-import { unwrapCreateAgent, unwrapModels, unwrapRepos } from '../api/ApiUnwrap';
+import { unwrapCreateAgent, unwrapModels } from '../api/ApiUnwrap';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { AgentCache } from '../store/AgentCache';
 import { PrefStore } from '../store/PrefStore';
@@ -15,6 +15,11 @@ import { Log } from '../utils/Log';
 import { util } from '@kit.ArkTS';
 
 const TAG = 'NewAgentVM';
+const REPO_COOLDOWN_MS = 60 * 1000;
+const REPO_LIMIT_MSG = '仓库列表每分钟只能刷新一次，请稍后再试';
+
+let reposInFlight: Promise<RepoInfo[]> | undefined = undefined;
+let lastReposAttemptAt: number = 0;
 
 export class NewAgentVM {
   prompt: string = '';
@@ -68,27 +73,30 @@ export class NewAgentVM {
     if (this.models.length === 0) {
       this.models = cache.loadModels();
     }
-    this.loadingMeta = this.repos.length === 0;
+    this.loadingMeta = this.repos.length === 0 || forceRepos;
     try {
 
-      const needRepos = forceRepos || this.repos.length === 0 ||
-        (Date.now() - cache.reposFetchedAt() > 60 * 1000 && forceRepos);
-      // Always refresh repos if empty; otherwise respect 60s cooldown on force.
+      const lastOk = cache.reposFetchedAt();
+      const lastTry = Math.max(lastOk, lastReposAttemptAt);
+      const withinCooldown = lastTry > 0 && (Date.now() - lastTry) < REPO_COOLDOWN_MS;
+      // GET /v1/repositories is 1/user/min. Cache + cooldown; never double-fetch.
       if (this.repos.length === 0 || forceRepos) {
-        if (forceRepos && Date.now() - cache.reposFetchedAt() < 60 * 1000) {
-          this.errorMsg = '仓库列表刷新过于频繁，请稍后再试';
+        if (!reposInFlight && withinCooldown) {
+          if (forceRepos) {
+            this.errorMsg = REPO_LIMIT_MSG;
+          }
         } else {
           try {
-            const repoResp = await CursorApiClient.getInstance().listRepositories();
-            this.repos = unwrapRepos(repoResp).length > 0 ?
-              normalizeRepos(repoResp) : normalizeRepos(repoResp);
-            cache.saveRepos(this.repos);
+            this.repos = await fetchReposShared();
           } catch (e) {
             if (this.repos.length === 0) {
               if (e instanceof ApiException) {
                 throw new ApiException(e.code, e.message, e.apiCode, e.retryable);
               }
               throw new ApiException(0, '加载仓库失败', 'repos_failed', true);
+            }
+            if (e instanceof ApiException) {
+              this.errorMsg = e.message;
             }
           }
         }
@@ -124,7 +132,6 @@ export class NewAgentVM {
       if (this.selectedRepo.length === 0 && this.repos.length > 0) {
         this.selectedRepo = this.repos[0].repository;
       }
-      void needRepos;
     } catch (e) {
       if (e instanceof ApiException) {
         this.errorMsg = e.message;
@@ -304,6 +311,24 @@ export class NewAgentVM {
     }
     return [];
   }
+}
+
+async function fetchReposShared(): Promise<RepoInfo[]> {
+  if (reposInFlight) {
+    return reposInFlight;
+  }
+  lastReposAttemptAt = Date.now();
+  reposInFlight = (async () => {
+    try {
+      const repoResp = await CursorApiClient.getInstance().listRepositories();
+      const repos = normalizeRepos(repoResp);
+      AgentCache.getInstance().saveRepos(repos);
+      return repos;
+    } finally {
+      reposInFlight = undefined;
+    }
+  })();
+  return reposInFlight;
 }
 
 function normalizeRepos(raw: object): RepoInfo[] {

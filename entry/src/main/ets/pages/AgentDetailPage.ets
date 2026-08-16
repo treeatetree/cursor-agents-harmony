@@ -5,14 +5,14 @@ import { TimelineItem } from '../models/Timeline';
 import { ArtifactInfo, CustomSubagentDef, EnvVarDef, McpServerDef, RunUsage } from '../models/Api';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
-import { ToolCallRow } from '../components/ToolCallRow';
+import { ActivityCard } from '../components/ActivityCard';
 import { PromptShell } from '../components/PromptShell';
 import { MarkdownLite } from '../components/MarkdownLite';
 import { InboxVM } from '../viewmodels/InboxVM';
 import { shouldUseInAppBrowser } from './InAppBrowserPage';
 import { shareAgentLinks } from '../utils/Share';
 import { elapsedLabel, repoTail, shortAgentId } from '../utils/DisplayFmt';
-import { lastNonEmptyLine, shortPathForTool } from '../utils/StreamText';
+import { shortPathForTool } from '../utils/StreamText';
 import { motionMs, shimmerMs, shimmerOpacity } from '../utils/Motion';
 import { WebLinks, pushInAppBrowser } from '../utils/WebLinks';
 import { ArtifactRow } from '../components/ArtifactRow';
@@ -1183,10 +1183,6 @@ struct AgentDetailPage {
   }
 
   private rowKey(item: TimelineItem): string {
-    if (item.kind === 'thinking' || item.kind === 'progress' || item.kind === 'step' ||
-      item.kind === 'tool') {
-      return `${item.key}-${item.collapsed === false ? 'o' : 'c'}`;
-    }
     return item.key;
   }
 
@@ -1233,98 +1229,11 @@ struct AgentDetailPage {
     return out;
   }
 
-  private activityPreview(item: TimelineItem): string {
-    if (item.collapsed === false) {
-      return '';
-    }
-    const body = this.processBodyForRun(item.runId);
-    return lastNonEmptyLine(body, 72);
-  }
-
-  private activityHasBody(item: TimelineItem): boolean {
-    if (this.processBodyForRun(item.runId).length > 0) {
-      return true;
-    }
-    return this.toolsForRun(item.runId).length > 0;
-  }
-
   private isPlainUser(text: string): boolean {
     if (text.length === 0 || text.length >= 80) {
       return false;
     }
     return text.indexOf('\n') < 0 && text.indexOf('```') < 0;
-  }
-
-  @Builder
-  activityRow(item: TimelineItem) {
-    Column({ space: 6 }) {
-      Row({ space: 6 }) {
-        if (this.activityHasBody(item)) {
-          HuIcon({
-            name: item.collapsed === false ? 'chevronDown' : 'chevronRight',
-            iconSize: 16,
-            tint: $r('app.color.text_secondary')
-          })
-        }
-        Text(this.processLabel().length > 0 ? this.processLabel() : this.activityTitle(item))
-          .fontSize(Tokens.typeCaption)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_secondary'))
-          .opacity(this.runActive && item.streaming === true ? shimmerOpacity(this.shimmerOn) : 1)
-          .animation({ duration: shimmerMs(), curve: Curve.EaseInOut })
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .width('100%')
-      .constraintSize({ minHeight: Tokens.touchMin })
-      .alignItems(VerticalAlign.Center)
-
-      if (!this.activityHasBody(item)) {
-        Text('没有过程记录')
-          .fontSize(Tokens.typeMicro)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%')
-          .padding({ left: 22 })
-      } else if (item.collapsed !== false) {
-        if (this.activityPreview(item).length > 0) {
-          Text(this.activityPreview(item))
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-            .padding({ left: 22 })
-        }
-      } else {
-        MarkdownLite({
-          content: this.processBodyForRun(item.runId),
-          compact: true
-        })
-        ForEach(this.toolsForRun(item.runId), (tool: TimelineItem) => {
-          ToolCallRow({
-            item: tool,
-            onToggle: () => {
-              Haptics.tick();
-              this.vm.toggleCollapsed(tool.key);
-            }
-          })
-        }, (tool: TimelineItem) => `${tool.key}-${tool.collapsed === false ? 'o' : 'c'}`)
-      }
-    }
-    .width('100%')
-    .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-    .backgroundColor($r('app.color.bg2'))
-    .borderRadius(Tokens.radiusMd)
-    .opacity(1)
-    .animation({ duration: 120, curve: Curve.EaseOut })
-    .onClick(() => {
-      if (!this.activityHasBody(item)) {
-        return;
-      }
-      Haptics.tick();
-      this.vm.toggleCollapsed(item.key);
-    })
   }
 
   @Builder
@@ -1357,7 +1266,22 @@ struct AgentDetailPage {
       Column().width('100%').height(0)
     } else if (item.kind === 'thinking' || item.kind === 'progress' || item.kind === 'step') {
       if (this.isLeadProcess(item)) {
-        this.activityRow(item)
+        ActivityCard({
+          item: item,
+          runActive: this.runActive,
+          shimmerOn: this.shimmerOn,
+          title: this.processLabel().length > 0 ? this.processLabel() : this.activityTitle(item),
+          body: this.processBodyForRun(item.runId),
+          tools: this.toolsForRun(item.runId),
+          onToggle: () => {
+            Haptics.tick();
+            this.vm.toggleCollapsed(item.key);
+          },
+          onToggleTool: (key: string) => {
+            Haptics.tick();
+            this.vm.toggleCollapsed(key);
+          }
+        })
       } else {
         Column().width('100%').height(0)
       }

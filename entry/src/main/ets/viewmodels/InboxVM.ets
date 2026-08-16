@@ -59,6 +59,9 @@ export class InboxVM {
     if (!ApiKeyStore.getInstance().isUnlocked()) {
       return;
     }
+    if (CursorApiClient.getInstance().isMutating()) {
+      return;
+    }
     if (this.loading) {
       return;
     }
@@ -84,7 +87,7 @@ export class InboxVM {
       this.loadedOnce = true;
       this.lastRefreshAt = Date.now();
       Log.info(TAG, `inbox ${agents.length}`);
-      this.enrichRunStatuses(agents.slice(0, 24));
+      this.enrichRunStatuses(agents.slice(0, 6));
       Notify.setRunningBadge(this.runningCount()).catch(() => {
       });
       this.pushWidget();

@@ -504,6 +504,7 @@ struct NewAgentPage {
         height: this.sheetKind === 'branch' || this.sheetKind === 'model' ? SheetSize.FIT_CONTENT :
           SheetSize.LARGE,
         dragBar: true,
+        showClose: this.sheetKind !== 'repo',
         backgroundColor: $r('app.color.overlay')
       })
     }
@@ -557,23 +558,42 @@ struct NewAgentPage {
   @Builder
   repoSheet() {
     Column({ space: 10 }) {
-      Row() {
+      Row({ space: 8 }) {
         Text('仓库')
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .layoutWeight(1)
+          .constraintSize({ minWidth: 0 })
         HuTextButton({
-          label: '刷新',
+          label: this.loadingMeta ? '…' : '刷新',
           color: $r('app.color.text_primary'),
+          compact: true,
+          isEnabled: !this.loadingMeta,
           onTap: async () => {
             this.loadingMeta = true;
             await this.vm.loadMeta(true);
             this.syncFromVm();
           }
         })
+        HuTextButton({
+          label: '关闭',
+          color: $r('app.color.text_secondary'),
+          compact: true,
+          onTap: () => {
+            this.closeSheet();
+          }
+        })
       }
       .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      if (this.errorMsg.length > 0) {
+        Text(this.errorMsg)
+          .fontSize(Tokens.typeCaption)
+          .fontColor($r('app.color.err'))
+          .width('100%')
+      }
 
       Row({ space: 4 }) {
         this.modeSeg('仓库', 'repo')

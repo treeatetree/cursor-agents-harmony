@@ -100,6 +100,25 @@ export default function webAlignTest() {
       expect(buckets[0].items.length).assertEqual(2);
     });
 
+    it('repo groups order by latest conversation', 0, () => {
+      const items = [
+        agent({
+          id: 'old',
+          repo: 'https://github.com/acme/old',
+          updatedAt: '2026-08-10T12:00:00.000Z'
+        }),
+        agent({
+          id: 'fresh',
+          repo: 'https://github.com/acme/new',
+          updatedAt: '2026-08-16T12:00:00.000Z'
+        })
+      ];
+      const buckets = groupAgents(items, 'repo');
+      expect(buckets.length).assertEqual(2);
+      expect(buckets[0].key).assertEqual('acme/new');
+      expect(buckets[1].key).assertEqual('acme/old');
+    });
+
     it('none grouping keeps a single unlabeled bucket', 0, () => {
       const items = [
         agent({ id: 'a', latestRunStatus: 'ERROR' }),
