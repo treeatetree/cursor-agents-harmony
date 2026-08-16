@@ -24,28 +24,35 @@
   --t-callout: 14px;
   --t-caption: 13px;
   --t-micro: 12px;
+  --lh-title: 28px;
   --lh-body: 20px;
-  --lh-prose: 24px;
+  --lh-prose: 26px;
+  --lh-list: 24px;
+  --lh-caption: 18px;
+  --lh-micro: 16px;
+  --track-group: 0.03em;
   --card-pad: 12px;
   --sec: 12px;
   --w-reg: 400;
   --w-med: 500;
+  --font-ui: Geist, -apple-system, BlinkMacSystemFont, "HarmonyOS Sans", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 [data-theme="app"][data-mode="dark"] {
-  --bg: #0B0B0C;
-  --bg1: #161618;
-  --bg2: #1E1E22;
-  --ink: #FAFAFA;
-  --ink2: #C4C4CC;
-  --ink3: #9A9AA3;
-  --line: #232328;
-  --accent: #E07A3D;
-  --accent-soft: #3A2418;
-  --accent-on: #12100E;
+  --bg: #191919;
+  --bg1: #202020;
+  --bg2: #2A2A2A;
+  --ink: #E6E6E6;
+  --ink2: #9B9B9B;
+  --ink3: #6F6F6F;
+  --line: #2F2F2F;
+  --accent: #E6E6E6;
+  --accent-soft: #2F2F2F;
+  --accent-on: #191919;
   --err: #E06B63;
-  --run: #E07A3D;
-  --field: #1E1E22;
+  --run: #E6E6E6;
+  --field: #202020;
 }
 
 [data-type="large"] {
@@ -55,8 +62,12 @@
   --t-callout: 16px;
   --t-caption: 15px;
   --t-micro: 13px;
+  --lh-title: 30px;
   --lh-body: 22px;
-  --lh-prose: 26px;
+  --lh-prose: 28px;
+  --lh-list: 26px;
+  --lh-caption: 20px;
+  --lh-micro: 18px;
 }
 
 [data-density="compact"] {
@@ -93,8 +104,8 @@
 }
 
 [data-sys="be"][data-mode="dark"] {
-  --accent: #FAFAFA;
-  --accent-soft: #232328;
-  --accent-on: #0B0B0C;
-  --run: #FAFAFA;
+  --accent: #E6E6E6;
+  --accent-soft: #2F2F2F;
+  --accent-on: #191919;
+  --run: #E6E6E6;
 }

@@ -1,7 +1,7 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
 import { hasPreviewMap, requirePreviewMap } from '../utils/ImagePicker';
-import { motionMs, prefersReducedMotion, shakeSeq } from '../utils/Motion';
+import { chromeTransition, motionMs, prefersReducedMotion, shakeSeq } from '../utils/Motion';
 import { HuChip } from './HuChip';
 import { HuTextButton } from './HuTextButton';
 
@@ -26,7 +26,9 @@ export struct PromptShell {
   @Prop toolsLabel: string = '能力';
   @Prop moreLabel: string = '更多';
   @Prop followUpMode: string = 'agent';
+  @Prop failedFollow: boolean = false;
   @Prop queued: string = '';
+  @Prop queueNote: string = '';
   @Prop status: string = '';
   @Prop bottomPad: number = 12;
   @State private focused: boolean = false;
@@ -39,6 +41,8 @@ export struct PromptShell {
   onCancel: () => void = () => {
   };
   onClearQueue: () => void = () => {
+  };
+  onEditQueue: () => void = () => {
   };
   onRepo: () => void = () => {
   };
@@ -56,7 +60,11 @@ export struct PromptShell {
   };
   onModeChange: (mode: string) => void = () => {
   };
+  onRetryFollow: () => void = () => {
+  };
   onText: (s: string) => void = () => {
+  };
+  onFocusChange: (on: boolean) => void = (_on: boolean) => {
   };
 
   private canSend(): boolean {
@@ -116,6 +124,7 @@ export struct PromptShell {
   private focusComposer(): void {
     this.focused = true;
     this.wantFocus = true;
+    this.onFocusChange(true);
     setTimeout(() => {
       focusControl.requestFocus('promptArea');
     }, 30);
@@ -125,12 +134,29 @@ export struct PromptShell {
     Column({ space: Tokens.space2 }) {
       if (this.follow && this.queued.length > 0) {
         Row({ space: Tokens.space2 }) {
-          Text(`已排队 · ${this.queued}`)
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
+          Column({ space: 2 }) {
+            Text(`结束后发送 · ${this.queued}`)
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.text_secondary'))
+              .maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+            if (this.queueNote.length > 0) {
+              Text(this.queueNote)
+                .fontSize(Tokens.typeMicro)
+                .fontColor($r('app.color.warn'))
+                .maxLines(1)
+                .width('100%')
+            }
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          HuTextButton({
+            label: '改',
+            onTap: () => {
+              this.onEditQueue();
+            }
+          })
           HuTextButton({
             label: '取消',
             onTap: () => {
@@ -140,7 +166,11 @@ export struct PromptShell {
         }
         .width('100%')
         .constraintSize({ minHeight: Tokens.touchMin })
+        .padding({ left: 10, right: 4, top: 4, bottom: 4 })
+        .backgroundColor($r('app.color.bg2'))
+        .borderRadius(Tokens.radiusMd)
         .alignItems(VerticalAlign.Center)
+        .transition(chromeTransition())
       }
 
       Column({ space: 4 }) {
@@ -209,9 +239,11 @@ export struct PromptShell {
             .onFocus(() => {
               this.focused = true;
               this.wantFocus = false;
+              this.onFocusChange(true);
             })
             .onBlur(() => {
               this.focused = false;
+              this.onFocusChange(false);
             })
 
           Row({ space: 4 }) {
@@ -367,6 +399,14 @@ export struct PromptShell {
         })
       } else {
         HuChip({
+          label: this.modelLabel.length > 0 ? this.modelLabel : '沿用',
+          on: this.modelLabel.length > 0 && this.modelLabel !== '沿用' && this.modelLabel !== '自动',
+          maxVp: 120,
+          onTap: () => {
+            this.onModel();
+          }
+        })
+        HuChip({
           label: this.followUpMode === 'plan' ? '规划' : '代理',
           on: this.followUpMode === 'plan',
           onTap: () => {
@@ -381,6 +421,15 @@ export struct PromptShell {
             this.onTools();
           }
         })
+        if (this.failedFollow) {
+          HuChip({
+            label: '重发',
+            on: true,
+            onTap: () => {
+              this.onRetryFollow();
+            }
+          })
+        }
       }
     }
     .constraintSize({ minHeight: Tokens.touchMin })

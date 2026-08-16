@@ -19,6 +19,53 @@ export function shortModelName(name: string): string {
   return name.replace(/^Cursor\s+/i, '');
 }
 
+/** What we actually POST as `model` — for logs and the user-bubble caption. */
+export function formatModelSent(model: Record<string, Object> | undefined): string {
+  if (!model) {
+    return '自动';
+  }
+  const id = `${model['id'] ?? ''}`;
+  if (id.length === 0) {
+    return '自动';
+  }
+  const bits: string[] = [shortModelName(id)];
+  const raw = model['params'];
+  if (raw) {
+    const rows = raw as Object[];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as Record<string, Object>;
+      const pid = `${row['id'] ?? ''}`;
+      const val = `${row['value'] ?? ''}`;
+      if (pid.length === 0) {
+        continue;
+      }
+      bits.push(`${paramTitle(pid)} ${paramValueLabel(pid, val)}`);
+    }
+  }
+  return bits.join(' · ');
+}
+
+export function modelSentJson(model: Record<string, Object> | undefined): string {
+  if (!model) {
+    return '{}';
+  }
+  const id = `${model['id'] ?? ''}`;
+  let line = `{"id":"${id}"`;
+  const raw = model['params'];
+  if (raw) {
+    const rows = raw as Object[];
+    const parts: string[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as Record<string, Object>;
+      parts.push(`{"id":"${row['id'] ?? ''}","value":"${row['value'] ?? ''}"}`);
+    }
+    if (parts.length > 0) {
+      line = `${line},"params":[${parts.join(',')}]`;
+    }
+  }
+  return `${line}}`;
+}
+
 export function isAutoModel(m: ModelInfo): boolean {
   const id = (m.id ?? '').trim().toLowerCase();
   const name = (m.displayName ?? m.id ?? '').trim().toLowerCase();

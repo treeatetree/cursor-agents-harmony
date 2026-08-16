@@ -7,6 +7,7 @@ import { Log } from '../utils/Log';
 
 const TAG = 'AgentCache';
 const LRU_MAX = 20;
+const DISK_SOFT_MAX = 80;
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 interface InboxFile {
@@ -35,6 +36,18 @@ export interface CachedAgentPayload {
   messages?: ConversationMessage[];
   timeline?: TimelineItem[];
   timelineSummary?: string;
+  eventIdWatermark?: string;
+  timelineRunId?: string;
+}
+
+interface SummariesFile {
+  schema: number;
+  byId: Record<string, string>;
+}
+
+interface QueueImagesFile {
+  schema: number;
+  images: object[];
 }
 
 interface CacheIndex {
@@ -50,6 +63,8 @@ export class AgentCache {
   private modelsFile: ModelsFile | undefined = undefined;
   private agentMemIds: string[] = [];
   private agentMemVals: CachedAgentPayload[] = [];
+  private summaries: Record<string, string> = {};
+  private summariesLoaded: boolean = false;
 
   static getInstance(): AgentCache {
     if (!AgentCache.instance) {
@@ -86,7 +101,12 @@ export class AgentCache {
     return data ? data.fetchedAt : 0;
   }
 
-  saveInbox(agents: AgentSummary[]): void {
+  /** kind=full replaces the unfiltered list. kind=merge updates by id and never shrinks to a filter remnant. */
+  saveInbox(agents: AgentSummary[], kind: string = 'full'): void {
+    if (kind === 'merge') {
+      this.mergeInbox(agents);
+      return;
+    }
     const payload: InboxFile = {
       schema: 1,
       fetchedAt: Date.now(),
@@ -94,6 +114,60 @@ export class AgentCache {
     };
     this.inboxFile = payload;
     this.writeJson('inbox.json', payload);
+  }
+
+  removeInboxId(agentId: string): void {
+    const cur = this.loadInbox();
+    const next: AgentSummary[] = [];
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i].id !== agentId) {
+        next.push(cur[i]);
+      }
+    }
+    if (next.length === cur.length) {
+      return;
+    }
+    const fetchedAt = this.inboxFetchedAt();
+    this.inboxFile = {
+      schema: 1,
+      fetchedAt: fetchedAt > 0 ? fetchedAt : Date.now(),
+      agents: next
+    };
+    this.writeJson('inbox.json', this.inboxFile);
+  }
+
+  private mergeInbox(agents: AgentSummary[]): void {
+    const cur = this.loadInbox();
+    const byId: Record<string, AgentSummary> = {};
+    const order: string[] = [];
+    for (let i = 0; i < cur.length; i++) {
+      byId[cur[i].id] = cur[i];
+      order.push(cur[i].id);
+    }
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      const prev = byId[a.id];
+      if (prev) {
+        byId[a.id] = a;
+      } else {
+        byId[a.id] = a;
+        order.unshift(a.id);
+      }
+    }
+    const next: AgentSummary[] = [];
+    for (let i = 0; i < order.length; i++) {
+      const row = byId[order[i]];
+      if (row) {
+        next.push(row);
+      }
+    }
+    const fetchedAt = this.inboxFetchedAt();
+    this.inboxFile = {
+      schema: 1,
+      fetchedAt: fetchedAt > 0 ? fetchedAt : Date.now(),
+      agents: next.slice(0, 100)
+    };
+    this.writeJson('inbox.json', this.inboxFile);
   }
 
   loadRepos(): RepoInfo[] {
@@ -160,9 +234,27 @@ export class AgentCache {
 
   /** Memory-only preview — never hits disk (Inbox cards). */
   peekMemSummary(agentId: string): string {
+    return this.peekSummary(agentId);
+  }
+
+  peekSummary(agentId: string): string {
+    if (!agentId || agentId.length === 0) {
+      return '';
+    }
     const hit = this.memGet(agentId);
     if (hit && hit.timelineSummary && hit.timelineSummary.length > 0) {
       return hit.timelineSummary;
+    }
+    this.ensureSummaries();
+    const indexed = this.summaries[agentId] ?? '';
+    if (indexed.length > 0) {
+      return indexed;
+    }
+    const disk = this.readJson<CachedAgentPayload>(this.agentFileName(agentId));
+    if (disk && disk.timelineSummary && disk.timelineSummary.length > 0) {
+      this.summaries[agentId] = disk.timelineSummary;
+      this.writeSummaries();
+      return disk.timelineSummary;
     }
     return '';
   }
@@ -187,18 +279,31 @@ export class AgentCache {
     } else if (prev?.runs) {
       payload.runs = prev.runs;
     }
-    if (messages) {
+    if (messages && messages.length > 0) {
       payload.messages = messages;
-    } else if (prev?.messages) {
+    } else if (prev?.messages && prev.messages.length > 0) {
       payload.messages = prev.messages;
+    } else if (messages) {
+      payload.messages = messages;
     }
     if (prev?.timeline && prev.timeline.length > 0) {
       payload.timeline = prev.timeline;
+    }
+    if (prev?.eventIdWatermark && prev.eventIdWatermark.length > 0) {
+      payload.eventIdWatermark = prev.eventIdWatermark;
+    }
+    if (prev?.timelineRunId && prev.timelineRunId.length > 0) {
+      payload.timelineRunId = prev.timelineRunId;
     }
     if (timelineSummary !== undefined) {
       payload.timelineSummary = timelineSummary;
     } else if (prev?.timelineSummary !== undefined) {
       payload.timelineSummary = prev.timelineSummary;
+    }
+    if (payload.timelineSummary && payload.timelineSummary.length > 0) {
+      this.ensureSummaries();
+      this.summaries[agentId] = payload.timelineSummary;
+      this.writeSummaries();
     }
     this.memPut(agentId, payload);
     this.writeJson(this.agentFileName(agentId), payload);
@@ -227,9 +332,67 @@ export class AgentCache {
     if (prev?.timelineSummary !== undefined) {
       payload.timelineSummary = prev.timelineSummary;
     }
+    if (prev?.eventIdWatermark && prev.eventIdWatermark.length > 0) {
+      payload.eventIdWatermark = prev.eventIdWatermark;
+    }
+    if (prev?.timelineRunId && prev.timelineRunId.length > 0) {
+      payload.timelineRunId = prev.timelineRunId;
+    }
     this.memPut(agentId, payload);
     this.writeJson(this.agentFileName(agentId), payload);
     this.touchLru(agentId);
+  }
+
+  saveTimelineMeta(agentId: string, summary: string, eventId: string, runId: string): void {
+    if (!agentId || agentId.length === 0) {
+      return;
+    }
+    const prev = this.loadAgent(agentId);
+    if (!prev) {
+      return;
+    }
+    if (summary.length > 0) {
+      prev.timelineSummary = summary;
+      this.ensureSummaries();
+      this.summaries[agentId] = summary;
+      this.writeSummaries();
+    }
+    if (eventId.length > 0) {
+      prev.eventIdWatermark = eventId;
+    }
+    if (runId.length > 0) {
+      prev.timelineRunId = runId;
+    }
+    this.memPut(agentId, prev);
+    this.writeJson(this.agentFileName(agentId), prev);
+  }
+
+  saveQueueImages(agentId: string, images: object[]): void {
+    if (!agentId || agentId.length === 0) {
+      return;
+    }
+    const folder = this.queueDirName(agentId);
+    this.ensureDir(this.pathOf(folder));
+    const payload: QueueImagesFile = { schema: 1, images: images };
+    this.writeJson(`${folder}/images.json`, payload);
+  }
+
+  loadQueueImages(agentId: string): object[] {
+    if (!agentId || agentId.length === 0) {
+      return [];
+    }
+    const data = this.readJson<QueueImagesFile>(`${this.queueDirName(agentId)}/images.json`);
+    if (!data || !data.images) {
+      return [];
+    }
+    return data.images;
+  }
+
+  clearQueueImages(agentId: string): void {
+    if (!agentId || agentId.length === 0) {
+      return;
+    }
+    this.safeUnlink(`${this.queueDirName(agentId)}/images.json`);
   }
 
   clearAll(): void {
@@ -247,7 +410,11 @@ export class AgentCache {
       this.safeUnlink(this.agentFileName(index.order[i]));
     }
     this.safeUnlink('index.json');
+    this.safeUnlink('summaries.json');
+    this.summaries = {};
+    this.summariesLoaded = false;
     this.sweepAgentFiles();
+    this.sweepQueueDirs();
   }
 
   private readInboxFile(): InboxFile | undefined {
@@ -321,14 +488,86 @@ export class AgentCache {
         next.push(index.order[i]);
       }
     }
-    // Evict beyond LRU_MAX.
-    while (next.length > LRU_MAX) {
-      const evicted = next.pop();
-      if (evicted && evicted.length > 0) {
-        this.safeUnlink(this.agentFileName(evicted));
+    this.writeJson('index.json', { schema: 1, order: next } as CacheIndex);
+    this.pruneDiskSoft(next);
+  }
+
+  private pruneDiskSoft(order: string[]): void {
+    if (order.length <= DISK_SOFT_MAX) {
+      return;
+    }
+    const drop: string[] = [];
+    for (let i = order.length - 1; i >= 0 && drop.length < order.length - DISK_SOFT_MAX; i--) {
+      const id = order[i];
+      const data = this.readJson<CachedAgentPayload>(this.agentFileName(id));
+      const hasTimeline = data?.timeline && data.timeline.length > 0;
+      if (!hasTimeline) {
+        drop.push(id);
       }
     }
-    this.writeJson('index.json', { schema: 1, order: next } as CacheIndex);
+    if (drop.length === 0) {
+      return;
+    }
+    const keep: string[] = [];
+    for (let i = 0; i < order.length; i++) {
+      let gone = false;
+      for (let j = 0; j < drop.length; j++) {
+        if (order[i] === drop[j]) {
+          gone = true;
+          break;
+        }
+      }
+      if (gone) {
+        this.safeUnlink(this.agentFileName(order[i]));
+      } else {
+        keep.push(order[i]);
+      }
+    }
+    this.writeJson('index.json', { schema: 1, order: keep } as CacheIndex);
+  }
+
+  private queueDirName(agentId: string): string {
+    const safe = agentId.replace(/\//g, '_').replace(/\\/g, '_');
+    return `queue_${safe}`;
+  }
+
+  private ensureDir(path: string): void {
+    try {
+      fs.mkdirSync(path);
+    } catch (_e) {
+    }
+  }
+
+  private ensureSummaries(): void {
+    if (this.summariesLoaded) {
+      return;
+    }
+    const data = this.readJson<SummariesFile>('summaries.json');
+    if (data && data.schema === 1 && data.byId) {
+      this.summaries = data.byId;
+    }
+    this.summariesLoaded = true;
+  }
+
+  private writeSummaries(): void {
+    this.summariesLoaded = true;
+    this.writeJson('summaries.json', { schema: 1, byId: this.summaries } as SummariesFile);
+  }
+
+  private sweepQueueDirs(): void {
+    if (!this.dir || this.dir.length === 0) {
+      return;
+    }
+    try {
+      const names = fs.listFileSync(this.dir);
+      for (let i = 0; i < names.length; i++) {
+        const n = names[i];
+        if (n.indexOf('queue_') === 0) {
+          this.safeUnlink(`${n}/images.json`);
+        }
+      }
+    } catch (_e) {
+    }
   }
 
   private readIndex(): CacheIndex {

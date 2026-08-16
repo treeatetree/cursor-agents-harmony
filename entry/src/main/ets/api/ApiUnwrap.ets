@@ -8,11 +8,45 @@ import {
 export function unwrapAgentsList(raw: object): AgentsListResponse {
   const r = raw as AgentsListResponse;
   const items: AgentSummary[] = r.items ?? r.agents ?? [];
-  const out: AgentsListResponse = { items: items };
+  const normalized: AgentSummary[] = [];
+  for (let i = 0; i < items.length; i++) {
+    normalized.push(normalizeAgentSummary(items[i]));
+  }
+  const out: AgentsListResponse = { items: normalized };
   if (r.nextCursor && r.nextCursor.length > 0) {
     out.nextCursor = r.nextCursor;
   }
   return out;
+}
+
+export function normalizeAgentSummary(item: AgentSummary): AgentSummary {
+  const raw = item as object as Record<string, Object>;
+  const created = `${item.createdAt ?? raw['created_at'] ?? ''}`;
+  let updated = `${item.updatedAt ?? raw['updated_at'] ?? ''}`;
+  if (updated.length === 0) {
+    updated = created;
+  }
+  item.createdAt = created;
+  item.updatedAt = updated;
+  const userAt = `${item.lastUserAt ?? raw['lastUserAt'] ?? raw['last_user_at'] ?? ''}`;
+  if (userAt.length > 0 && userAt !== 'undefined') {
+    item.lastUserAt = userAt;
+  }
+  const nested = raw['latestRun'] as Record<string, Object> | undefined;
+  const runId = `${item.latestRunId ?? raw['latest_run_id'] ?? nested?.['id'] ?? ''}`;
+  const runStatus =
+    `${item.latestRunStatus ?? raw['latest_run_status'] ?? nested?.['status'] ?? ''}`;
+  const result = `${item.latestResult ?? raw['latest_result'] ?? nested?.['result'] ?? ''}`;
+  if (runId.length > 0) {
+    item.latestRunId = runId;
+  }
+  if (runStatus.length > 0) {
+    item.latestRunStatus = runStatus;
+  }
+  if (result.length > 0) {
+    item.latestResult = result;
+  }
+  return item;
 }
 
 export function unwrapAgentDetail(raw: object): AgentDetail {

@@ -63,6 +63,8 @@ export interface AgentSummary {
   url: string;
   createdAt: string;
   updatedAt: string;
+  /** Last time the user sent a prompt (create or follow-up). Inbox sort key. */
+  lastUserAt?: string;
   latestRunId?: string;
   /** Enriched client-side from GET run — not always present on list payload. */
   latestRunStatus?: RunStatus | string;

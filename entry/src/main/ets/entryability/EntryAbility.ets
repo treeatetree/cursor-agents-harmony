@@ -14,6 +14,9 @@ import { InboxVM } from '../viewmodels/InboxVM';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Notify } from '../utils/Notify';
 import { UnreadStore } from '../store/UnreadStore';
+import { AppState } from '../utils/AppState';
+import { agentIdFromLaunch, noticeTextFromLaunch, showUnreadFromLaunch } from '../utils/WantParse';
+import { applyAppFont, registerAppFonts } from '../theme/AppFonts';
 
 const DOMAIN = 0x435552;
 const TAG = 'CursorMobile';
@@ -74,6 +77,17 @@ export default class EntryAbility extends UIAbility {
         hilog.warn(DOMAIN, TAG, 'avoidAreaChange listen failed');
       }
       try {
+        mainWindow.on('keyboardHeightChange', (h: number) => {
+          const ui = mainWindow.getUIContext();
+          const kbVp = ui.px2vp(h);
+          const bp = BreakpointStore.getInstance();
+          bp.updateInsets(bp.topInsetVp, bp.bottomInsetVp, kbVp);
+          hilog.info(DOMAIN, TAG, 'keyboardHeight=%{public}s', `${Math.round(kbVp)}`);
+        });
+      } catch (_e) {
+        hilog.warn(DOMAIN, TAG, 'keyboardHeightChange listen failed');
+      }
+      try {
         // RESIZE compresses the page so a bottom composer sits on the IME.
         // Do not also pad by TYPE_KEYBOARD height — that double-counts on cover.
         mainWindow.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
@@ -108,6 +122,15 @@ export default class EntryAbility extends UIAbility {
     windowStage.loadContent('pages/Index', (error) => {
       if (error.code) {
         hilog.error(DOMAIN, TAG, 'Failed to load main page: %{public}s', JSON.stringify(error));
+        return;
+      }
+      try {
+        const win = windowStage.getMainWindowSync();
+        registerAppFonts(win.getUIContext());
+        applyAppFont(this.context.getApplicationContext());
+      } catch (_e) {
+        registerAppFonts();
+        applyAppFont(this.context.getApplicationContext());
       }
     });
   }
@@ -199,18 +222,27 @@ export default class EntryAbility extends UIAbility {
 
   private consumeWant(want: Want): void {
     try {
-      const raw = want.parameters;
-      if (raw && raw['agentId']) {
-        AppStorage.setOrCreate('pendingAgentId', `${raw['agentId']}`);
+      const raw = want.parameters as Record<string, Object> | undefined;
+      if (showUnreadFromLaunch(raw) || (want.uri ?? '').indexOf('cursoragent://inbox') === 0) {
+        AppStorage.setOrCreate('pendingUnreadSheet', '1');
+        AppStorage.setOrCreate('pendingUnreadRev', Date.now());
+        return;
       }
-      if (raw && raw['noticeText']) {
-        AppStorage.setOrCreate('pendingNotice', `${raw['noticeText']}`);
+      const id = agentIdFromLaunch(raw, want.uri ?? '');
+      if (id.length > 0) {
+        AppStorage.setOrCreate('pendingAgentId', id);
+        AppStorage.setOrCreate('pendingAgentRev', Date.now());
+      }
+      const notice = noticeTextFromLaunch(raw);
+      if (notice.length > 0) {
+        AppStorage.setOrCreate('pendingNotice', notice);
       }
     } catch (_e) {
     }
   }
 
   onForeground(): void {
+    AppState.foreground = true;
     hilog.info(DOMAIN, TAG, 'onForeground');
     NetworkMonitor.getInstance().start();
     if (this.mainWindow) {
@@ -223,12 +255,14 @@ export default class EntryAbility extends UIAbility {
       });
     }
     if (ApiKeyStore.getInstance().isUnlocked()) {
+      InboxVM.getInstance().startWatch();
       InboxVM.getInstance().refresh(true).catch(() => {
       });
     }
   }
 
   onBackground(): void {
+    AppState.foreground = false;
     hilog.info(DOMAIN, TAG, 'onBackground');
     // Keep SSE alive when possible so Last-Event-ID resume is less lossy.
     // OS may still suspend the process; onForeground reconnects via resumeIfNeeded.

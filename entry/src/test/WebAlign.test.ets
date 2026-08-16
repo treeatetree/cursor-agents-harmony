@@ -1,6 +1,8 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { gitCompareUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
-import { applyInboxQuery, groupAgents } from '../main/ets/utils/InboxGrouping';
+import { applyInboxQuery, groupAgents, mergeInboxLists, recencyMs } from '../main/ets/utils/InboxGrouping';
+import { unwrapAgentsList } from '../main/ets/api/ApiUnwrap';
+import { agentIdFromLaunch, noticeTextFromLaunch } from '../main/ets/utils/WantParse';
 import { clipNotice, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
 import { AgentSummary } from '../main/ets/models/Api';
 import { fileNameOf, isImagePath, isVideoPath } from '../main/ets/utils/DisplayFmt';
@@ -8,10 +10,13 @@ import { sniffMime } from '../main/ets/utils/ImagePicker';
 import { isSubagentTool, subagentDetail } from '../main/ets/utils/StreamText';
 import { unwrapUsageRuns } from '../main/ets/api/ApiUnwrap';
 import { visibleTimeline } from '../main/ets/utils/TimelineView';
+import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, usedToolLine } from '../main/ets/utils/TimelineCopy';
+import { convFingerprint, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
 import { TimelineItem } from '../main/ets/models/Timeline';
+import { ConversationMessage } from '../main/ets/models/Api';
 
 function agent(partial: Record<string, string>): AgentSummary {
-  return {
+  const row: AgentSummary = {
     id: partial['id'] ?? 'bc-1',
     name: partial['name'] ?? 'Task',
     status: (partial['status'] ?? 'ACTIVE') as 'ACTIVE' | 'ARCHIVED',
@@ -21,6 +26,10 @@ function agent(partial: Record<string, string>): AgentSummary {
     latestRunStatus: partial['latestRunStatus'],
     repos: partial['repo'] ? [{ url: partial['repo'] }] : undefined
   };
+  if (partial['lastUserAt'] && partial['lastUserAt'].length > 0) {
+    row.lastUserAt = partial['lastUserAt'];
+  }
+  return row;
 }
 
 export default function webAlignTest() {
@@ -70,14 +79,46 @@ export default function webAlignTest() {
       expect(applyInboxQuery(items, 'web', 'all', 'name')[0].id).assertEqual('b');
     });
 
-    it('sorts by updatedAt newest first', 0, () => {
+    it('sorts by last user message newest first', 0, () => {
       const items = [
-        agent({ id: 'old', latestRunStatus: 'FINISHED', updatedAt: '2026-08-14T12:00:00.000Z' }),
-        agent({ id: 'run', latestRunStatus: 'CREATING', updatedAt: '2026-08-14T11:00:00.000Z' }),
-        agent({ id: 'fresh', latestRunStatus: 'FINISHED', updatedAt: '2026-08-16T09:00:00.000Z' })
+        agent({ id: 'old', latestRunStatus: 'FINISHED', lastUserAt: '2026-08-14T12:00:00.000Z' }),
+        agent({ id: 'run', latestRunStatus: 'CREATING', lastUserAt: '2026-08-14T11:00:00.000Z' }),
+        agent({ id: 'fresh', latestRunStatus: 'FINISHED', lastUserAt: '2026-08-16T09:00:00.000Z' })
       ];
       expect(applyInboxQuery(items, '', 'all', 'updated')[0].id).assertEqual('fresh');
       expect(applyInboxQuery(items, '', 'all', 'updated')[1].id).assertEqual('old');
+    });
+
+    it('recency uses lastUserAt, not a newer run updatedAt', 0, () => {
+      const a = agent({
+        id: 'mine',
+        createdAt: '2026-08-10T12:00:00.000Z',
+        updatedAt: '2026-08-16T18:00:00.000Z',
+        lastUserAt: '2026-08-16T09:00:00.000Z'
+      });
+      const b = agent({
+        id: 'theirs',
+        createdAt: '2026-08-01T12:00:00.000Z',
+        updatedAt: '2026-08-16T20:00:00.000Z',
+        lastUserAt: '2026-08-15T12:00:00.000Z'
+      });
+      expect(recencyMs(a) > recencyMs(b)).assertTrue();
+      expect(applyInboxQuery([b, a], '', 'all', 'updated')[0].id).assertEqual('mine');
+    });
+
+    it('recency falls back to createdAt when lastUserAt is missing', 0, () => {
+      const a = agent({
+        id: 'newer-create',
+        createdAt: '2026-08-16T12:00:00.000Z',
+        updatedAt: '2026-08-10T12:00:00.000Z'
+      });
+      const b = agent({
+        id: 'old-create',
+        createdAt: '2026-08-01T12:00:00.000Z',
+        updatedAt: '2026-08-16T20:00:00.000Z'
+      });
+      expect(recencyMs(a) > recencyMs(b)).assertTrue();
+      expect(applyInboxQuery([b, a], '', 'all', 'updated')[0].id).assertEqual('newer-create');
     });
 
     it('keeps recency inside repo groups', 0, () => {
@@ -85,12 +126,12 @@ export default function webAlignTest() {
         agent({
           id: 'older',
           repo: 'https://github.com/acme/app',
-          updatedAt: '2026-08-10T12:00:00.000Z'
+          lastUserAt: '2026-08-10T12:00:00.000Z'
         }),
         agent({
           id: 'newer',
           repo: 'https://github.com/acme/app',
-          updatedAt: '2026-08-16T12:00:00.000Z'
+          lastUserAt: '2026-08-16T12:00:00.000Z'
         })
       ], '', 'all', 'updated');
       const buckets = groupAgents(items, 'repo');
@@ -127,12 +168,12 @@ export default function webAlignTest() {
         agent({
           id: 'old',
           repo: 'https://github.com/acme/old',
-          updatedAt: '2026-08-10T12:00:00.000Z'
+          lastUserAt: '2026-08-10T12:00:00.000Z'
         }),
         agent({
           id: 'fresh',
           repo: 'https://github.com/acme/new',
-          updatedAt: '2026-08-16T12:00:00.000Z'
+          lastUserAt: '2026-08-16T12:00:00.000Z'
         })
       ];
       const buckets = groupAgents(items, 'repo');
@@ -141,6 +182,120 @@ export default function webAlignTest() {
       expect(buckets[1].key).assertEqual('acme/old');
     });
 
+    it('time groups stay today before older even if older is running', 0, () => {
+      const items = applyInboxQuery([
+        agent({
+          id: 'old-run',
+          latestRunStatus: 'RUNNING',
+          lastUserAt: '2026-08-10T12:00:00.000Z'
+        }),
+        agent({
+          id: 'today',
+          latestRunStatus: 'FINISHED',
+          lastUserAt: '2026-08-16T12:00:00.000Z'
+        })
+      ], '', 'all', 'updated');
+      const buckets = groupAgents(items, 'time');
+      expect(buckets[0].key).assertEqual('today');
+      expect(buckets[0].items[0].id).assertEqual('today');
+    });
+
+    it('merge keeps local-only new cards and newer local updatedAt', 0, () => {
+      const remote = [
+        agent({ id: 'a', updatedAt: '2026-08-16T10:00:00.000Z' })
+      ];
+      const local = [
+        agent({ id: 'a', updatedAt: '2026-08-16T12:00:00.000Z' }),
+        agent({
+          id: 'local-1',
+          name: 'Seed',
+          updatedAt: '2026-08-16T12:01:00.000Z',
+          createdAt: '2026-08-16T12:01:00.000Z'
+        })
+      ];
+      const now = Date.parse('2026-08-16T12:01:30.000Z');
+      const out = mergeInboxLists(remote, local, ['local-1'], now);
+      expect(out.length).assertEqual(2);
+      expect(out[0].id).assertEqual('a');
+      expect(out[0].updatedAt).assertEqual('2026-08-16T12:00:00.000Z');
+      expect(out[1].id).assertEqual('local-1');
+    });
+
+    it('keeps local run id when list omits it, not status across runs', 0, () => {
+      const remote = [
+        agent({ id: 'a', updatedAt: '2026-08-16T12:00:00.000Z' })
+      ];
+      const local = [
+        agent({
+          id: 'a',
+          latestRunStatus: 'RUNNING',
+          updatedAt: '2026-08-16T12:00:00.000Z'
+        })
+      ];
+      local[0].latestRunId = 'run-1';
+      const out = mergeInboxLists(remote, local, [], Date.parse('2026-08-16T12:00:10.000Z'));
+      expect(out[0].latestRunId).assertEqual('run-1');
+      expect(out[0].latestRunStatus).assertEqual('RUNNING');
+    });
+
+    it('merge keeps the newer lastUserAt', 0, () => {
+      const remote = [
+        agent({ id: 'a', lastUserAt: '2026-08-16T10:00:00.000Z' })
+      ];
+      const local = [
+        agent({ id: 'a', lastUserAt: '2026-08-16T12:00:00.000Z' })
+      ];
+      const out = mergeInboxLists(remote, local, [], Date.parse('2026-08-16T12:00:10.000Z'));
+      expect(out[0].lastUserAt).assertEqual('2026-08-16T12:00:00.000Z');
+    });
+  });
+
+  describe('WantParse', () => {
+    it('reads agentId from parameters or uri', 0, () => {
+      expect(agentIdFromLaunch({ agentId: 'bc-9' }, '')).assertEqual('bc-9');
+      expect(agentIdFromLaunch(undefined, 'cursoragent://open/bc-8')).assertEqual('bc-8');
+      expect(noticeTextFromLaunch({ noticeText: '已完成' })).assertEqual('已完成');
+    });
+  });
+
+  describe('ApiUnwrap list', () => {
+    it('fills updatedAt from createdAt when missing', 0, () => {
+      const list = unwrapAgentsList({
+        items: [{
+          id: 'bc-1',
+          name: 'Task',
+          status: 'ACTIVE',
+          url: '',
+          createdAt: '2026-08-16T12:00:00.000Z',
+          updatedAt: ''
+        }]
+      });
+      const first = list.items ? list.items[0] : undefined;
+      expect(first !== undefined).assertTrue();
+      expect(first?.updatedAt).assertEqual('2026-08-16T12:00:00.000Z');
+    });
+
+    it('reads snake_case and nested latest run', 0, () => {
+      const list = unwrapAgentsList({
+        items: [{
+          id: 'bc-2',
+          name: 'Task',
+          status: 'ACTIVE',
+          url: '',
+          created_at: '2026-08-16T12:00:00.000Z',
+          latest_run_id: 'run-9',
+          latest_run_status: 'FINISHED',
+          latest_result: 'ok'
+        }]
+      });
+      const first = list.items ? list.items[0] : undefined;
+      expect(first?.latestRunId).assertEqual('run-9');
+      expect(first?.latestRunStatus).assertEqual('FINISHED');
+      expect(first?.latestResult).assertEqual('ok');
+    });
+  });
+
+  describe('InboxGroupingRest', () => {
     it('none grouping keeps a single unlabeled bucket', 0, () => {
       const items = [
         agent({ id: 'a', latestRunStatus: 'ERROR' }),
@@ -150,6 +305,19 @@ export default function webAlignTest() {
       expect(buckets.length).assertEqual(1);
       expect(buckets[0].items.length).assertEqual(2);
       expect(buckets[0].label).assertEqual('');
+    });
+
+    it('puts archived cards in a trailing 归档 group', 0, () => {
+      const items = [
+        agent({ id: 'a', latestRunStatus: 'FINISHED', name: 'Live' }),
+        agent({ id: 'b', status: 'ARCHIVED', name: 'Old' })
+      ];
+      const buckets = groupAgents(items, 'none');
+      expect(buckets.length).assertEqual(2);
+      expect(buckets[0].items[0].id).assertEqual('a');
+      expect(buckets[1].key).assertEqual('archived');
+      expect(buckets[1].label).assertEqual('归档');
+      expect(buckets[1].items[0].id).assertEqual('b');
     });
   });
 
@@ -228,6 +396,161 @@ export default function webAlignTest() {
       expect(out[1].key).assertEqual('t1');
       expect(out[4].key).assertEqual('t2');
     });
+
+    it('shows a turn divider from the second run', 0, () => {
+      const items: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'r1', text: 'one' },
+        { key: 'h1', kind: 'runHeader', runId: 'r1', text: '运行 · 已完成' },
+        { key: 'a1', kind: 'assistant', runId: 'r1', text: 'done' },
+        { key: 'h2', kind: 'runHeader', runId: 'r2', text: '运行 · 运行中' },
+        { key: 'u2', kind: 'userPrompt', runId: 'r2', text: 'two' }
+      ];
+      const out = visibleTimeline(items);
+      expect(out.length).assertEqual(4);
+      expect(out[2].kind).assertEqual('runHeader');
+      expect(out[2].runId).assertEqual('r2');
+    });
+
+    it('drops finished run headers so 运行/已完成 do not stack', 0, () => {
+      const items: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'r1', text: 'one' },
+        { key: 'a1', kind: 'assistant', runId: 'r1', text: 'done' },
+        { key: 'h2', kind: 'runHeader', runId: 'r2', statusLabel: 'FINISHED', text: '运行 · 已完成' },
+        { key: 'u2', kind: 'userPrompt', runId: 'r2', text: 'two' },
+        { key: 'a2', kind: 'assistant', runId: 'r2', text: 'ok' }
+      ];
+      const out = visibleTimeline(items);
+      expect(out.length).assertEqual(4);
+      expect(out[0].kind).assertEqual('userPrompt');
+      expect(out[1].kind).assertEqual('assistant');
+      expect(out[2].kind).assertEqual('userPrompt');
+      expect(out[3].kind).assertEqual('assistant');
+    });
+
+    it('drops hollow process cards when this device has no log', 0, () => {
+      const items: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'history', text: 'hi' },
+        { key: 't', kind: 'thinking', runId: 'history', text: '', collapsed: true },
+        { key: 'a', kind: 'assistant', runId: 'history', text: 'ok' }
+      ];
+      const out = visibleTimeline(items);
+      expect(out.length).assertEqual(2);
+      expect(out[0].kind).assertEqual('userPrompt');
+      expect(out[1].kind).assertEqual('assistant');
+    });
+  });
+
+  describe('TimelineMerge', () => {
+    it('fingerprints conversation without unstable message ids', 0, () => {
+      const a: ConversationMessage[] = [
+        { id: 'uuid-1', type: 'user_message', text: 'Add a README' },
+        { id: 'turn-0:step:12:assistant', type: 'assistant_message', text: 'Created README' }
+      ];
+      const b: ConversationMessage[] = [
+        { id: 'uuid-CHANGED', type: 'user_message', text: 'Add a README' },
+        { id: 'turn-0:step:99:assistant', type: 'assistant_message', text: 'Created README' }
+      ];
+      expect(convFingerprint(a)).assertEqual(convFingerprint(b));
+      const c: ConversationMessage[] = [
+        { id: 'uuid-1', type: 'user_message', text: 'Add a README' },
+        { id: 'turn-0:step:12:assistant', type: 'assistant_message', text: 'Created README' },
+        { id: 'uuid-2', type: 'user_message', text: 'Also add troubleshooting' }
+      ];
+      expect(convFingerprint(a) === convFingerprint(c)).assertFalse();
+    });
+
+    it('fingerprint changes when same-length text changes', 0, () => {
+      const a: ConversationMessage[] = [
+        { id: '1', type: 'user_message', text: 'AAAAAAAA' },
+        { id: '2', type: 'assistant_message', text: 'BBBBBBBB' }
+      ];
+      const b: ConversationMessage[] = [
+        { id: '1', type: 'user_message', text: 'AAAAAAAA' },
+        { id: '2', type: 'assistant_message', text: 'CCCCCCCC' }
+      ];
+      expect(convFingerprint(a) === convFingerprint(b)).assertFalse();
+    });
+
+    it('merge keeps tools when conversation fingerprint is unchanged', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'history', text: 'hi' },
+        { key: 'a', kind: 'assistant', runId: 'history', text: 'ok' }
+      ];
+      const cached: TimelineItem[] = [
+        { key: 'tool1', kind: 'tool', runId: 'run-1', text: 'read_file' },
+        { key: 'th', kind: 'thinking', runId: 'run-1', text: 'looking' }
+      ];
+      const first = mergeCachedActivity(conv, cached);
+      const again = mergeCachedActivity(conv, first);
+      let tools = 0;
+      for (let i = 0; i < again.length; i++) {
+        if (again[i].kind === 'tool') {
+          tools += 1;
+        }
+      }
+      expect(tools).assertEqual(1);
+    });
+
+    it('places SSE tools after the matching user turn', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'history', text: 'first' },
+        { key: 'p1', kind: 'progress', runId: 'history', text: 'looking' },
+        { key: 'a1', kind: 'assistant', runId: 'history', text: 'done one' },
+        { key: 'u2', kind: 'userPrompt', runId: 'history', text: 'second' },
+        { key: 'a2', kind: 'assistant', runId: 'history', text: 'done two' }
+      ];
+      const cached: TimelineItem[] = [
+        { key: 't1', kind: 'thinking', runId: 'run-aaa', text: 'reason one' },
+        { key: 'tool1', kind: 'tool', runId: 'run-aaa', text: 'read_file' },
+        { key: 't2', kind: 'thinking', runId: 'run-bbb', text: 'reason two' }
+      ];
+      const merged = mergeCachedActivity(conv, cached);
+      const kinds: string[] = [];
+      const runs: string[] = [];
+      for (let i = 0; i < merged.length; i++) {
+        kinds.push(merged[i].kind);
+        runs.push(merged[i].runId);
+      }
+      expect(kinds[0]).assertEqual('userPrompt');
+      expect(kinds[1]).assertEqual('thinking');
+      expect(runs[1]).assertEqual('run-aaa');
+      expect(kinds[2]).assertEqual('tool');
+      expect(kinds[kinds.length - 2]).assertEqual('thinking');
+      expect(runs[kinds.length - 2]).assertEqual('run-bbb');
+      expect(kinds[kinds.length - 1]).assertEqual('assistant');
+      const vis = visibleTimeline(merged);
+      expect(vis.length).assertEqual(6);
+    });
+
+    it('folds conversation progress into the single live run', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'history', text: 'check git' },
+        { key: 'p', kind: 'progress', runId: 'history', text: 'looking at commits' },
+        { key: 'a', kind: 'assistant', runId: 'history', text: 'clean tree' }
+      ];
+      const cached: TimelineItem[] = [
+        { key: 'th', kind: 'thinking', runId: 'run-live', text: 'checking log' },
+        { key: 'tool', kind: 'tool', runId: 'run-live', text: 'git status' }
+      ];
+      const merged = mergeCachedActivity(conv, cached);
+      const vis = visibleTimeline(merged);
+      expect(vis.length).assertEqual(3);
+      expect(vis[0].kind).assertEqual('userPrompt');
+      expect(vis[1].runId).assertEqual('run-live');
+      expect(vis[2].kind).assertEqual('assistant');
+    });
+
+    it('skips empty cached thinking', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'history', text: 'hi' },
+        { key: 'a', kind: 'assistant', runId: 'history', text: 'ok' }
+      ];
+      const cached: TimelineItem[] = [
+        { key: 'empty', kind: 'thinking', runId: 'run-x', text: '' }
+      ];
+      const merged = mergeCachedActivity(conv, cached);
+      expect(merged.length).assertEqual(2);
+    });
   });
 
   describe('MarkdownParse', () => {
@@ -263,6 +586,32 @@ export default function webAlignTest() {
       const s = clipNotice('## 结论\n修好了 [Inbox](https://example.com) 排序', 40);
       expect(s.indexOf('http') < 0).assertTrue();
       expect(s.indexOf('Inbox') >= 0).assertTrue();
+    });
+  });
+
+  describe('TimelineCopy', () => {
+    it('slugs mcp and path tool names', 0, () => {
+      expect(toolSlug('mcp_web_fetch')).assertEqual('web-fetch');
+      expect(toolSlug('Read')).assertEqual('Read');
+    });
+
+    it('uses Cloud-shaped tool verbs', 0, () => {
+      expect(usedToolLine('web-fetch', true, '')).assertEqual('正在用 web-fetch');
+      expect(usedToolLine('web-fetch', false, 'notion.com')).assertEqual('用了 web-fetch · notion.com');
+    });
+
+    it('names live and done process cards', 0, () => {
+      expect(processLiveTitle(true, '', false, '')).assertEqual('在准备环境');
+      expect(processLiveTitle(false, 'web-fetch', true, '18s')).assertEqual('正在用 web-fetch · 18s');
+      expect(processLiveTitle(false, '', false, '')).assertEqual('在想下一步');
+      expect(processDoneTitle(false, '1s')).assertEqual('思考了 1s');
+      expect(processDoneTitle(true, '1m 18s')).assertEqual('用了 1m 18s');
+    });
+
+    it('keeps run headers as quiet verbs', 0, () => {
+      expect(runHeaderVerb('CREATING', '')).assertEqual('在准备环境');
+      expect(runHeaderVerb('RUNNING', '')).assertEqual('环境就绪');
+      expect(runHeaderVerb('FINISHED', '1m 18s')).assertEqual('用了 1m 18s');
     });
   });
 

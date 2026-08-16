@@ -1,31 +1,38 @@
-import { liveViewManager } from '@kit.LiveViewKit';
 import { notificationManager } from '@kit.NotificationKit';
-import { wantAgent, WantAgent } from '@kit.AbilityKit';
+import { wantAgent } from '@kit.AbilityKit';
+import { AgentSummary } from '../models/Api';
+import { isRunInFlight } from './InboxGrouping';
 import { Log } from './Log';
 
 const TAG = 'LiveIsland';
 const BUNDLE = 'com.brian.cursor.mobile';
 
 /**
- * Status-bar live capsule (灵动岛/实况窗) while a Cloud Agent run is in flight.
- * Falls back to an ongoing notification if Live View Kit is not entitled.
+ * In-flight status as an ongoing notification.
+ * Live View Kit is parked: this bundle has no AGC 实况窗 entitlement.
  */
 export class LiveIsland {
-  private static seq: number = 1;
-  private static liveOn: boolean = false;
   private static notifOn: boolean = false;
+  private static ready: boolean = false;
   private static agentId: string = '';
   private static title: string = '';
   private static lastZh: string = '';
 
   static async start(agentId: string, name: string, statusZh: string): Promise<void> {
+    if (!agentId || agentId.length === 0) {
+      return;
+    }
+    if (LiveIsland.agentId === agentId && LiveIsland.notifOn && statusZh === LiveIsland.lastZh) {
+      return;
+    }
+    if (LiveIsland.agentId.length > 0 && LiveIsland.agentId !== agentId) {
+      await LiveIsland.finish(LiveIsland.lastZh, LiveIsland.agentId);
+    }
     LiveIsland.agentId = agentId;
     LiveIsland.title = name.length > 0 ? name : 'Cursor Agent';
     LiveIsland.lastZh = statusZh;
-    const ok = await LiveIsland.tryLive('start', statusZh);
-    if (!ok) {
-      await LiveIsland.publishOngoing(statusZh, false);
-    }
+    await LiveIsland.ensureReady();
+    await LiveIsland.publishOngoing(statusZh);
   }
 
   static async update(statusZh: string): Promise<void> {
@@ -33,21 +40,14 @@ export class LiveIsland {
       return;
     }
     LiveIsland.lastZh = statusZh;
-    if (LiveIsland.liveOn) {
-      const ok = await LiveIsland.tryLive('update', statusZh);
-      if (!ok) {
-        await LiveIsland.publishOngoing(statusZh, false);
-      }
-      return;
-    }
     if (LiveIsland.notifOn) {
-      await LiveIsland.publishOngoing(statusZh, false);
+      await LiveIsland.publishOngoing(statusZh);
     }
   }
 
-  static async finish(statusZh: string): Promise<void> {
-    if (LiveIsland.liveOn) {
-      await LiveIsland.tryLive('stop', statusZh);
+  static async finish(_statusZh: string, agentId: string = ''): Promise<void> {
+    if (agentId.length > 0 && LiveIsland.agentId.length > 0 && agentId !== LiveIsland.agentId) {
+      return;
     }
     if (LiveIsland.notifOn) {
       try {
@@ -61,91 +61,51 @@ export class LiveIsland {
     LiveIsland.lastZh = '';
   }
 
+  /** Keep the notice on the newest in-flight inbox card. */
+  static async syncRunning(agents: AgentSummary[]): Promise<void> {
+    let pick: AgentSummary | undefined = undefined;
+    for (let i = 0; i < agents.length; i++) {
+      const st = `${agents[i].latestRunStatus ?? ''}`;
+      if (isRunInFlight(st)) {
+        pick = agents[i];
+        break;
+      }
+    }
+    if (!pick) {
+      if (LiveIsland.notifOn) {
+        await LiveIsland.finish(LiveIsland.lastZh.length > 0 ? LiveIsland.lastZh : '已完成');
+      }
+      return;
+    }
+    const zh = `${pick.latestRunStatus}` === 'CREATING' ? '创建中' : '运行中';
+    await LiveIsland.start(pick.id, pick.name ?? '', zh);
+  }
+
   private static nid(): number {
     return 41000 + (Math.abs(hashCode(LiveIsland.agentId)) % 9000);
   }
 
-  private static async tryLive(op: string, statusZh: string): Promise<boolean> {
+  private static async ensureReady(): Promise<void> {
+    if (LiveIsland.ready) {
+      return;
+    }
     try {
-      const enabled = await liveViewManager.isLiveViewEnabled();
-      if (!enabled) {
-        return false;
-      }
-      LiveIsland.seq += 1;
-      const capsule: liveViewManager.TextCapsule = {
-        type: liveViewManager.CapsuleType.CAPSULE_TYPE_TEXT,
-        status: op === 'stop' ? 0 : 1,
-        title: LiveIsland.shortTitle(),
-        content: statusZh,
-        backgroundColor: '#18181B'
-      };
-      let click: WantAgent | undefined = undefined;
-      try {
-        click = await wantAgent.getWantAgent({
-          wants: [{
-            bundleName: BUNDLE,
-            abilityName: 'EntryAbility',
-            parameters: { 'agentId': LiveIsland.agentId }
-          }],
-          operationType: wantAgent.OperationType.START_ABILITY,
-          requestCode: LiveIsland.nid()
-        });
-      } catch (_e) {
-      }
-      const primary: liveViewManager.PrimaryData = {
-        title: LiveIsland.title,
-        content: [{ text: `运行${statusZh}` }],
-        keepTime: op === 'stop' ? 8 : 3600,
-        liveViewLockScreenAbilityName: 'LiveViewLockAbility',
-        liveViewLockScreenAbilityParameters: {
-          'title': LiveIsland.title,
-          'status': statusZh,
-          'agentId': LiveIsland.agentId
-        }
-      };
-      if (click) {
-        primary.clickAction = click;
-      }
-      const view: liveViewManager.LiveView = {
-        id: LiveIsland.nid(),
-        event: 'COMMON',
-        sequence: LiveIsland.seq,
-        isMute: true,
-        liveViewData: {
-          primary: primary,
-          capsule: capsule
-        }
-      };
-      if (op === 'start') {
-        await liveViewManager.startLiveView(view);
-        LiveIsland.liveOn = true;
-      } else if (op === 'update') {
-        await liveViewManager.updateLiveView(view);
-      } else {
-        await liveViewManager.stopLiveView(view);
-        LiveIsland.liveOn = false;
-      }
-      return true;
-    } catch (e) {
-      Log.warn(TAG, `live ${op} failed: ${JSON.stringify(e)}`);
-      LiveIsland.liveOn = false;
-      return false;
+      await notificationManager.requestEnableNotification();
+    } catch (_e) {
     }
+    try {
+      await notificationManager.addSlot(notificationManager.SlotType.SERVICE_INFORMATION);
+    } catch (_e) {
+    }
+    LiveIsland.ready = true;
   }
 
-  private static shortTitle(): string {
-    const t = LiveIsland.title;
-    if (t.length <= 10) {
-      return t;
-    }
-    return `${t.substring(0, 9)}…`;
-  }
-
-  private static async publishOngoing(statusZh: string, silent: boolean): Promise<void> {
+  private static async publishOngoing(statusZh: string): Promise<void> {
     try {
       const info: wantAgent.WantAgentInfo = {
         wants: [{
           bundleName: BUNDLE,
+          moduleName: 'entry',
           abilityName: 'EntryAbility',
           parameters: { 'agentId': LiveIsland.agentId }
         }],
@@ -158,19 +118,17 @@ export class LiveIsland {
         notificationSlotType: notificationManager.SlotType.SERVICE_INFORMATION,
         isOngoing: true,
         isUnremovable: false,
+        isAlertOnce: true,
         wantAgent: agent,
         content: {
           notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
           normal: {
             title: LiveIsland.title,
-            text: `运行${statusZh}`,
-            additionalText: '点按回到对话'
+            text: statusZh,
+            additionalText: '点按回到任务'
           }
         }
       };
-      if (silent) {
-        req.isAlertOnce = true;
-      }
       await notificationManager.publish(req);
       LiveIsland.notifOn = true;
     } catch (e) {

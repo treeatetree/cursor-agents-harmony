@@ -1,5 +1,5 @@
 import {
-  ApiException, CreateAgentResponse, CustomSubagentDef, EnvTarget, EnvVarDef,
+  AgentSummary, ApiException, CreateAgentResponse, CustomSubagentDef, EnvTarget, EnvVarDef,
   McpServerDef, ModelInfo, ModelParamDef, ModelParamValue, ModelVariant,
   ModelVariantParam, RepoInfo
 } from '../models/Api';
@@ -7,11 +7,13 @@ import { unwrapCreateAgent, unwrapModels } from '../api/ApiUnwrap';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { AgentCache } from '../store/AgentCache';
 import { PrefStore } from '../store/PrefStore';
+import { recencyMs } from '../utils/InboxGrouping';
 import {
   defaultEnv, parseToolsPref, serializeTools, toApiEnv, toApiEnvVars, toApiMcp,
   toApiSubagents, usesNamedEnv
 } from '../utils/AgentCapabilities';
 import { Log } from '../utils/Log';
+import { modelSentJson } from '../utils/ModelGroups';
 import { util } from '@kit.ArkTS';
 
 const TAG = 'NewAgentVM';
@@ -146,14 +148,21 @@ export class NewAgentVM {
 
   filteredRepos(): RepoInfo[] {
     const q = this.repoQuery.trim().toLowerCase();
-    if (q.length === 0) {
-      return this.repos;
+    let list: RepoInfo[] = this.repos;
+    if (q.length > 0) {
+      list = this.repos.filter((r: RepoInfo) => {
+        return r.repository.toLowerCase().indexOf(q) >= 0 ||
+          r.name.toLowerCase().indexOf(q) >= 0 ||
+          r.owner.toLowerCase().indexOf(q) >= 0;
+      });
     }
-    return this.repos.filter((r: RepoInfo) => {
-      return r.repository.toLowerCase().indexOf(q) >= 0 ||
-        r.name.toLowerCase().indexOf(q) >= 0 ||
-        r.owner.toLowerCase().indexOf(q) >= 0;
-    });
+    const agents = AgentCache.getInstance().loadInbox();
+    const scored: RepoInfo[] = [];
+    for (let i = 0; i < list.length; i++) {
+      scored.push(list[i]);
+    }
+    scored.sort((a: RepoInfo, b: RepoInfo) => repoRecency(b, agents) - repoRecency(a, agents));
+    return scored;
   }
 
   canSubmit(): boolean {
@@ -184,6 +193,78 @@ export class NewAgentVM {
     this.selectedRepo = cleaned;
   }
 
+  titleFromPrompt(): string {
+    const named = this.agentName.trim();
+    if (named.length > 0) {
+      return named.length > 40 ? named.substring(0, 40) : named;
+    }
+    let line = this.prompt.trim();
+    const nl = line.indexOf('\n');
+    if (nl >= 0) {
+      line = line.substring(0, nl);
+    }
+    if (line.length > 28) {
+      return line.substring(0, 28);
+    }
+    return line.length > 0 ? line : '新任务';
+  }
+
+  buildCreateBody(): Record<string, Object> {
+    const body: Record<string, Object> = {};
+    const promptObj: Record<string, Object> = {};
+    promptObj['text'] = this.prompt.trim();
+    if (this.imagePayloads.length > 0) {
+      promptObj['images'] = this.imagePayloads;
+    }
+    body['prompt'] = promptObj;
+    const namedTitle = this.agentName.trim();
+    if (namedTitle.length > 0) {
+      body['name'] = namedTitle.length > 100 ? namedTitle.substring(0, 100) : namedTitle;
+    }
+    body['mode'] = this.mode;
+    body['autoCreatePR'] = this.autoCreatePR;
+    body['workOnCurrentBranch'] = this.workOnCurrentBranch;
+    if (this.autoCreatePR) {
+      body['openAsCursorGithubApp'] = this.openAsCursorGithubApp;
+      body['skipReviewerRequest'] = this.skipReviewerRequest;
+    }
+    const named = toApiEnv(this.env);
+    if (named) {
+      body['env'] = named;
+    } else if (this.repoMode !== 'none') {
+      const repo: Record<string, Object> = {};
+      repo['url'] = this.selectedRepo.trim();
+      if (this.repoMode === 'pr') {
+        repo['prUrl'] = this.selectedPrUrl.trim();
+      } else if (this.selectedBranch.trim().length > 0) {
+        repo['startingRef'] = this.selectedBranch.trim();
+      }
+      body['repos'] = [repo];
+    }
+    const model = this.modelPayload();
+    if (model) {
+      body['model'] = model;
+    }
+    const mcp = toApiMcp(this.mcpServers);
+    if (mcp.length > 0) {
+      body['mcpServers'] = mcp;
+    }
+    const subs = toApiSubagents(this.subagents);
+    if (subs.length > 0) {
+      body['customSubagents'] = subs;
+    }
+    const vars = toApiEnvVars(this.envVars);
+    if (vars) {
+      body['envVars'] = vars;
+    } else {
+      if (this.retryAgentId.length === 0) {
+        this.retryAgentId = mintAgentId();
+      }
+      body['agentId'] = this.retryAgentId;
+    }
+    return body;
+  }
+
   async submit(): Promise<CreateAgentResponse | undefined> {
     if (!this.canSubmit()) {
       if (this.prompt.trim().length === 0) {
@@ -200,63 +281,8 @@ export class NewAgentVM {
     this.busy = true;
     this.errorMsg = '';
     try {
-      const body: Record<string, Object> = {};
-      const promptObj: Record<string, Object> = {};
-      promptObj['text'] = this.prompt.trim();
-      if (this.imagePayloads.length > 0) {
-        promptObj['images'] = this.imagePayloads;
-      }
-      body['prompt'] = promptObj;
-      const namedTitle = this.agentName.trim();
-      if (namedTitle.length > 0) {
-        body['name'] = namedTitle.length > 100 ? namedTitle.substring(0, 100) : namedTitle;
-      }
-      body['mode'] = this.mode;
-      body['autoCreatePR'] = this.autoCreatePR;
-      body['workOnCurrentBranch'] = this.workOnCurrentBranch;
-      if (this.autoCreatePR) {
-        body['openAsCursorGithubApp'] = this.openAsCursorGithubApp;
-        body['skipReviewerRequest'] = this.skipReviewerRequest;
-      }
-      const named = toApiEnv(this.env);
-      if (named) {
-        body['env'] = named;
-      } else if (this.repoMode !== 'none') {
-        const repo: Record<string, Object> = {};
-        repo['url'] = this.selectedRepo.trim();
-        if (this.repoMode === 'pr') {
-          repo['prUrl'] = this.selectedPrUrl.trim();
-        } else if (this.selectedBranch.trim().length > 0) {
-          repo['startingRef'] = this.selectedBranch.trim();
-        }
-        body['repos'] = [repo];
-      }
-      if (this.selectedModel.length > 0) {
-        const model: Record<string, Object> = {};
-        model['id'] = this.selectedModel;
-        const variantParams = this.resolveVariantParams();
-        if (variantParams.length > 0) {
-          model['params'] = variantParams;
-        }
-        body['model'] = model;
-      }
-      const mcp = toApiMcp(this.mcpServers);
-      if (mcp.length > 0) {
-        body['mcpServers'] = mcp;
-      }
-      const subs = toApiSubagents(this.subagents);
-      if (subs.length > 0) {
-        body['customSubagents'] = subs;
-      }
-      const vars = toApiEnvVars(this.envVars);
-      if (vars) {
-        body['envVars'] = vars;
-      } else {
-        if (this.retryAgentId.length === 0) {
-          this.retryAgentId = mintAgentId();
-        }
-        body['agentId'] = this.retryAgentId;
-      }
+      const body = this.buildCreateBody();
+      Log.info(TAG, `create model ${modelSentJson(this.modelPayload())}`);
       const raw = await CursorApiClient.getInstance().createAgent(body);
       const resp = unwrapCreateAgent(raw as object);
       Log.info(TAG, `created ${resp.agent?.id ?? ''}`);
@@ -273,6 +299,20 @@ export class NewAgentVM {
     } finally {
       this.busy = false;
     }
+  }
+
+  /** Follow-up / create: omit when empty so the server keeps the default. */
+  modelPayload(): Record<string, Object> | undefined {
+    if (this.selectedModel.length === 0) {
+      return undefined;
+    }
+    const model: Record<string, Object> = {};
+    model['id'] = this.selectedModel;
+    const variantParams = this.resolveVariantParams();
+    if (variantParams.length > 0) {
+      model['params'] = variantParams;
+    }
+    return model;
   }
 
   /** Map selected params / variant index → API `model.params` array. */
@@ -472,6 +512,26 @@ interface ModelsLoose {
   models?: (ModelLoose | string)[];
   items?: (ModelLoose | string)[];
   data?: (ModelLoose | string)[];
+}
+
+function repoRecency(r: RepoInfo, agents: AgentSummary[]): number {
+  let best = 0;
+  const key = `${r.owner}/${r.name}`.toLowerCase();
+  const url = (r.repository ?? '').toLowerCase();
+  for (let i = 0; i < agents.length; i++) {
+    const repos = agents[i].repos;
+    if (!repos || repos.length === 0) {
+      continue;
+    }
+    const u = (repos[0].url ?? '').toLowerCase();
+    if ((url.length > 0 && u.indexOf(url) >= 0) || (key.length > 1 && u.indexOf(key) >= 0)) {
+      const t = recencyMs(agents[i]);
+      if (t > best) {
+        best = t;
+      }
+    }
+  }
+  return best;
 }
 
 function mintAgentId(): string {

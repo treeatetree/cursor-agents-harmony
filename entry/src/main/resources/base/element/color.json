@@ -33,7 +33,7 @@
     { "name": "agent_bubble", "value": "#FAFAFA" },
     { "name": "assistant_rail", "value": "#E4E4E7" },
     { "name": "code_bg", "value": "#F4F4F5" },
-    { "name": "code_inline_bg", "value": "#EDEDF0" },
+    { "name": "code_inline_bg", "value": "#E8E8EC" },
     { "name": "field_bg", "value": "#FFFFFF" },
     { "name": "overlay", "value": "#FFFFFF" },
     { "name": "shadow", "value": "#00000000" },

@@ -2,13 +2,13 @@ import { AgentSummary } from '../models/Api';
 import { Tokens } from '../theme/Tokens';
 import { relativeTime } from '../utils/TimeFmt';
 import { repoTail, shortAgentId, elapsedSince } from '../utils/DisplayFmt';
-import { firstPrUrl, hasPr, isRunInFlight } from '../utils/InboxGrouping';
+import { firstPrUrl, hasPr, isRunInFlight, userStampIso } from '../utils/InboxGrouping';
 import { Haptics } from '../utils/Haptics';
 import { motionMs, pressScaleOf } from '../utils/Motion';
 
 @Component
 export struct AgentCard {
-  @Prop agent: AgentSummary = {
+  @Prop @Watch('onAgent') agent: AgentSummary = {
     id: '',
     name: '',
     status: 'ACTIVE',
@@ -34,6 +34,10 @@ export struct AgentCard {
   };
 
   aboutToAppear(): void {
+    this.armTick();
+  }
+
+  onAgent(_name: string): void {
     this.armTick();
   }
 
@@ -81,12 +85,6 @@ export struct AgentCard {
     if (r === 'CANCELLED') {
       return '已取消';
     }
-    if (hasPr(this.agent)) {
-      return '';
-    }
-    if (r === 'FINISHED') {
-      return '已完成';
-    }
     return '';
   }
 
@@ -122,11 +120,12 @@ export struct AgentCard {
   }
 
   private timeText(): string {
+    const when = userStampIso(this.agent);
     if (this.running()) {
       const _n = this.tick;
-      return elapsedSince(this.agent.updatedAt || this.agent.createdAt) || '0s';
+      return elapsedSince(when) || '0s';
     }
-    return relativeTime(this.agent.updatedAt || this.agent.createdAt);
+    return relativeTime(when);
   }
 
   private prText(): string {
@@ -145,6 +144,7 @@ export struct AgentCard {
     Column({ space: this.list ? 4 : 6 }) {
       Text(this.titleText())
         .fontSize(Tokens.typeBody)
+        .fontFamily(Tokens.fontUi)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .lineHeight(Tokens.lineBody)
@@ -159,10 +159,11 @@ export struct AgentCard {
       if (!this.list) {
         Text(this.lineText())
           .fontSize(Tokens.typeMicro)
+          .fontFamily(Tokens.fontUi)
           .fontColor($r('app.color.text_secondary'))
-          .lineHeight(Tokens.lineCaption)
+          .lineHeight(Tokens.lineMicro)
           .maxLines(1)
-          .height(Tokens.lineCaption)
+          .height(Tokens.lineMicro)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
       }

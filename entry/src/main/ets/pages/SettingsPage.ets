@@ -35,6 +35,8 @@ struct SettingsPage {
   @State themePref: string = 'system';
   @State defaultAutoPR: boolean = false;
   @State hapticsEnabled: boolean = true;
+  @State soundsEnabled: boolean = true;
+  @State notifyEnabled: boolean = true;
   @State defaultModel: string = '';
   @State appVersion: string = '1.0.0';
   @State topInset: number = 0;
@@ -63,6 +65,8 @@ struct SettingsPage {
     const prefs = PrefStore.getInstance();
     this.defaultAutoPR = await prefs.getDefaultAutoPR();
     this.hapticsEnabled = await prefs.getHapticsEnabled();
+    this.soundsEnabled = await prefs.getSoundsEnabled();
+    this.notifyEnabled = await prefs.getNotifyEnabled();
     this.defaultModel = await prefs.getDefaultModel();
     this.avatarPreset = normalizeAvatarId(await prefs.getAvatarPreset());
     const read = ReadPrefStore.getInstance();
@@ -200,6 +204,27 @@ struct SettingsPage {
                   if (this.hapticsEnabled) {
                     Haptics.toggle();
                   }
+                }
+              })
+              HuSwitch({
+                on: this.soundsEnabled,
+                label: '音效反馈',
+                onToggle: async () => {
+                  this.soundsEnabled = !this.soundsEnabled;
+                  await PrefStore.getInstance().setSoundsEnabled(this.soundsEnabled);
+                  if (this.soundsEnabled) {
+                    Haptics.toggle();
+                  }
+                }
+              })
+              this.hair()
+              HuSwitch({
+                on: this.notifyEnabled,
+                label: '完成通知',
+                hint: '后台用一条摘要，当前会话不弹',
+                onToggle: async () => {
+                  this.notifyEnabled = !this.notifyEnabled;
+                  await PrefStore.getInstance().setNotifyEnabled(this.notifyEnabled);
                 }
               })
               this.hair()
@@ -385,6 +410,7 @@ struct SettingsPage {
         .height(88)
         .width('100%')
         .fontSize(Tokens.typeCallout)
+        .fontFamily(Tokens.fontMono)
         .fontColor($r('app.color.text_primary'))
         .placeholderColor($r('app.color.text_tertiary'))
         .backgroundColor($r('app.color.field_bg'))

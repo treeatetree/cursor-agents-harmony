@@ -111,9 +111,19 @@ export class UnreadStore {
     await this.persist();
   }
 
+  async clearAll(): Promise<void> {
+    if (this.items.length === 0) {
+      return;
+    }
+    this.items = [];
+    await this.persist();
+  }
+
   private async persist(): Promise<void> {
     await PrefStore.getInstance().setUnreadItems(this.items);
     this.syncBadge();
+    Notify.refreshInbox(this.items).catch(() => {
+    });
   }
 
   syncBadge(): void {

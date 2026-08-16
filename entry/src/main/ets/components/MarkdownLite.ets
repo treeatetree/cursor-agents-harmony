@@ -64,17 +64,21 @@ export struct MarkdownLite {
     Text() {
       ForEach(tokenizeInline(text), (seg: InlineSeg, idx: number) => {
         if (seg.code) {
-          Span(` ${seg.text} `)
-            .fontSize(size - 1)
+          Span(this.softWrapCode(seg.text))
+            .fontSize(Math.max(12, size - 2))
             .fontColor($r('app.color.text_primary'))
-            .fontFamily('monospace')
+            .fontFamily(Tokens.fontMono)
+            .fontWeight(FontWeight.Medium)
             .backgroundColor($r('app.color.code_inline_bg'))
         } else if (seg.url.length > 0) {
           Span(seg.text)
             .fontSize(size)
             .fontColor($r('app.color.text_link'))
             .fontWeight(FontWeight.Medium)
-            .decoration({ type: TextDecorationType.Underline, color: $r('app.color.text_link') })
+            .decoration({
+              type: TextDecorationType.Underline,
+              color: $r('app.color.text_link')
+            })
             .onClick(() => {
               this.open(seg.url);
             })
@@ -100,8 +104,23 @@ export struct MarkdownLite {
       }, (seg: InlineSeg, idx: number) =>
         `s-${idx}-${seg.text.length}-${seg.code ? 1 : 0}-${seg.bold ? 1 : 0}-${seg.url.length}`)
     }
+    .fontFamily(Tokens.fontUi)
     .lineHeight(line)
+    .textAlign(TextAlign.Start)
+    .wordBreak(WordBreak.BREAK_ALL)
     .width('100%')
+  }
+
+  private softWrapCode(raw: string): string {
+    let out = '';
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw.charAt(i);
+      out += ch;
+      if (ch === '/' || ch === '_' || ch === '-' || ch === '.') {
+        out += '\u200B';
+      }
+    }
+    return out;
   }
 
   build() {
@@ -113,27 +132,27 @@ export struct MarkdownLite {
           this.tableBlock(b.text, idx)
         } else if (b.kind === 'h1') {
           Column() {
-            this.renderInline(b.text, this.compact ? Tokens.typeBody : Tokens.typeHeadline,
+            this.renderInline(b.text, this.compact ? Tokens.typeBody : Tokens.typeTitle,
               $r('app.color.text_primary'),
-              FontWeight.Bold, this.compact ? Tokens.lineBody : Tokens.lineProse)
+              FontWeight.Bold, this.compact ? Tokens.lineBody : Tokens.lineTitle)
           }
           .width('100%')
-          .margin({ top: idx > 0 ? 16 : 0, bottom: 6 })
+          .margin({ top: idx > 0 ? 20 : 0, bottom: 8 })
         } else if (b.kind === 'h2') {
           Column() {
             this.renderInline(b.text, this.compact ? Tokens.typeBody : Tokens.typeHeadline,
               $r('app.color.text_primary'),
-              FontWeight.Medium, this.compact ? Tokens.lineBody : Tokens.lineProse)
+              FontWeight.Bold, this.compact ? Tokens.lineBody : Tokens.lineBody + 2)
           }
           .width('100%')
-          .margin({ top: idx > 0 ? 14 : 0, bottom: 5 })
+          .margin({ top: idx > 0 ? 18 : 0, bottom: 8 })
         } else if (b.kind === 'h3') {
           Column() {
-            this.renderInline(b.text, this.proseSize(), $r('app.color.text_primary'), FontWeight.Medium,
+            this.renderInline(b.text, this.proseSize(), $r('app.color.text_primary'), FontWeight.Bold,
               this.listLine())
           }
           .width('100%')
-          .margin({ top: idx > 0 ? 10 : 0, bottom: 4 })
+          .margin({ top: idx > 0 ? 14 : 0, bottom: 6 })
         } else if (b.kind === 'li') {
           this.bulletItem(b.text, '•', b.indent)
         } else if (b.kind === 'ol') {
@@ -143,19 +162,19 @@ export struct MarkdownLite {
             this.quoteBlock(b.text)
           }
           .width('100%')
-          .margin({ top: 8, bottom: 8 })
+          .margin({ top: 10, bottom: 10 })
         } else if (b.kind === 'hr') {
           Divider()
             .color($r('app.color.border'))
             .width('100%')
-            .margin({ top: 12, bottom: 12 })
+            .margin({ top: 16, bottom: 16 })
         } else {
           Column() {
             this.renderInline(b.text, this.proseSize(), this.bodyColor(), FontWeight.Regular,
               this.proseLine())
           }
           .width('100%')
-          .margin({ top: 0, bottom: 8 })
+          .margin({ top: 0, bottom: this.compact ? 8 : 12 })
         }
       }, (b: MdBlock, idx: number) => `md-${idx}-${b.kind}-${b.text.length}-${b.indent}`)
     }
@@ -183,19 +202,18 @@ export struct MarkdownLite {
     .width('100%')
     .alignItems(VerticalAlign.Top)
     .padding({ left: indent * 16 })
-    .margin({ top: 2, bottom: 2 })
+    .margin({ top: 3, bottom: 3 })
   }
 
   @Builder
   quoteBlock(text: string) {
     Column() {
-      this.renderInline(text, this.proseSize(), $r('app.color.text_tertiary'), FontWeight.Regular,
+      this.renderInline(text, this.proseSize(), $r('app.color.text_secondary'), FontWeight.Regular,
         this.proseLine())
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    .backgroundColor($r('app.color.bg2'))
-    .borderRadius(Tokens.radiusSm)
+    .padding({ left: 12, right: 4, top: 2, bottom: 2 })
+    .border({ width: { left: 2 }, color: $r('app.color.border_strong') })
   }
 
   @Builder
@@ -211,7 +229,7 @@ export struct MarkdownLite {
             }
             .layoutWeight(1)
             .alignItems(HorizontalAlign.Start)
-            .padding({ left: 8, right: 8, top: 7, bottom: 7 })
+            .padding({ left: 8, right: 8, top: 8, bottom: 8 })
           }, (cell: string, ci: number) => `${row.key}-c${ci}-${cell.length}`)
         }
         .width('100%')
@@ -226,9 +244,9 @@ export struct MarkdownLite {
     .width('100%')
     .backgroundColor($r('app.color.bg1'))
     .border({ width: 1, color: $r('app.color.border') })
-    .borderRadius(Tokens.radiusMd)
+    .borderRadius(Tokens.radiusSm)
     .clip(true)
-    .margin({ top: 8, bottom: 10 })
+    .margin({ top: 8, bottom: 12 })
   }
 
   @Builder
@@ -238,7 +256,7 @@ export struct MarkdownLite {
         Text(b.lang.length > 0 ? b.lang : 'code')
           .fontSize(Tokens.typeMicro)
           .fontColor($r('app.color.text_tertiary'))
-          .fontFamily('monospace')
+          .fontFamily(Tokens.fontMono)
           .layoutWeight(1)
         Text('复制')
           .fontSize(Tokens.typeMicro)
@@ -260,17 +278,18 @@ export struct MarkdownLite {
       Text(b.text)
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_primary'))
-        .fontFamily('monospace')
+        .fontFamily(Tokens.fontMono)
         .lineHeight(Tokens.lineCaption + 2)
         .width('100%')
         .wordBreak(WordBreak.BREAK_ALL)
         .copyOption(CopyOptions.None)
-        .padding({ left: 12, right: 12, top: 10, bottom: 12 })
+        .padding({ left: 12, right: 12, top: 10, bottom: 14 })
     }
     .width('100%')
     .backgroundColor($r('app.color.code_bg'))
+    .border({ width: 1, color: $r('app.color.border') })
     .borderRadius(Tokens.radiusMd)
     .clip(true)
-    .margin({ top: 8, bottom: 10 })
+    .margin({ top: 8, bottom: 14 })
   }
 }

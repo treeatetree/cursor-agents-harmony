@@ -35,3 +35,23 @@ export function shimmerOpacity(on: boolean): number {
 export function shimmerMs(): number {
   return prefersReducedMotion() ? 0 : 1200;
 }
+
+/** Appear/disappear for chrome bars (notice, error, queue). */
+export function chromeTransition(): TransitionEffect {
+  const ms = motionMs();
+  if (ms <= 0) {
+    return TransitionEffect.IDENTITY;
+  }
+  return TransitionEffect.OPACITY
+    .combine(TransitionEffect.translate({ y: -6 }))
+    .animation({ duration: ms, curve: Curve.EaseOut });
+}
+
+/** Expand/collapse body — opacity only, no slide. */
+export function fadeTransition(): TransitionEffect {
+  const ms = motionMs();
+  if (ms <= 0) {
+    return TransitionEffect.IDENTITY;
+  }
+  return TransitionEffect.OPACITY.animation({ duration: ms, curve: Curve.EaseOut });
+}

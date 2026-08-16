@@ -22,6 +22,7 @@ export class RunSseClient {
   private onFrame: SseListener | undefined = undefined;
   private onStatus: SseStatusListener | undefined = undefined;
   private decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
+  private sawData: boolean = false;
 
   getLastEventId(): string {
     return this.lastEventId;
@@ -37,6 +38,7 @@ export class RunSseClient {
     this.onFrame = onFrame;
     this.onStatus = onStatus;
     this.parser.reset();
+    this.sawData = false;
     await this.connect();
   }
 
@@ -74,6 +76,10 @@ export class RunSseClient {
     this.httpReq.on('dataReceive', (data: ArrayBuffer) => {
       if (this.closed) {
         return;
+      }
+      if (!this.sawData) {
+        this.sawData = true;
+        this.emitStatus('streaming', '');
       }
       this.armWatchdog();
       try {
@@ -113,7 +119,6 @@ export class RunSseClient {
     };
 
     try {
-      this.emitStatus('streaming', '');
       const code = await this.httpReq.requestInStream(url, options);
       Log.info(TAG, `stream finished code=${code}`);
       if (this.closed) {

@@ -8,6 +8,8 @@ function App() {
   const [detailPhase, setDetailPhase] = React.useState(params.get('phase') || 'done');
   const [activeId, setActiveId] = React.useState(params.get('id') || (params.get('phase') === 'live' ? '3' : '1'));
   const [prefs, setPrefs] = React.useState({ mode: 'light', type: 'default', density: 'comfortable', autoPr: true, haptics: true });
+  const [newSheet, setNewSheet] = React.useState(params.get('sheet') === '1');
+  const [banner, setBanner] = React.useState(params.get('banner') === '1' ? { tone: 'danger', text: '创建失败', act: '重试' } : null);
   const split = frame === 'inner-l';
   const compact = frame !== 'inner-p';
   const locked = document.documentElement.getAttribute('data-lock-sys') === '1';
@@ -34,8 +36,9 @@ function App() {
         setDetailPhase(a.running || a.status === 'run' ? 'live' : a.status === 'err' ? 'err' : 'done');
         setPage('detail');
       }}
-      onNew={() => setPage('new')}
+      onNew={() => setNewSheet(true)}
       onSettings={() => setPage('settings')}
+      banner={banner}
     />
   );
 
@@ -64,6 +67,14 @@ function App() {
         data-frame={frame}
       >
         {split ? <SplitShell master={inbox} detail={detailPane} /> : stack}
+        {newSheet ? (
+          <div>
+            <button className="sheet-mask" type="button" aria-label="关闭" onClick={() => setNewSheet(false)} />
+            <div className="sheet large" role="dialog" aria-label="新任务">
+              <NewScreen sys={sys} prefs={prefs} onPrefs={setPrefs} onBack={() => setNewSheet(false)} onSend={() => { setNewSheet(false); setActiveId('3'); setDetailPhase('live'); setPage('detail'); }} />
+            </div>
+          </div>
+        ) : null}
       </div>
       <div className="frame-dock" role="toolbar" aria-label="预览">
         {locked ? null : (

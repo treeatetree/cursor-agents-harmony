@@ -107,8 +107,10 @@ export class CursorApiClient {
 
   /** POST follow-up — no auto-retry (avoid duplicate runs). Keep unwrap. */
   async createRun(agentId: string, body: object): Promise<Run> {
-    const resp = await this.request<CreateRunResponse>('POST',
-      `/v1/agents/${encodeURIComponent(agentId)}/runs`, body);
+    this.mutating++;
+    try {
+      const resp = await this.request<CreateRunResponse>('POST',
+        `/v1/agents/${encodeURIComponent(agentId)}/runs`, body);
     if (resp.run && resp.run.id) {
       return resp.run;
     }
@@ -123,6 +125,9 @@ export class CursorApiClient {
       };
     }
     throw new ApiException(500, '创建 Run 响应缺少 id', 'invalid_create_run', true);
+    } finally {
+      this.mutating--;
+    }
   }
 
   async cancelRun(agentId: string, runId: string): Promise<object> {

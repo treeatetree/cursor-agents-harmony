@@ -1,6 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { NewAgentVM } from '../viewmodels/NewAgentVM';
 import { InboxVM } from '../viewmodels/InboxVM';
+import { CreateDraftStore } from '../store/CreateDraftStore';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { PrefStore } from '../store/PrefStore';
@@ -12,7 +13,7 @@ import { dropPreviewMap, maxPromptImages, pickPromptImages, previewSrc, PromptIm
 import { HuIconButton } from '../components/HuIconButton';
 import { PromptShell } from '../components/PromptShell';
 import { EnvVarListEditor, McpListEditor, SubagentListEditor } from '../components/CapabilityEditors';
-import { defaultEnv, envNameLabel, hasTools, toolsChipLabel, usesNamedEnv } from '../utils/AgentCapabilities';
+import { defaultEnv, envNameLabel, hasTools, serializeTools, toolsChipLabel, usesNamedEnv } from '../utils/AgentCapabilities';
 import { repoTail } from '../utils/DisplayFmt';
 import {
   buildParamRows, groupModels, ModelParamRow, ModelVendorGroup, rowsToParams,
@@ -20,6 +21,8 @@ import {
 } from '../utils/ModelGroups';
 import { HuChip } from '../components/HuChip';
 import { HuTextButton } from '../components/HuTextButton';
+import { ModelPicker } from '../components/ModelPicker';
+import { StatusBanner } from '../components/StatusBanner';
 
 @Builder
 export function NewAgentPageBuilder() {
@@ -27,8 +30,13 @@ export function NewAgentPageBuilder() {
 }
 
 @Component
-struct NewAgentPage {
+export struct NewAgentPage {
   @Consume('navPathStack') navStack: NavPathStack;
+  @Prop embedded: boolean = false;
+  onCreated: (localId: string) => void = (_id: string) => {
+  };
+  onDismiss: () => void = () => {
+  };
   private vm: NewAgentVM = new NewAgentVM();
   private bp: BreakpointStore = BreakpointStore.getInstance();
 
@@ -78,11 +86,11 @@ struct NewAgentPage {
   private draftTimer: number = -1;
 
   aboutToAppear(): void {
-    this.topInset = this.bp.safeTop();
+    this.topInset = this.embedded ? 8 : this.bp.safeTop();
     this.bottomInset = this.bp.composerBottom();
     this.windowW = this.bp.widthVp;
     this.bp.onChange(() => {
-      this.topInset = this.bp.safeTop();
+      this.topInset = this.embedded ? 8 : this.bp.safeTop();
       this.bottomInset = this.bp.composerBottom();
       this.windowW = this.bp.widthVp;
     });
@@ -362,6 +370,7 @@ struct NewAgentPage {
       return;
     }
     this.syncVmContext();
+    this.syncImageNames();
     this.vm.selectedModel = this.selectedModel;
     this.vm.selectedVariant = this.selectedVariant;
     this.vm.mode = this.mode;
@@ -377,41 +386,68 @@ struct NewAgentPage {
       this.errorMsg = this.vm.errorMsg;
       return;
     }
-    this.busy = true;
     this.errorMsg = '';
-    const resp = await this.vm.submit();
-    this.syncFromVm();
-    if (resp && resp.agent) {
-      await PrefStore.getInstance().clearDraft();
-      if (this.selectedModel.length > 0) {
-        await PrefStore.getInstance().setDefaultModel(this.selectedModel);
-      }
-      const a = resp.agent;
-      const nowIso = a.updatedAt && a.updatedAt.length > 0 ? a.updatedAt :
-        (a.createdAt && a.createdAt.length > 0 ? a.createdAt : new Date().toISOString());
-      const summary: AgentSummary = {
-        id: a.id,
-        name: a.name,
-        status: a.status,
-        url: a.url,
-        createdAt: a.createdAt && a.createdAt.length > 0 ? a.createdAt : nowIso,
-        updatedAt: nowIso,
-        latestRunId: resp.run?.id,
-        latestRunStatus: 'CREATING'
-      };
-      InboxVM.getInstance().prependOptimistic(summary);
-      Haptics.success();
-      const param: Record<string, Object> = {};
-      param['agentId'] = a.id;
-      this.navStack.replacePath({ name: 'AgentDetail', param: param });
-    } else {
-      Haptics.fail();
+    const nowIso = new Date().toISOString();
+    const name = this.vm.titleFromPrompt();
+    const localId = `local-${Date.now()}`;
+    CreateDraftStore.getInstance().park({
+      localId: localId,
+      prompt: this.vm.prompt.trim(),
+      name: name,
+      body: this.vm.buildCreateBody()
+    });
+    const summary: AgentSummary = {
+      id: localId,
+      name: name,
+      status: 'ACTIVE',
+      url: '',
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      lastUserAt: nowIso,
+      latestRunStatus: 'CREATING'
+    };
+    InboxVM.getInstance().prependOptimistic(summary);
+    PrefStore.getInstance().clearDraft();
+    PrefStore.getInstance().setLastTools(serializeTools(this.env, this.mcpServers, this.subagents));
+    if (this.selectedModel.length > 0) {
+      PrefStore.getInstance().setDefaultModel(this.selectedModel);
     }
+    Haptics.success();
+    if (this.embedded) {
+      this.onCreated(localId);
+      return;
+    }
+    const param: Record<string, Object> = {};
+    param['agentId'] = localId;
+    param['seed'] = '1';
+    this.navStack.replacePath({ name: 'AgentDetail', param: param });
   }
 
   build() {
-    NavDestination() {
-      Column() {
+    if (this.embedded) {
+      this.formColumn()
+    } else {
+      NavDestination() {
+        this.formColumn()
+      }
+      .hideTitleBar(true)
+      .backgroundColor($r('app.color.bg0'))
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+    }
+  }
+
+  @Builder
+  formColumn() {
+    Column() {
+      if (this.embedded) {
+        Text('新任务')
+          .fontSize(Tokens.typeCaption)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .padding({ top: 2, bottom: 4 })
+      } else {
         Row() {
           HuIconButton({
             name: 'back',
@@ -436,98 +472,77 @@ struct NewAgentPage {
           right: Tokens.chromePad
         })
         .margin({ top: this.topInset })
+      }
 
-        if (this.busy) {
-          Text('正在创建任务… 对话页马上打开')
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%')
-            .padding({
-              left: Tokens.pagePad,
-              right: Tokens.pagePad,
-              bottom: 8
-            })
-        }
+      if (this.errorMsg.length > 0) {
+        StatusBanner({
+          text: this.errorMsg,
+          tone: 'danger'
+        })
+      }
 
-        if (this.errorMsg.length > 0) {
-          Text(this.errorMsg)
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.err'))
-            .width('100%')
-            .padding({
-              left: Tokens.pagePad,
-              right: Tokens.pagePad,
-              bottom: 8
-            })
-        }
-
-        Column() {
-          PromptShell({
-            placeholder: '要做什么？目标和约束',
-            text: $prompt,
-            busy: this.busy,
-            status: '创建中',
-            repo: this.repoChipLabel(),
-            modelLabel: this.modelLabel(),
-            autoPr: this.autoCreatePR,
-            imageCount: this.imageNames.length,
-            imageUris: $imageUris,
-            toolsOn: this.toolsOn,
-            toolsLabel: this.toolsLabel,
-            moreLabel: this.moreLabel,
-            bottomPad: 0,
-            onSend: () => {
-              this.submitAgent();
-            },
-            onRepo: () => {
-              this.repoQuery = '';
-              this.vm.repoQuery = '';
-              this.repos = this.vm.filteredRepos();
-              this.openSheet('repo');
-            },
-            onImage: () => {
-              this.attachImages();
-            },
-            onRemoveImage: (idx: number) => {
-              this.removeImage(idx);
-            },
-            onModel: () => {
-              this.openSheet('model');
-            },
-            onTools: () => {
-              this.openSheet('options');
-            },
-            onMoreExtra: () => {
-              this.openSheet('options');
-            },
-            onText: (v: string) => {
-              this.vm.prompt = v;
-              this.scheduleDraftSave(v);
-              this.refreshCanSubmit();
-            }
-          })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .justifyContent(FlexAlign.Start)
-        .padding({ top: 8, bottom: this.bottomInset })
-        .animation({ duration: Tokens.motionMs, curve: Curve.FastOutSlowIn })
+      Column() {
+        PromptShell({
+          placeholder: '要做什么？目标和约束',
+          text: $prompt,
+          busy: this.busy,
+          status: '',
+          repo: this.repoChipLabel(),
+          modelLabel: this.modelLabel(),
+          autoPr: this.autoCreatePR,
+          imageCount: this.imageNames.length,
+          imageUris: $imageUris,
+          toolsOn: this.toolsOn,
+          toolsLabel: this.toolsLabel,
+          moreLabel: this.moreLabel,
+          bottomPad: 0,
+          onSend: () => {
+            this.submitAgent();
+          },
+          onRepo: () => {
+            this.repoQuery = '';
+            this.vm.repoQuery = '';
+            this.repos = this.vm.filteredRepos();
+            this.openSheet('repo');
+          },
+          onImage: () => {
+            this.attachImages();
+          },
+          onRemoveImage: (idx: number) => {
+            this.removeImage(idx);
+          },
+          onModel: () => {
+            this.openSheet('model');
+          },
+          onTools: () => {
+            this.openSheet('options');
+          },
+          onMoreExtra: () => {
+            this.openSheet('options');
+          },
+          onText: (v: string) => {
+            this.vm.prompt = v;
+            this.scheduleDraftSave(v);
+            this.refreshCanSubmit();
+          }
+        })
       }
       .width('100%')
-      .height('100%')
-      .backgroundColor($r('app.color.bg0'))
-      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
-      .bindSheet($$this.showSheet, this.sheetBody(), {
-        height: this.sheetKind === 'branch' || this.sheetKind === 'model' ? SheetSize.FIT_CONTENT :
-          SheetSize.LARGE,
-        dragBar: true,
-        showClose: this.sheetKind !== 'repo',
-        backgroundColor: $r('app.color.overlay')
-      })
+      .layoutWeight(1)
+      .justifyContent(FlexAlign.Start)
+      .padding({ top: 8, bottom: this.bottomInset })
+      .animation({ duration: Tokens.motionMs, curve: Curve.FastOutSlowIn })
     }
-    .hideTitleBar(true)
+    .width('100%')
+    .height('100%')
     .backgroundColor($r('app.color.bg0'))
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+    .bindSheet($$this.showSheet, this.sheetBody(), {
+      height: this.sheetKind === 'branch' || this.sheetKind === 'model' ? SheetSize.FIT_CONTENT :
+        SheetSize.LARGE,
+      dragBar: true,
+      showClose: false,
+      backgroundColor: $r('app.color.overlay')
+    })
   }
 
   @Builder
@@ -846,12 +861,30 @@ struct NewAgentPage {
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
-      this.modelPicker()
-      if (this.paramRows.length > 0) {
-        this.paramBars()
-      } else if (this.variantOptions.length > 0) {
-        this.variantBar()
-      }
+      ModelPicker({
+        selectedModel: this.selectedModel,
+        selectedVariantIndex: this.selectedVariantIndex,
+        groups: this.modelGroups,
+        variantOptions: this.variantOptions,
+        variantTitle: this.variantTitle,
+        paramRows: this.paramRows,
+        onPick: (id: string) => {
+          this.pickModel(id);
+          this.refreshCanSubmit();
+        },
+        onPickParam: (rowIdx: number, valueIdx: number) => {
+          this.pickParam(rowIdx, valueIdx);
+        },
+        onPickVariant: (idx: number) => {
+          this.selectedVariantIndex = idx;
+          this.vm.selectedVariantIndex = idx;
+          if (idx >= 0 && idx < this.variantOptions.length) {
+            this.selectedVariant = this.variantOptions[idx];
+            this.vm.selectedVariant = this.selectedVariant;
+          }
+          this.refreshCanSubmit();
+        }
+      })
     }
     .padding(16)
     .width('100%')

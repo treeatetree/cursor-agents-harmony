@@ -3,6 +3,13 @@ import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { DetailVM } from '../viewmodels/DetailVM';
 import { TimelineItem } from '../models/Timeline';
 import { ArtifactInfo, CustomSubagentDef, EnvVarDef, McpServerDef, RunUsage } from '../models/Api';
+import { NewAgentVM } from '../viewmodels/NewAgentVM';
+import { ModelPicker } from '../components/ModelPicker';
+import { StatusBanner } from '../components/StatusBanner';
+import {
+  buildParamRows, groupModels, ModelParamRow, ModelVendorGroup, rowsToParams,
+  shortModelName, variantLabel, variantSectionTitle
+} from '../utils/ModelGroups';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { ActivityCard } from '../components/ActivityCard';
@@ -13,7 +20,7 @@ import { shouldUseInAppBrowser } from './InAppBrowserPage';
 import { shareAgentLinks } from '../utils/Share';
 import { elapsedLabel, repoTail, shortAgentId } from '../utils/DisplayFmt';
 import { shortPathForTool } from '../utils/StreamText';
-import { motionMs, shimmerMs, shimmerOpacity } from '../utils/Motion';
+import { chromeTransition, shimmerMs, shimmerOpacity } from '../utils/Motion';
 import { WebLinks, pushInAppBrowser } from '../utils/WebLinks';
 import { ArtifactRow } from '../components/ArtifactRow';
 import { McpListEditor } from '../components/CapabilityEditors';
@@ -28,6 +35,7 @@ import { confirmDanger } from '../utils/AppDialog';
 import { showToast } from '../utils/AppToast';
 import { Haptics } from '../utils/Haptics';
 import { visibleTimeline } from '../utils/TimelineView';
+import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug } from '../utils/TimelineCopy';
 
 function fmtTk(n: number | undefined): string {
   const v = n ?? 0;
@@ -45,6 +53,7 @@ export function AgentDetailPageBuilder() {
 struct AgentDetailPage {
   @Consume('navPathStack') navStack: NavPathStack;
   private vm: DetailVM = new DetailVM();
+  private modelVm: NewAgentVM = new NewAgentVM();
   private bp: BreakpointStore = BreakpointStore.getInstance();
   private listScroller: Scroller = new Scroller();
 
@@ -58,6 +67,8 @@ struct AgentDetailPage {
   @State errorMsg: string = '';
   @State resultText: string = '';
   @State streamNotice: string = '';
+  @State createRetryable: boolean = false;
+  @State queueImagesLost: boolean = false;
   @State runActive: boolean = false;
   @State sending: boolean = false;
   @State cancelling: boolean = false;
@@ -81,6 +92,15 @@ struct AgentDetailPage {
   @State queuedFollowUp: string = '';
   @State feed: TimelineItem[] = [];
   @State followUpMode: string = 'agent';
+  @State followModelLabel: string = '沿用';
+  @State followUpModel: string = '';
+  @State followVariantIndex: number = -1;
+  @State followVariant: string = '';
+  @State followModelGroups: ModelVendorGroup[] = [];
+  @State followVariantOptions: string[] = [];
+  @State followVariantTitle: string = '模式';
+  @State followParamRows: ModelParamRow[] = [];
+  @State failedFollow: boolean = false;
   @State compareUrl: string = '';
   @State pinned: boolean = false;
   @State attachedImages: PromptImage[] = [];
@@ -93,12 +113,20 @@ struct AgentDetailPage {
   private tickTimer: number = -1;
   private mdTimer: number = -1;
   private runStartMs: number = 0;
+  private lastKb: number = 0;
+  private lastListH: number = 0;
+  private pinTimer: number = -1;
+  private followSig: string = '';
 
   aboutToDisappear(): void {
     this.clearTick();
     if (this.mdTimer >= 0) {
       clearTimeout(this.mdTimer);
       this.mdTimer = -1;
+    }
+    if (this.pinTimer >= 0) {
+      clearTimeout(this.pinTimer);
+      this.pinTimer = -1;
     }
     this.vm.close();
   }
@@ -127,6 +155,9 @@ struct AgentDetailPage {
   }
 
   private sync(): void {
+    if (this.vm.agentId.length > 0 && this.vm.agentId !== this.agentId) {
+      this.agentId = this.vm.agentId;
+    }
     this.name = this.vm.name;
     this.status = this.vm.status;
     this.runStatus = this.vm.runStatus;
@@ -136,6 +167,8 @@ struct AgentDetailPage {
     this.errorMsg = this.vm.errorMsg;
     this.resultText = this.vm.resultText;
     this.streamNotice = this.vm.streamNotice;
+    this.createRetryable = this.vm.createRetryable;
+    this.queueImagesLost = this.vm.queueImagesLost;
     this.runActive = this.vm.isRunActive();
     this.sending = this.vm.sending;
     this.cancelling = this.vm.cancelling;
@@ -148,6 +181,8 @@ struct AgentDetailPage {
     this.usageRuns = this.vm.usageRuns;
     this.queuedFollowUp = this.vm.queuedFollowUp;
     this.followUpMode = this.vm.followUpMode;
+    this.followUpModel = this.vm.followUpModel;
+    this.failedFollow = this.vm.lastFailedPrompt.length > 0 || this.vm.lastFailedImages.length > 0;
     this.rebuildFeed();
     this.compareUrl = this.vm.compareUrl;
     this.followToolsLabel = toolsChipLabel(defaultEnv(), this.followUpMcp, [] as CustomSubagentDef[],
@@ -163,13 +198,53 @@ struct AgentDetailPage {
     }
 
     if (this.vm.stickToBottom) {
+      this.pinFeedToComposer(16, false);
+    }
+  }
+
+  private feedFollowSig(): string {
+    const last = this.feed.length > 0 ? this.feed[this.feed.length - 1].key : '';
+    return `${this.runActive ? 1 : 0}:${this.feed.length}:${last}:${this.queuedFollowUp.length}`;
+  }
+
+  private pinFeedToComposer(delayMs: number = 16, force: boolean = true): void {
+    const sig = this.feedFollowSig();
+    if (!force && sig === this.followSig) {
+      return;
+    }
+    this.followSig = sig;
+    this.vm.stickToBottom = true;
+    this.showJump = false;
+    if (this.pinTimer >= 0) {
+      clearTimeout(this.pinTimer);
+      this.pinTimer = -1;
+    }
+    const kick = (ms: number): void => {
       setTimeout(() => {
         try {
           this.listScroller.scrollEdge(Edge.Bottom);
         } catch (_e) {
         }
-      }, 16);
+      }, ms);
+    };
+    kick(delayMs);
+    this.pinTimer = setTimeout(() => {
+      this.pinTimer = -1;
+      try {
+        this.listScroller.scrollEdge(Edge.Bottom);
+      } catch (_e) {
+      }
+    }, delayMs + 200) as number;
+  }
+
+  private onKeyboardChrome(): void {
+    const kb = this.bp.keyboardInsetVp;
+    if (kb > 16 && this.lastKb <= 16) {
+      this.pinFeedToComposer(32, true);
+    } else if (kb <= 16 && this.lastKb > 16 && this.vm.stickToBottom) {
+      this.pinFeedToComposer(16, true);
     }
+    this.lastKb = kb;
   }
 
   private rebuildFeed(): void {
@@ -308,6 +383,155 @@ struct AgentDetailPage {
       e.indexOf('失效') >= 0;
   }
 
+  private showStreamNotice(): boolean {
+    const n = this.streamNotice;
+    if (n.length === 0) {
+      return false;
+    }
+    if (n === '结束后发送' || n.indexOf('结束后') >= 0 || n.indexOf('稍后自动') >= 0) {
+      return false;
+    }
+    return true;
+  }
+
+  private streamBusy(): boolean {
+    const n = this.streamNotice;
+    return n.indexOf('连接') >= 0 || n.indexOf('重连') >= 0 || n.indexOf('过期') >= 0 ||
+      n.indexOf('提交') >= 0;
+  }
+
+  private retryLabel(): string {
+    if (this.createRetryable) {
+      return '重试提交';
+    }
+    if (this.errorMsg.indexOf('排队') >= 0) {
+      return '重发';
+    }
+    const n = this.streamNotice;
+    if (n.indexOf('断开') >= 0 || n.indexOf('异常') >= 0 || n.indexOf('无法获取') >= 0) {
+      return '重连';
+    }
+    if (this.errorMsg.length > 0 && !this.authFail()) {
+      return '重试';
+    }
+    return '';
+  }
+
+  private syncFollowModels(): void {
+    this.followModelGroups = groupModels(this.modelVm.models);
+    this.refreshFollowModelMeta();
+  }
+
+  private followModelLabelText(): string {
+    if (this.followUpModel.length === 0) {
+      return '沿用';
+    }
+    return shortModelName(this.followModelLabel.length > 0 ? this.followModelLabel : this.followUpModel);
+  }
+
+  private pickFollowModel(id: string): void {
+    this.followUpModel = id;
+    this.modelVm.selectedModel = id;
+    this.followVariantIndex = -1;
+    this.followVariant = '';
+    this.modelVm.selectedVariantIndex = -1;
+    this.modelVm.selectedVariant = '';
+    this.modelVm.selectedParams = [];
+    this.refreshFollowModelMeta();
+    this.vm.followUpModel = id;
+    const payload = this.modelVm.modelPayload();
+    this.vm.followUpParams = payload && payload['params'] ? payload['params'] as Object[] : [];
+  }
+
+  private refreshFollowModelMeta(): void {
+    this.followVariantOptions = [];
+    this.followVariantTitle = '模式';
+    this.followParamRows = [];
+    this.followModelLabel = '沿用';
+    if (this.followUpModel.length === 0) {
+      return;
+    }
+    const models = this.modelVm.models;
+    for (let i = 0; i < models.length; i++) {
+      const m = models[i];
+      if (m.id !== this.followUpModel) {
+        continue;
+      }
+      this.followModelLabel = m.displayName ?? m.id;
+      const rows = buildParamRows(m);
+      if (rows.length > 0) {
+        this.followParamRows = rows;
+        this.modelVm.selectedParams = rowsToParams(rows);
+        return;
+      }
+      if (m.variants && m.variants.length > 0) {
+        const labels: string[] = [];
+        for (let j = 0; j < m.variants.length; j++) {
+          labels.push(variantLabel(m.variants[j], j));
+        }
+        this.followVariantOptions = labels;
+        this.followVariantTitle = variantSectionTitle(m.variants);
+        if (this.followVariantIndex < 0) {
+          let def = 0;
+          for (let j = 0; j < m.variants.length; j++) {
+            if (m.variants[j].isDefault === true) {
+              def = j;
+              break;
+            }
+          }
+          this.followVariantIndex = def;
+          this.modelVm.selectedVariantIndex = def;
+        }
+      }
+      return;
+    }
+    this.followModelLabel = this.followUpModel;
+  }
+
+  private pickFollowParam(rowIdx: number, valueIdx: number): void {
+    const next: ModelParamRow[] = [];
+    for (let i = 0; i < this.followParamRows.length; i++) {
+      const r = this.followParamRows[i];
+      next.push({
+        id: r.id,
+        title: r.title,
+        labels: r.labels,
+        values: r.values,
+        selected: i === rowIdx ? valueIdx : r.selected
+      });
+    }
+    this.followParamRows = next;
+    this.modelVm.selectedParams = rowsToParams(next);
+    const payload = this.modelVm.modelPayload();
+    this.vm.followUpParams = payload && payload['params'] ? payload['params'] as Object[] : [];
+  }
+
+  private async runRetry(): Promise<void> {
+    const label = this.retryLabel();
+    if (label === '重试提交') {
+      await this.vm.retryCreate();
+    } else if (label === '重发') {
+      await this.vm.retryQueuedFollowUp();
+    } else {
+      await this.vm.retryConnection();
+    }
+    this.sync();
+  }
+
+  private isFollowUpUser(item: TimelineItem): boolean {
+    let seen = 0;
+    for (let i = 0; i < this.feed.length; i++) {
+      if (this.feed[i].kind !== 'userPrompt') {
+        continue;
+      }
+      if (this.feed[i].key === item.key) {
+        return seen > 0;
+      }
+      seen += 1;
+    }
+    return false;
+  }
+
   private shortRepo(): string {
     if (this.vm.repoUrl.length > 0) {
       return repoTail(this.vm.repoUrl);
@@ -377,7 +601,7 @@ struct AgentDetailPage {
   private compactElapsed(): string {
     const _t = this.tick;
     if (this.runActive && this.runStartMs > 0) {
-      return elapsedLabel(Math.max(0, Math.floor((Date.now() - this.runStartMs) / 1000)));
+      return this.liveElapsed();
     }
     if (this.durationMs > 0) {
       return elapsedLabel(Math.floor(this.durationMs / 1000));
@@ -385,45 +609,68 @@ struct AgentDetailPage {
     return '';
   }
 
+  private liveElapsed(): string {
+    if (this.runStartMs <= 0) {
+      return '';
+    }
+    const sec = Math.max(0, Math.floor((Date.now() - this.runStartMs) / 1000));
+    if (sec < 15) {
+      return '';
+    }
+    return elapsedLabel(sec);
+  }
+
   private cardProcessTitle(item: TimelineItem): string {
-    const live = this.runActive && (item.streaming === true || item.runId === this.vm.activeRunId);
+    const live = item.streaming === true && this.runActive;
+    const tools = this.toolsForRun(item.runId);
+    const elapsed = this.elapsedForCard(item.runId, live);
     if (!live) {
-      return this.activityTitle(item);
+      return processDoneTitle(tools.length > 0, elapsed);
     }
+    const connecting = item.runId === 'pending' || (item.text ?? '').trim().length === 0;
+    return processLiveTitle(connecting, this.liveToolSlug(tools), tools.length > 0, elapsed);
+  }
+
+  private elapsedForCard(runId: string, live: boolean): string {
     const _t = this.tick;
-    let elapsed = '';
-    if (this.runStartMs > 0) {
-      elapsed = elapsedLabel(Math.max(0, Math.floor((Date.now() - this.runStartMs) / 1000)));
+    if (live) {
+      return this.liveElapsed();
     }
-    if (item.runId === 'pending' || (item.text ?? '').trim().length === 0) {
-      return elapsed.length > 0 ? `正在连接 · ${elapsed}` : '正在连接…';
+    if (this.durationMs > 0 && (runId === this.vm.activeRunId || runId.length === 0)) {
+      return elapsedLabel(Math.floor(this.durationMs / 1000));
     }
-    return elapsed.length > 0 ? `推理中 · ${elapsed}` : '推理中';
+    return '';
+  }
+
+  private liveToolSlug(tools: TimelineItem[]): string {
+    for (let i = tools.length - 1; i >= 0; i--) {
+      const t = tools[i].tool;
+      if (t && (t.status ?? 'running') !== 'completed') {
+        return toolSlug(t.name);
+      }
+    }
+    return '';
   }
 
   private processLabel(): string {
     const _t = this.tick;
     let elapsed = '';
     if (this.runActive && this.runStartMs > 0) {
-      elapsed = elapsedLabel(Math.max(0, Math.floor((Date.now() - this.runStartMs) / 1000)));
+      elapsed = this.liveElapsed();
     } else if (this.durationMs > 0) {
       elapsed = elapsedLabel(Math.floor(this.durationMs / 1000));
     }
     const steps = this.toolStepCount();
     if (this.runActive) {
-      return elapsed.length > 0 ? `推理中 · ${elapsed}` : '推理中';
+      return elapsed.length > 0 ? `在想下一步 · ${elapsed}` : '在想下一步';
     }
     if (steps === 0 && elapsed.length === 0) {
       return '';
     }
-    let s = '过程';
     if (elapsed.length > 0) {
-      s += ` · ${elapsed}`;
+      return steps > 0 ? `用了 ${elapsed}` : `思考了 ${elapsed}`;
     }
-    if (steps > 0) {
-      s += ` · ${steps}步`;
-    }
-    return s;
+    return steps > 0 ? '过程' : '';
   }
 
   private processBody(): string {
@@ -595,57 +842,51 @@ struct AgentDetailPage {
         })
 
         if (this.noticeLine.length > 0) {
-          Text(this.noticeLine)
-            .width('100%')
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(3)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .padding({ left: this.pagePad, right: this.pagePad, top: 8, bottom: 8 })
-            .backgroundColor($r('app.color.bg2'))
-            .onClick(() => {
+          StatusBanner({
+            text: this.noticeLine,
+            tone: 'info',
+            action: '知道了',
+            onAction: () => {
               this.dismissNotice();
-            })
+            }
+          })
+        }
+
+        if (this.showStreamNotice()) {
+          StatusBanner({
+            text: this.streamNotice,
+            tone: 'info',
+            action: this.retryLabel() === '重连' ? '重连' : '',
+            onAction: () => {
+              this.runRetry();
+            }
+          })
         }
 
         if (this.needsPlanUpgrade) {
-          Text('套餐不足，打开 Dashboard 升级 ↗')
-            .width('100%')
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.warn'))
-            .padding({ left: this.pagePad, right: this.pagePad, top: 6, bottom: 6 })
-            .backgroundColor($r('app.color.banner_offline_bg'))
-            .onClick(() => {
+          StatusBanner({
+            text: '套餐不足，打开 Dashboard 升级',
+            tone: 'warn',
+            action: '升级',
+            onAction: () => {
               this.openLink('https://cursor.com/dashboard');
-            })
+            }
+          })
         }
 
         if (this.failed() || this.errorMsg.length > 0) {
-          Row({ space: 8 }) {
-            Text(this.errorMsg.length > 0 ? this.errorMsg : '失败')
-              .fontSize(Tokens.typeCaption)
-              .fontColor($r('app.color.err'))
-              .layoutWeight(1)
-              .maxLines(3)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            if (this.authFail()) {
-              Text('去设置')
-                .fontSize(Tokens.typeCaption)
-                .fontWeight(FontWeight.Medium)
-                .fontColor($r('app.color.accent_on'))
-                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-                .backgroundColor($r('app.color.accent'))
-                .borderRadius(Tokens.radiusChip)
-                .onClick(() => {
-                  this.navStack.pushPath({ name: 'Settings' });
-                })
+          StatusBanner({
+            text: this.errorMsg.length > 0 ? this.errorMsg : '失败',
+            tone: 'danger',
+            action: this.authFail() ? '去设置' : this.retryLabel(),
+            onAction: () => {
+              if (this.authFail()) {
+                this.navStack.pushPath({ name: 'Settings' });
+              } else {
+                this.runRetry();
+              }
             }
-          }
-          .width('100%')
-          .constraintSize({ minHeight: Tokens.touchMin })
-          .padding({ left: this.pagePad, right: this.pagePad, top: 10, bottom: 10 })
-          .backgroundColor($r('app.color.banner_error_bg'))
-          .alignItems(VerticalAlign.Center)
+          })
         }
 
         if (this.copyHint.length > 0) {
@@ -684,8 +925,10 @@ struct AgentDetailPage {
     }
     .hideTitleBar(true)
     .bindSheet($$this.showSheet, this.sheetBody(), {
-      height: this.sheetKind === 'artifacts' ? SheetSize.MEDIUM : SheetSize.FIT_CONTENT,
+      height: this.sheetKind === 'artifacts' || this.sheetKind === 'model' ? SheetSize.MEDIUM :
+        SheetSize.FIT_CONTENT,
       dragBar: true,
+      showClose: false,
       backgroundColor: $r('app.color.overlay')
     })
     .backgroundColor($r('app.color.bg0'))
@@ -704,6 +947,7 @@ struct AgentDetailPage {
         this.topInset = this.bp.safeTop();
         this.bottomInset = this.bp.composerBottom();
         this.isHover = this.bp.isHover;
+        this.onKeyboardChrome();
       });
       const p = ctx.pathInfo.param as Record<string, Object>;
       if (p && p['agentId']) {
@@ -711,7 +955,9 @@ struct AgentDetailPage {
         this.vm.setUiListener(() => {
           this.sync();
         });
-        this.vm.open(this.agentId).then(() => {
+        const seeded = `${p['seed'] ?? ''}` === '1' || this.agentId.indexOf('local-') === 0;
+        const opened = seeded ? this.vm.openFromCreate(this.agentId) : this.vm.open(this.agentId);
+        opened.then(() => {
           this.vm.restoreQueue().then(() => {
             this.sync();
             this.consumeNotice();
@@ -721,6 +967,11 @@ struct AgentDetailPage {
         });
         PrefStore.getInstance().getPinnedIds().then((ids: string[]) => {
           this.pinned = ids.indexOf(this.agentId) >= 0;
+        });
+        this.modelVm.hydrateFromCache();
+        this.syncFollowModels();
+        this.modelVm.loadMeta(false).then(() => {
+          this.syncFollowModels();
         });
         PrefStore.getInstance().getLastTools().then((raw: string) => {
           if (this.followUpMcp.length === 0) {
@@ -769,7 +1020,7 @@ struct AgentDetailPage {
     } else {
       Column() {
         Stack({ alignContent: Alignment.Bottom }) {
-          List({ space: 10, scroller: this.listScroller }) {
+          List({ space: Tokens.sec, scroller: this.listScroller }) {
             ForEach(this.feed, (item: TimelineItem) => {
               ListItem() {
                 this.timelineItem(item)
@@ -778,7 +1029,7 @@ struct AgentDetailPage {
           }
           .width('100%')
           .height('100%')
-          .padding({ left: this.pagePad + 4, right: this.pagePad + 4 })
+          .padding({ left: this.pagePad, right: this.pagePad })
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
           .cachedCount(18)
@@ -808,6 +1059,16 @@ struct AgentDetailPage {
         }
         .layoutWeight(1)
         .width('100%')
+        .onAreaChange((_old: Area, now: Area) => {
+          const raw = now.height;
+          const h = typeof raw === 'number' ? raw : 0;
+          if (h > 0 && this.lastListH > 8 && h < this.lastListH - 12 && this.vm.stickToBottom) {
+            this.pinFeedToComposer(20);
+          }
+          if (h > 0) {
+            this.lastListH = h;
+          }
+        })
       }
       .layoutWeight(1)
       .width('100%')
@@ -834,14 +1095,6 @@ struct AgentDetailPage {
       .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 4 })
     }
 
-    if (this.sending || this.streamNotice.length > 0) {
-      Text(this.streamNotice.length > 0 ? this.streamNotice : '正在提交…')
-        .fontSize(Tokens.typeCaption)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%')
-        .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 4 })
-    }
-
     PromptShell({
       follow: true,
       placeholder: '追问…',
@@ -855,8 +1108,16 @@ struct AgentDetailPage {
       toolsOn: countMcp(this.followUpMcp) > 0,
       toolsLabel: this.followToolsLabel,
       followUpMode: this.followUpMode,
+      modelLabel: this.followModelLabelText(),
+      failedFollow: this.failedFollow,
       queued: this.queuedFollowUp,
+      queueNote: this.queueImagesLost ? '图片未保存' : '',
       bottomPad: this.bottomInset,
+      onFocusChange: (on: boolean) => {
+        if (on) {
+          this.pinFeedToComposer(40, true);
+        }
+      },
       onSend: async () => {
         const text = this.draft;
         const imgs = this.attachedImages;
@@ -885,9 +1146,23 @@ struct AgentDetailPage {
         this.vm.clearQueuedFollowUp();
         this.sync();
       },
+      onEditQueue: () => {
+        const text = this.vm.takeQueuedForEdit();
+        if (text.length > 0) {
+          this.draft = text;
+        }
+        this.sync();
+      },
       onModeChange: (mode: string) => {
         this.vm.followUpMode = mode;
         this.followUpMode = mode;
+      },
+      onModel: () => {
+        this.openSheet('model');
+      },
+      onRetryFollow: async () => {
+        await this.vm.retryFailedFollowUp();
+        this.sync();
       },
       onImage: async () => {
         await this.attachImages();
@@ -909,9 +1184,56 @@ struct AgentDetailPage {
       this.usageSheet()
     } else if (this.sheetKind === 'tools') {
       this.followToolsSheet()
+    } else if (this.sheetKind === 'model') {
+      this.followModelSheet()
     } else {
       this.detailMenu()
     }
+  }
+
+  @Builder
+  followModelSheet() {
+    Column({ space: 10 }) {
+      Text('本轮模型')
+        .fontSize(Tokens.typeHeadline)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+      Text('默认沿用创建时的模型。选了才覆盖这一轮。')
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+      ModelPicker({
+        selectedModel: this.followUpModel,
+        selectedVariantIndex: this.followVariantIndex,
+        groups: this.followModelGroups,
+        variantOptions: this.followVariantOptions,
+        variantTitle: this.followVariantTitle,
+        paramRows: this.followParamRows,
+        allowAuto: true,
+        autoLabel: '沿用',
+        onPick: (id: string) => {
+          this.pickFollowModel(id);
+        },
+        onPickParam: (rowIdx: number, valueIdx: number) => {
+          this.pickFollowParam(rowIdx, valueIdx);
+        },
+        onPickVariant: (idx: number) => {
+          this.followVariantIndex = idx;
+          this.modelVm.selectedVariantIndex = idx;
+          if (idx >= 0 && idx < this.followVariantOptions.length) {
+            this.followVariant = this.followVariantOptions[idx];
+            this.modelVm.selectedVariant = this.followVariant;
+          }
+          const payload = this.modelVm.modelPayload();
+          this.vm.followUpParams = payload && payload['params'] ? payload['params'] as Object[] : [];
+        }
+      })
+    }
+    .width('100%')
+    .padding(16)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor($r('app.color.bg1'))
   }
 
   @Builder
@@ -1051,7 +1373,7 @@ struct AgentDetailPage {
             .width('100%')
             .fontSize(Tokens.typeCaption)
             .fontColor($r('app.color.text_tertiary'))
-            .fontFamily('monospace')
+            .fontFamily(Tokens.fontMono)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
@@ -1154,10 +1476,11 @@ struct AgentDetailPage {
         .fontSize(Tokens.typeProse)
         .fontColor($r('app.color.text_primary'))
         .onClick(async () => {
+          const wasPinned = this.pinned;
           await this.togglePin();
           this.closeSheet();
           Haptics.success();
-          showToast(this.pinned ? '已置顶' : '已取消置顶');
+          showToast(wasPinned ? '已取消置顶' : '已置顶');
         })
       Text('系统浏览器打开')
         .width('100%')
@@ -1200,7 +1523,7 @@ struct AgentDetailPage {
             if (ok) {
               Haptics.success();
               showToast('已归档');
-              InboxVM.getInstance().removeLocal(this.agentId);
+              PrefStore.getInstance().setIncludeArchived(true);
               this.vm.close();
               this.navStack.pop();
             } else {
@@ -1237,34 +1560,20 @@ struct AgentDetailPage {
     .width('100%')
   }
 
-  private runHeaderLabel(raw: string): string {
-    const t = raw.trim();
-    if (t.length === 0 || t === 'Run' || t === 'run') {
-      return '运行';
-    }
-    if (t.indexOf('Run') === 0) {
-      return `运行${t.substring(3)}`;
-    }
-    return t;
-  }
-
   private activityTitle(item: TimelineItem): string {
     if (item.kind === 'step') {
       const title = (item.text ?? '').trim();
       if (this.runActive && item.streaming === true) {
-        return title.length > 0 ? `步骤 · ${title}` : '步骤';
+        return title.length > 0 ? title : '在想下一步';
       }
       return title.length > 0 ? title : '步骤';
     }
-    const isThink = item.kind === 'thinking';
-    if (isThink) {
-      return (this.runActive && item.streaming === true) ? '推理中' : '推理过程';
+    const tools = this.toolsForRun(item.runId);
+    const elapsed = this.elapsedForCard(item.runId, item.streaming === true && this.runActive);
+    if (item.streaming === true && this.runActive) {
+      return processLiveTitle(false, this.liveToolSlug(tools), tools.length > 0, elapsed);
     }
-    if (this.runActive && item.streaming === true) {
-      return '进行中';
-    }
-    const n = item.stepCount && item.stepCount > 0 ? item.stepCount : 1;
-    return `过程 · ${n} 步`;
+    return processDoneTitle(tools.length > 0 || item.kind !== 'thinking', elapsed);
   }
 
   private rowKey(item: TimelineItem): string {
@@ -1324,31 +1633,69 @@ struct AgentDetailPage {
   @Builder
   timelineItem(item: TimelineItem) {
     if (item.kind === 'userPrompt') {
-      Column() {
-        if (this.isPlainUser(item.text ?? '')) {
-          Text(item.text ?? '')
-            .fontSize(Tokens.typeCallout)
-            .fontColor($r('app.color.text_primary'))
-            .lineHeight(22)
-            .maxLines(6)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-            .constraintSize({ minHeight: Tokens.touchMin })
-        } else {
-          MarkdownLite({
-            content: item.text ?? '',
-            compact: true
-          })
+      Column({ space: 4 }) {
+        if (this.isFollowUpUser(item)) {
+          Row({ space: 8 }) {
+            Divider()
+              .color($r('app.color.border'))
+              .layoutWeight(1)
+            Text('追问')
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.text_tertiary'))
+            Divider()
+              .color($r('app.color.border'))
+              .layoutWeight(1)
+          }
+          .width('100%')
+          .padding({ top: 12, bottom: 4 })
+          .alignItems(VerticalAlign.Center)
+          .transition(chromeTransition())
         }
+        Column() {
+          if (this.isPlainUser(item.text ?? '')) {
+            Text(item.text ?? '')
+              .fontSize(Tokens.typeCallout)
+              .fontFamily(Tokens.fontUi)
+              .fontColor($r('app.color.text_primary'))
+              .lineHeight(Tokens.lineList)
+              .maxLines(6)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+              .constraintSize({ minHeight: Tokens.touchMin })
+          } else {
+            MarkdownLite({
+              content: item.text ?? '',
+              compact: true
+            })
+          }
+          if ((item.usageShort ?? '').length > 0) {
+            Text(item.usageShort ?? '')
+              .fontSize(Tokens.typeMicro)
+              .fontFamily(Tokens.fontUi)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%')
+              .padding({ top: 6 })
+          }
+        }
+        .width('100%')
+        .constraintSize({ minHeight: 52 })
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        .backgroundColor(item.failed ? $r('app.color.banner_error_bg') : $r('app.color.user_bubble'))
+        .borderRadius(Tokens.radiusMd)
       }
       .width('100%')
-      .constraintSize({ minHeight: 52 })
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .backgroundColor(item.failed ? $r('app.color.banner_error_bg') : $r('app.color.user_bubble'))
-      .borderRadius(Tokens.radiusMd)
     } else if (item.kind === 'runHeader') {
-      Column().width('100%').height(0)
+      Row({ space: 8 }) {
+        Text(runHeaderVerb(item.statusLabel ?? '', this.elapsedForCard(item.runId, false)))
+          .fontSize(Tokens.typeMicro)
+          .fontColor($r('app.color.text_tertiary'))
+      }
+      .width('100%')
+      .padding({ top: 10, bottom: 2 })
+      .alignItems(VerticalAlign.Center)
+      .transition(chromeTransition())
     } else if (item.kind === 'thinking' || item.kind === 'progress' || item.kind === 'step') {
       if (this.isLeadProcess(item)) {
         ActivityCard({
@@ -1373,17 +1720,13 @@ struct AgentDetailPage {
     } else if (item.kind === 'assistant') {
       Column({ space: 4 }) {
         if (item.streaming === true && !this.mdSettled) {
-          Row({ space: 6 }) {
-            Text('正在写')
-              .fontSize(Tokens.typeMicro)
-              .fontColor($r('app.color.text_tertiary'))
-              .opacity(shimmerOpacity(this.shimmerOn))
-              .animation({ duration: shimmerMs(), curve: Curve.EaseInOut })
-          }
           Text(item.text ?? '')
             .fontSize(Tokens.typeProse)
+            .fontFamily(Tokens.fontUi)
             .fontColor($r('app.color.text_primary'))
             .lineHeight(Tokens.lineProse)
+            .textAlign(TextAlign.Start)
+            .wordBreak(WordBreak.BREAK_ALL)
             .width('100%')
         } else {
           MarkdownLite({
@@ -1410,14 +1753,18 @@ struct AgentDetailPage {
   }
 
   private shouldSkipOutcome(item: TimelineItem): boolean {
-    const body = item.text ?? '';
+    const body = (item.text ?? '').trim();
     if (body.length === 0) {
-      return this.resultText.length > 0;
+      return true;
     }
     if (body === this.resultText && this.resultText.length > 0) {
       return true;
     }
-    if (body.indexOf('状态：') === 0 && this.resultText.length > 0) {
+    if (body.indexOf('状态：') === 0) {
+      return true;
+    }
+    const st = `${item.statusLabel ?? ''}`;
+    if (st === 'FINISHED' && (body === '已完成' || body === '运行 · 已完成')) {
       return true;
     }
     return false;
@@ -1436,16 +1783,18 @@ struct AgentDetailPage {
             tint: this.outcomeTone(item.statusLabel ?? '')
           })
           Text(this.statusZh(item.statusLabel ?? ''))
-            .fontSize(12)
+            .fontSize(Tokens.typeMicro)
+            .fontFamily(Tokens.fontUi)
             .fontWeight(FontWeight.Medium)
             .fontColor(this.outcomeTone(item.statusLabel ?? ''))
         }
         .width('100%')
         if ((item.text ?? '').length > 0) {
           Text(item.text ?? '')
-            .fontSize(14)
+            .fontSize(Tokens.typeCallout)
+            .fontFamily(Tokens.fontUi)
             .fontColor($r('app.color.text_secondary'))
-            .lineHeight(Tokens.lineCaption + 2)
+            .lineHeight(Tokens.lineCaption)
             .width('100%')
         }
       }

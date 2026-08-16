@@ -52,3 +52,41 @@ export struct HuChip {
     })
   }
 }
+
+/** Ink action on banners: 重连 / 重试 / 重发. */
+@Component
+export struct HuActionChip {
+  @Prop label: string = '';
+  @State private pressed: boolean = false;
+  onTap: () => void = () => {
+  };
+
+  build() {
+    Text(this.label)
+      .fontSize(Tokens.typeCaption)
+      .fontWeight(FontWeight.Medium)
+      .fontColor($r('app.color.accent_on'))
+      .constraintSize({ minHeight: 32 })
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .textAlign(TextAlign.Center)
+      .backgroundColor($r('app.color.accent'))
+      .borderRadius(Tokens.radiusChip)
+      .scale({
+        x: this.pressed ? Tokens.pressScale : 1,
+        y: this.pressed ? Tokens.pressScale : 1
+      })
+      .opacity(this.pressed ? 0.82 : 1)
+      .animation({ duration: 120, curve: Curve.EaseOut })
+      .onTouch((e: TouchEvent) => {
+        if (e.type === TouchType.Down) {
+          this.pressed = true;
+        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          this.pressed = false;
+        }
+      })
+      .onClick(() => {
+        Haptics.click();
+        this.onTap();
+      })
+  }
+}

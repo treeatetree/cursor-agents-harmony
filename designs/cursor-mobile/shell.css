@@ -1,6 +1,6 @@
 html, body { margin: 0; height: 100%; overscroll-behavior: none; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "HarmonyOS Sans", system-ui, sans-serif;
+  font-family: var(--font-ui, Geist, -apple-system, BlinkMacSystemFont, "HarmonyOS Sans", system-ui, sans-serif);
   background: #111;
   color: var(--ink);
 }

@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="app" data-sys="be" data-mode="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>间距 · 弹层 · 异常条</title>
+  <link rel="stylesheet" href="tokens.css" />
+  <link rel="stylesheet" href="app.css" />
+  <style>
+    body { margin: 0; background: #111; color: #FAFAFA; font-family: -apple-system, system-ui, sans-serif; }
+    .board { display: grid; grid-template-columns: repeat(3, 459px); gap: 28px; justify-content: center; padding: 36px 24px 48px; }
+    .col { display: flex; flex-direction: column; gap: 10px; }
+    .col h2 { margin: 0; font-size: 13px; font-weight: 500; color: #A1A1AA; letter-spacing: .04em; }
+    .phone { width: 459px; height: 672px; background: var(--bg); overflow: hidden; border-radius: 0; }
+    @media (max-width: 1500px) {
+      .board { grid-template-columns: 459px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="board">
+    <div class="col">
+      <h2>INBOX · 分组头 / 卡内三行 / 异常条</h2>
+      <div class="phone" data-theme="app" data-sys="be">
+        <div class="screen">
+          <div class="chrome">
+            <div class="be-filters">
+              <span class="be-pill"></span>
+              <button class="seg on">全部</button>
+              <button class="seg">运行中</button>
+              <button class="seg">失败</button>
+              <button class="seg">已完成</button>
+            </div>
+            <div class="chrome-actions">
+              <button class="plus round" aria-label="新建">+</button>
+            </div>
+          </div>
+          <div class="banner danger">
+            <span style="flex:1">创建失败</span>
+            <button class="act" type="button">重试</button>
+          </div>
+          <div class="inbox-scroll">
+            <div class="group">
+              <div class="group-h">brian / HM_APP</div>
+              <div class="grid">
+                <div class="card" data-running="1">
+                  <div class="card-top"><div class="card-title">封面 Inbox 外屏也要固定双列</div></div>
+                  <div class="card-sub">正在改主栏，不再切单列</div>
+                  <div class="card-foot"><span class="time" style="color:var(--run)">1m 12s</span></div>
+                </div>
+                <div class="card">
+                  <div class="card-top"><div class="card-title">追问改模型接到 createRun</div></div>
+                  <div class="card-sub">默认沿用，选了才写 model</div>
+                  <div class="card-foot"><span class="time">昨天</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="group">
+              <div class="group-h">cursor / agents</div>
+              <div class="grid">
+                <div class="card">
+                  <div class="card-top"><div class="card-title">弱网先上屏，失败再撤</div></div>
+                  <div class="card-sub">归档乐观，删除仍等服务器</div>
+                  <div class="card-foot"><span class="st" style="color:var(--err)">失败</span><span class="time">3h</span></div>
+                </div>
+                <div class="card">
+                  <div class="card-top"><div class="card-title">完成通知开关</div></div>
+                  <div class="card-sub">看当前会话不弹系统通知</div>
+                  <div class="card-foot"><span class="time">周一</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <h2>新建 · 半屏</h2>
+      <div class="phone" data-theme="app" data-sys="be">
+        <div class="screen">
+          <div class="chrome">
+            <div class="be-filters">
+              <span class="be-pill"></span>
+              <button class="seg on">全部</button>
+              <button class="seg">运行中</button>
+              <button class="seg">失败</button>
+              <button class="seg">已完成</button>
+            </div>
+            <div class="chrome-actions">
+              <button class="plus round">+</button>
+            </div>
+          </div>
+          <div class="inbox-scroll">
+            <div class="group">
+              <div class="group-h">brian / HM_APP</div>
+              <div class="grid">
+                <div class="card"><div class="card-top"><div class="card-title">封面 Inbox 外屏也要固定双列</div></div><div class="card-sub">正在改主栏</div><div class="card-foot"><span class="time">1m</span></div></div>
+                <div class="card"><div class="card-top"><div class="card-title">追问改模型</div></div><div class="card-sub">默认沿用</div><div class="card-foot"><span class="time">昨天</span></div></div>
+              </div>
+            </div>
+          </div>
+          <button class="sheet-mask" type="button" aria-label="关闭"></button>
+          <div class="sheet large">
+            <div class="screen">
+              <div class="bar">
+                <button class="icon-btn" aria-label="关闭">‹</button>
+                <div class="bar-title">新任务</div>
+              </div>
+              <div class="prompt-shell fill">
+                <textarea class="prompt-ta" placeholder="要做什么？目标和约束">封面 Inbox 固定双列，卡片高 116。</textarea>
+                <div class="prompt-tools">
+                  <button class="chip warn">HM_APP</button>
+                  <button class="chip">自动</button>
+                  <button class="chip">更多</button>
+                  <button class="send on" style="margin-left:auto" aria-label="发送">↑</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <h2>消息流 · 正文阶梯 / 通知条</h2>
+      <div class="phone" data-theme="app" data-sys="be">
+        <div class="screen">
+          <div class="bar">
+            <button class="icon-btn">‹</button>
+            <div class="bar-mid">
+              <div class="bar-title">封面 Inbox 外屏也要固定双列</div>
+              <div class="bar-sub">运行中 · 1m 12s</div>
+            </div>
+          </div>
+          <div class="banner info">
+            <span style="flex:1">网络已断开 · 显示缓存</span>
+            <button class="act" type="button">重试</button>
+          </div>
+          <div class="timeline">
+            <div class="bubble user">封面 Inbox 外屏也要固定双列，不要再切单列。</div>
+            <button class="layer-row" type="button">
+              <span class="layer-k">过程 · 18s · 4 步</span>
+            </button>
+            <div class="answer">
+              <h2>固定双列</h2>
+              <p>外屏、内屏竖都走同一套卡高。标题 15/20，预览 12/16，分组头 13/18，不再各写一行。</p>
+              <p>消息流正文 16/26，列表 24，用户气泡 14/24。过程行仍是 12/16。</p>
+            </div>
+            <div class="outcome">已完成 · 打开 PR</div>
+          </div>
+          <div class="prompt-bar">
+            <div class="prompt-shell">
+              <textarea class="prompt-ta" placeholder="追问…">再收一下段距</textarea>
+              <div class="prompt-tools">
+                <button class="chip">沿用</button>
+                <button class="chip">代理</button>
+                <button class="chip">重发</button>
+                <button class="send on" style="margin-left:auto">↑</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

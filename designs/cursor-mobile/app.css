@@ -1,6 +1,6 @@
 * { box-sizing: border-box; }
 .screen, .theme-frame {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "HarmonyOS Sans", system-ui, sans-serif;
+  font-family: var(--font-ui, Geist, -apple-system, BlinkMacSystemFont, "HarmonyOS Sans", system-ui, sans-serif);
   font-weight: var(--w-reg);
   color: var(--ink);
 }
@@ -35,8 +35,10 @@
 .inbox-scroll.fit { overflow: hidden; }
 .group { margin-bottom: var(--sec); }
 .group-h {
-  font-size: var(--t-caption); color: var(--ink2);
-  padding: 4px 2px 6px;
+  font-size: var(--t-caption); line-height: var(--lh-caption);
+  color: var(--ink2); font-weight: var(--w-med);
+  letter-spacing: var(--track-group);
+  padding: 8px 2px 8px;
 }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .list { display: flex; flex-direction: column; gap: 4px; }
@@ -57,7 +59,7 @@
 }
 .row .card-title { -webkit-line-clamp: 1; }
 .card-sub {
-  font-size: var(--t-micro); color: var(--ink2); line-height: 16px;
+  font-size: var(--t-micro); color: var(--ink2); line-height: var(--lh-micro);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .card-foot { display: flex; align-items: center; gap: 8px; font-size: var(--t-micro); color: var(--ink3); }
@@ -96,9 +98,10 @@
 .chip.warn { color: var(--accent); background: var(--accent-soft); }
 .chip.on { background: var(--ink); color: var(--bg); }
 .timeline { flex: 1; overflow: auto; padding: 4px var(--pad) 8px; }
+.timeline .answer { margin-top: 8px; }
 .bubble.user {
-  background: var(--bg2); border-radius: 12px; padding: 8px 12px;
-  font-size: var(--t-callout); line-height: 20px; color: var(--ink2);
+  background: var(--bg2); border-radius: 12px; padding: 10px 12px;
+  font-size: var(--t-callout); line-height: var(--lh-list); color: var(--ink);
   margin-bottom: 8px;
 }
 .run-h {
@@ -118,7 +121,7 @@
   text-overflow: ellipsis; white-space: nowrap;
 }
 .layer-body {
-  font-size: var(--t-micro); color: var(--ink3); line-height: 18px;
+  font-size: var(--t-micro); color: var(--ink3); line-height: var(--lh-micro);
   padding: 0 0 8px;
 }
 .layer-body .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 0; }
@@ -174,7 +177,7 @@
 .outcome {
   display: flex; align-items: center; gap: 8px;
   margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line);
-  font-size: var(--t-micro); color: var(--ink2);
+  font-size: var(--t-callout); line-height: var(--lh-caption); color: var(--ink2);
 }
 .composer, .prompt-row, .signal-compose {
   display: flex; align-items: center; gap: 6px;
@@ -351,6 +354,32 @@
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 9;
   background: var(--bg1); border-top: 1px solid var(--line);
   padding: 6px var(--pad) 14px;
+}
+.sheet.large {
+  height: 50%;
+  border-radius: 16px 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sheet.large .screen { height: 100%; }
+.banner {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; min-height: 44px;
+  padding: 8px var(--pad);
+  font-size: var(--t-caption); line-height: var(--lh-caption);
+  border: 0; text-align: left; font-family: inherit;
+}
+.banner.info { background: var(--bg2); color: var(--ink); }
+.banner.warn { background: var(--accent-soft); color: var(--ink); }
+.banner.danger { background: #F8E8E6; color: var(--err); }
+[data-mode="dark"] .banner.danger { background: #3A2220; }
+.banner .act {
+  flex: 0 0 auto; border: 0; background: transparent;
+  color: inherit; font-size: var(--t-caption); font-weight: var(--w-med);
+  font-family: inherit; cursor: pointer; padding: 0 4px;
+  min-height: 44px;
 }
 .sheet-item {
   display: block; width: 100%; height: 48px; border: 0; background: transparent;

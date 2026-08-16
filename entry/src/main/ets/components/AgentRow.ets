@@ -2,6 +2,7 @@ import { AgentSummary } from '../models/Api';
 import { Tokens } from '../theme/Tokens';
 import { relativeTime } from '../utils/TimeFmt';
 import { shortRepoName } from '../utils/DisplayFmt';
+import { userStampIso } from '../utils/InboxGrouping';
 
 @Reusable
 @Component
@@ -140,7 +141,7 @@ export struct AgentRow {
           } else {
             Blank().layoutWeight(1)
           }
-          Text(relativeTime(this.agent.updatedAt || this.agent.createdAt))
+          Text(relativeTime(userStampIso(this.agent)))
             .fontSize(Tokens.typeMicro)
             .fontColor($r('app.color.text_tertiary'))
         }

@@ -66,10 +66,13 @@ export function applyInboxQuery(
 }
 
 export function groupAgents(items: AgentSummary[], mode: GroupMode, pinned: string[] = []): GroupBucket[] {
+  const archived: AgentSummary[] = [];
   const pinItems: AgentSummary[] = [];
   const rest: AgentSummary[] = [];
   for (let i = 0; i < items.length; i++) {
-    if (isPinnedId(items[i].id, pinned)) {
+    if (items[i].status === 'ARCHIVED') {
+      archived.push(items[i]);
+    } else if (isPinnedId(items[i].id, pinned)) {
       pinItems.push(items[i]);
     } else {
       rest.push(items[i]);
@@ -87,22 +90,29 @@ export function groupAgents(items: AgentSummary[], mode: GroupMode, pinned: stri
   } else {
     buckets = groupByTime(rest);
   }
-  // Keep the incoming item order (applyInboxQuery already sorted).
+  for (let i = 0; i < buckets.length; i++) {
+    buckets[i].items.sort((x: AgentSummary, y: AgentSummary) => recencyMs(y) - recencyMs(x));
+  }
+  // Time buckets stay today → older. Repo groups rise by latest item. Status by urgency.
   if (mode === 'repo') {
     buckets.sort((g: GroupBucket, h: GroupBucket) => bucketLatest(h) - bucketLatest(g));
-  } else {
+  } else if (mode === 'status') {
     buckets.sort((g: GroupBucket, h: GroupBucket) => bucketUrgency(g) - bucketUrgency(h));
   }
+  const next: GroupBucket[] = [];
   if (pinItems.length > 0) {
-    const next: GroupBucket[] = [{ key: 'pinned', label: '置顶', items: pinItems }];
-    for (let i = 0; i < buckets.length; i++) {
-      if (buckets[i].items.length > 0) {
-        next.push(buckets[i]);
-      }
-    }
-    return next;
+    next.push({ key: 'pinned', label: '置顶', items: pinItems });
   }
-  return buckets;
+  for (let i = 0; i < buckets.length; i++) {
+    if (buckets[i].items.length > 0) {
+      next.push(buckets[i]);
+    }
+  }
+  if (archived.length > 0) {
+    archived.sort((x: AgentSummary, y: AgentSummary) => recencyMs(y) - recencyMs(x));
+    next.push({ key: 'archived', label: '归档', items: archived });
+  }
+  return next;
 }
 
 export function hasPr(a: AgentSummary): boolean {
@@ -148,7 +158,7 @@ export function urgencyOf(a: AgentSummary): number {
 function bucketLatest(g: GroupBucket): number {
   let best = 0;
   for (let i = 0; i < g.items.length; i++) {
-    const t = stamp(g.items[i].updatedAt || g.items[i].createdAt);
+    const t = recencyMs(g.items[i]);
     if (t > best) {
       best = t;
     }
@@ -223,15 +233,111 @@ function compareAgents(x: AgentSummary, y: AgentSummary, sort: SortMode): number
   if (sort === 'created') {
     return stamp(y.createdAt) - stamp(x.createdAt);
   }
-  return stamp(y.updatedAt || y.createdAt) - stamp(x.updatedAt || x.createdAt);
+  return recencyMs(y) - recencyMs(x);
 }
 
-function stamp(iso: string): number {
+export function stamp(iso: string): number {
   if (!iso || iso.length === 0) {
     return 0;
   }
   const t = Date.parse(iso);
   return t === t ? t : 0;
+}
+
+export function isLocalAgentId(id: string): boolean {
+  return id.indexOf('local-') === 0;
+}
+
+export function userStampIso(a: AgentSummary): string {
+  if (a.lastUserAt && a.lastUserAt.length > 0) {
+    return a.lastUserAt;
+  }
+  if (a.createdAt && a.createdAt.length > 0) {
+    return a.createdAt;
+  }
+  return a.updatedAt ?? '';
+}
+
+export function recencyMs(a: AgentSummary): number {
+  return stamp(userStampIso(a));
+}
+
+export function sortByRecency(items: AgentSummary[]): AgentSummary[] {
+  const out: AgentSummary[] = [];
+  for (let i = 0; i < items.length; i++) {
+    out.push(items[i]);
+  }
+  out.sort((x: AgentSummary, y: AgentSummary) => recencyMs(y) - recencyMs(x));
+  return out;
+}
+
+export function pickNewerIso(a: string, b: string): string {
+  if (!a || a.length === 0) {
+    return b ?? '';
+  }
+  if (!b || b.length === 0) {
+    return a;
+  }
+  return stamp(a) >= stamp(b) ? a : b;
+}
+
+const LOCAL_GRACE_MS = 3 * 60 * 1000;
+
+/** Keep local recency / not-yet-listed cards when the list API lags. */
+export function mergeInboxLists(
+  remote: AgentSummary[],
+  local: AgentSummary[],
+  heldIds: string[],
+  nowMs: number
+): AgentSummary[] {
+  const localById: Record<string, AgentSummary> = {};
+  for (let i = 0; i < local.length; i++) {
+    localById[local[i].id] = local[i];
+  }
+  const held: Record<string, boolean> = {};
+  for (let i = 0; i < heldIds.length; i++) {
+    held[heldIds[i]] = true;
+  }
+  const seen: Record<string, boolean> = {};
+  const out: AgentSummary[] = [];
+  for (let i = 0; i < remote.length; i++) {
+    const a = remote[i];
+    const prev = localById[a.id];
+    if (prev) {
+      a.updatedAt = pickNewerIso(a.updatedAt, prev.updatedAt);
+      a.createdAt = pickNewerIso(a.createdAt, prev.createdAt);
+      const userAt = pickNewerIso(a.lastUserAt ?? '', prev.lastUserAt ?? '');
+      if (userAt.length > 0) {
+        a.lastUserAt = userAt;
+      }
+      const remoteRun = `${a.latestRunId ?? ''}`;
+      const localRun = `${prev.latestRunId ?? ''}`;
+      if (remoteRun.length === 0 && localRun.length > 0) {
+        a.latestRunId = prev.latestRunId;
+      }
+      const sameRun = `${a.latestRunId ?? ''}` === localRun || localRun.length === 0;
+      if (sameRun && (!a.latestRunStatus || `${a.latestRunStatus}`.length === 0) &&
+        prev.latestRunStatus) {
+        a.latestRunStatus = prev.latestRunStatus;
+      }
+      if (sameRun && (!a.latestResult || a.latestResult.length === 0) && prev.latestResult) {
+        a.latestResult = prev.latestResult;
+      }
+    }
+    out.push(a);
+    seen[a.id] = true;
+  }
+  for (let i = 0; i < local.length; i++) {
+    const a = local[i];
+    if (seen[a.id]) {
+      continue;
+    }
+    const age = nowMs - recencyMs(a);
+    if (held[a.id] || isLocalAgentId(a.id) || (age >= 0 && age < LOCAL_GRACE_MS)) {
+      out.push(a);
+    }
+  }
+  return out;
 }
 
 function repoKey(a: AgentSummary): string {
@@ -303,7 +409,7 @@ function groupByTime(items: AgentSummary[]): GroupBucket[] {
     { key: 'older', label: '更早', items: [] }
   ];
   for (let i = 0; i < items.length; i++) {
-    const t = stamp(items[i].updatedAt || items[i].createdAt);
+    const t = recencyMs(items[i]);
     if (t >= startToday) {
       buckets[0].items.push(items[i]);
     } else if (t >= startYesterday) {

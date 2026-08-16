@@ -1,5 +1,6 @@
 import { vibrator } from '@kit.SensorServiceKit';
 import { Log } from './Log';
+import { Sounds } from './Sounds';
 
 const TAG = 'Haptics';
 
@@ -19,7 +20,7 @@ export class Haptics {
     Haptics.fire('haptic.effect.sharp', 72, 'touch');
   }
 
-  /** Toolbar icon, secondary control. */
+  /** Toolbar icon, secondary control. Sound stays off — too frequent. */
   static click(): void {
     Haptics.fire('haptic.effect.hard', 86, 'touch');
   }
@@ -31,6 +32,7 @@ export class Haptics {
 
   /** Send / create / confirm a primary action. */
   static commit(): void {
+    Sounds.play('commit');
     Haptics.fire('haptic.effect.hard', 100, 'physicalFeedback');
   }
 
@@ -45,14 +47,17 @@ export class Haptics {
   }
 
   static success(): void {
+    Sounds.play('success');
     Haptics.fire('haptic.notice.success', 100, 'notification');
   }
 
   static fail(): void {
+    Sounds.play('fail');
     Haptics.fire('haptic.notice.fail', 100, 'notification');
   }
 
   static warn(): void {
+    Sounds.play('warn');
     Haptics.fire('haptic.notice.warning', 94, 'notification');
   }
 

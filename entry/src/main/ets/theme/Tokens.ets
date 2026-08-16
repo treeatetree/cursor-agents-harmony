@@ -43,6 +43,12 @@ export class Tokens {
   static readonly pressScale: number = 0.96;
   static readonly motionMs: number = 220;
 
+  /** UI stays on HarmonyOS Sans. Geist Latin + CJK mix looked wrong. */
+  static readonly fontUi: string = 'HarmonyOS Sans';
+  static readonly fontUiMedium: string = 'HarmonyOS Sans';
+  /** Cloud Agents web: Geist Mono on code/pre. */
+  static readonly fontMono: string = 'GeistMono';
+
   static typeDisplay: number = 28;
   static typeTitle: number = 22;
   static typeHeadline: number = 17;
@@ -52,10 +58,15 @@ export class Tokens {
   static typeCaption: number = 13;
   static typeMicro: number = 12;
 
+  static lineTitle: number = 28;
   static lineBody: number = 20;
   static lineCaption: number = 18;
-  static lineProse: number = 24;
-  static lineList: number = 22;
+  static lineMicro: number = 16;
+  /** Cloud / Notion prose ~1.6–1.7, not a tight 1.5. */
+  static lineProse: number = 26;
+  static lineList: number = 24;
+  /** Group headers only — light tracking, never negative on CJK. */
+  static readonly letterGroup: number = 0.3;
 
   static readonly safeTopFallback: number = 48;
   static readonly shadowRadius: number = 0;
@@ -76,10 +87,12 @@ export class Tokens {
     Tokens.typeCallout = Math.round(14 * k);
     Tokens.typeCaption = Math.round(13 * k);
     Tokens.typeMicro = type === 'large' ? 13 : (type === 'small' ? 11 : 12);
+    Tokens.lineTitle = type === 'large' ? 30 : (type === 'small' ? 26 : 28);
     Tokens.lineBody = type === 'large' ? 22 : (type === 'small' ? 18 : 20);
-    Tokens.lineProse = type === 'large' ? 26 : (type === 'small' ? 22 : 24);
+    Tokens.lineProse = type === 'large' ? 28 : (type === 'small' ? 24 : 26);
     Tokens.lineCaption = type === 'large' ? 20 : (type === 'small' ? 16 : 18);
-    Tokens.lineList = type === 'large' ? 24 : (type === 'small' ? 20 : 22);
+    Tokens.lineMicro = type === 'large' ? 18 : (type === 'small' ? 14 : 16);
+    Tokens.lineList = type === 'large' ? 26 : (type === 'small' ? 22 : 24);
     if (density === 'compact') {
       Tokens.pagePad = 12;
       Tokens.cardPad = 10;

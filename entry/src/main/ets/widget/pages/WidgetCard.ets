@@ -4,11 +4,16 @@ struct WidgetCard {
   @LocalStorageProp('runningLine') runningLine: string = '没有在跑的任务';
   @LocalStorageProp('latestName') latestName: string = 'Cursor Agents';
   @LocalStorageProp('latestStatus') latestStatus: string = '打开查看';
+  @LocalStorageProp('latestAgentId') latestAgentId: string = '';
 
   build() {
     FormLink({
       action: 'router',
-      abilityName: 'EntryAbility'
+      abilityName: 'EntryAbility',
+      uri: this.latestAgentId.length > 0 ? `cursoragent://open/${this.latestAgentId}` : 'cursoragent://inbox',
+      params: {
+        'agentId': this.latestAgentId
+      }
     }) {
       Column({ space: 8 }) {
         Text(this.runningLine)

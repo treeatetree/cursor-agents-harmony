@@ -1,5 +1,4 @@
-import { Tokens } from '../theme/Tokens';
-import { HuTextButton } from './HuTextButton';
+import { StatusBanner } from './StatusBanner';
 
 @Component
 export struct NetworkBanner {
@@ -8,23 +7,17 @@ export struct NetworkBanner {
   };
 
   build() {
-    if (!this.online) {
-      Row() {
-        Text('网络已断开 · 显示缓存内容')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.warn'))
-          .layoutWeight(1)
-        HuTextButton({
-          label: '重试',
-          color: $r('app.color.accent'),
-          onTap: () => {
-            this.onRetry();
-          }
-        })
-      }
-      .width('100%')
-      .padding({ left: Tokens.pagePad, right: Tokens.space2 })
-      .backgroundColor($r('app.color.banner_offline_bg'))
+    if (this.online) {
+      Column().width('100%').height(0)
+    } else {
+      StatusBanner({
+        text: '网络已断开 · 显示缓存内容',
+        tone: 'warn',
+        action: '重试',
+        onAction: () => {
+          this.onRetry();
+        }
+      })
     }
   }
 }

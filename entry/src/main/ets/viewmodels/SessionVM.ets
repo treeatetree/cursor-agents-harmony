@@ -3,7 +3,9 @@ import { ApiException, MeResponse } from '../models/Api';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { AgentCache } from '../store/AgentCache';
+import { CreateDraftStore } from '../store/CreateDraftStore';
 import { PrefStore } from '../store/PrefStore';
+import { UnreadStore } from '../store/UnreadStore';
 import { Log } from '../utils/Log';
 
 const TAG = 'SessionVM';
@@ -61,6 +63,7 @@ export class SessionVM {
       ApiKeyStore.getInstance().init(context),
       PrefStore.getInstance().init(context)
     ]);
+    await CreateDraftStore.getInstance().hydrate();
     this.syncFromStore();
     this.ready = true;
   }
@@ -147,6 +150,12 @@ export class SessionVM {
       AgentCache.getInstance().clearAll();
     } catch (_e) {
       // ignore
+    }
+    CreateDraftStore.getInstance().clear();
+    try {
+      await UnreadStore.getInstance().clearAll();
+      await PrefStore.getInstance().clearAccountLocal();
+    } catch (_e) {
     }
     this.syncFromStore();
     this.errorMsg = '';

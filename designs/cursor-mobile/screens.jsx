@@ -131,7 +131,7 @@ function AgentCardView({ a, list, sys, active }) {
   );
 }
 
-function InboxCover({ agents, onOpen, onNew, onSettings, filter, onFilter, staticFit, compact, list, sys, activeId }) {
+function InboxCover({ agents, onOpen, onNew, onSettings, filter, onFilter, staticFit, compact, list, sys, activeId, banner }) {
   const [find, setFind] = React.useState(false);
   const [q, setQ] = React.useState('');
   const be = sys === 'be';
@@ -213,6 +213,12 @@ function InboxCover({ agents, onOpen, onNew, onSettings, filter, onFilter, stati
           </div>
         )}
       </div>
+      {banner ? (
+        <div className={'banner ' + (banner.tone || 'info')}>
+          <span style={{ flex: 1 }}>{banner.text}</span>
+          {banner.act ? <button className="act" type="button" onClick={banner.onAct}>{banner.act}</button> : null}
+        </div>
+      ) : null}
       <div className={staticFit ? 'inbox-scroll fit' : 'inbox-scroll'}>
         {groups.length === 0 ? (
           <div className="empty">

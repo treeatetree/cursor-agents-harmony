@@ -1,6 +1,7 @@
 import { TimelineItem } from '../models/Timeline';
 import { Tokens } from '../theme/Tokens';
 import { isSubagentTool } from '../utils/StreamText';
+import { fadeTransition, motionMs } from '../utils/Motion';
 import { HuIcon } from './HuIcon';
 
 @Component
@@ -82,11 +83,17 @@ export struct ToolCallRow {
           .maxLines(this.isSub() ? 2 : 1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         if (this.canExpand()) {
-          HuIcon({
-            name: this.folded() ? 'chevronRight' : 'chevronDown',
-            iconSize: 16,
-            tint: $r('app.color.text_secondary')
-          })
+          Column() {
+            HuIcon({
+              name: 'chevronRight',
+              iconSize: 16,
+              tint: $r('app.color.text_secondary')
+            })
+          }
+          .width(16)
+          .height(16)
+          .rotate({ angle: this.opened ? 90 : 0 })
+          .animation({ duration: motionMs(), curve: Curve.EaseInOut })
         }
       }
       .width('100%')
@@ -94,46 +101,53 @@ export struct ToolCallRow {
       .alignItems(VerticalAlign.Center)
       .onClick(() => {
         if (this.canExpand()) {
-          this.opened = !this.opened;
+          animateTo({ duration: motionMs(), curve: Curve.EaseInOut }, () => {
+            this.opened = !this.opened;
+          });
           this.onToggle();
         }
       })
 
       if (!this.folded() && this.canExpand()) {
-        if (this.item.tool?.truncatedArgs || this.item.tool?.truncatedResult) {
-          Text('内容过大，已截断')
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.warn'))
-            .width('100%')
-            .padding({ left: 22 })
+        Column({ space: 4 }) {
+          if (this.item.tool?.truncatedArgs || this.item.tool?.truncatedResult) {
+            Text('内容过大，已截断')
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.warn'))
+              .width('100%')
+              .padding({ left: 22 })
+          }
+          if (this.item.tool?.argsText) {
+            Text(this.item.tool.argsText)
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.text_secondary'))
+              .fontFamily(Tokens.fontMono)
+              .width('100%')
+              .padding({ left: 22 })
+              .maxLines(16)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          if (this.item.tool?.resultText) {
+            Text(this.item.tool.resultText)
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.text_primary'))
+              .fontFamily(Tokens.fontMono)
+              .width('100%')
+              .padding({ left: 22 })
+              .maxLines(28)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          if (!this.item.tool?.argsText && !this.item.tool?.resultText) {
+            Text((this.item.text ?? '').length > 0 ? (this.item.text ?? '') : '没有输出')
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.text_tertiary'))
+              .width('100%')
+              .padding({ left: 22 })
+          }
         }
-        if (this.item.tool?.argsText) {
-          Text(this.item.tool.argsText)
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_secondary'))
-            .fontFamily('monospace')
-            .width('100%')
-            .padding({ left: 22 })
-            .maxLines(16)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        if (this.item.tool?.resultText) {
-          Text(this.item.tool.resultText)
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_primary'))
-            .fontFamily('monospace')
-            .width('100%')
-            .padding({ left: 22 })
-            .maxLines(28)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        if (!this.item.tool?.argsText && !this.item.tool?.resultText) {
-          Text((this.item.text ?? '').length > 0 ? (this.item.text ?? '') : '没有输出')
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-            .padding({ left: 22 })
-        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .transition(fadeTransition())
       }
     }
     .width('100%')

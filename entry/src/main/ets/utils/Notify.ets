@@ -1,12 +1,20 @@
 import { notificationManager } from '@kit.NotificationKit';
-import { wantAgent } from '@kit.AbilityKit';
+import { Want, wantAgent } from '@kit.AbilityKit';
 import { Log } from './Log';
 
+interface InboxLine {
+  id: string;
+  name: string;
+  statusZh: string;
+  snippet: string;
+}
+
 const TAG = 'Notify';
+const SUMMARY_ID = 435552;
 
 /**
  * Local notification when a Cloud Agent run finishes.
- * Best-effort across API levels — failures are swallowed.
+ * One inbox-style card lists every unread result; tap opens the in-app list.
  */
 export class Notify {
   private static enabled: boolean = true;
@@ -35,48 +43,70 @@ export class Notify {
     await Notify.setBadge(count);
   }
 
-  private static lastSent: Record<string, number> = {};
+  static isEnabled(): boolean {
+    return Notify.enabled;
+  }
 
-  static async runFinished(agentName: string, statusZh: string, agentId: string,
-    snippet: string = ''): Promise<void> {
-    if (!Notify.enabled) {
+  static async refreshInbox(items: InboxLine[]): Promise<void> {
+    if (!Notify.enabled || items.length === 0) {
+      try {
+        await notificationManager.cancel(SUMMARY_ID);
+      } catch (_e) {
+      }
       return;
     }
-    const now = Date.now();
-    const prev = Notify.lastSent[agentId] ?? 0;
-    if (now - prev < 25000) {
-      return;
-    }
-    Notify.lastSent[agentId] = now;
     try {
-      const title = agentName.length > 0 ? `${agentName} · ${statusZh}` : `任务${statusZh}`;
-      const body = snippet.length > 0 ? snippet : '点按查看对话';
+      const title = items.length === 1 ?
+        `${items[0].name} · ${items[0].statusZh}` :
+        `${items.length} 条新结果`;
+      const lines: string[] = [];
+      for (let i = 0; i < items.length && i < 8; i++) {
+        const it = items[i];
+        const bit = it.snippet.length > 0 ? ` · ${it.snippet}` : '';
+        lines.push(`${it.name} ${it.statusZh}${bit}`);
+      }
+      if (items.length > 8) {
+        lines.push(`另有 ${items.length - 8} 条`);
+      }
+      const body = lines.length > 0 ? lines[0] : '点按查看全部';
+      const launch: Want = {
+        bundleName: 'com.brian.cursor.mobile',
+        abilityName: 'EntryAbility',
+        action: 'action.ohos.cursor.openInbox',
+        uri: 'cursoragent://inbox',
+        parameters: {
+          'showUnread': '1'
+        }
+      };
       const info: wantAgent.WantAgentInfo = {
-        wants: [{
-          bundleName: 'com.brian.cursor.mobile',
-          abilityName: 'EntryAbility',
-          parameters: {
-            'agentId': agentId,
-            'noticeText': `${title}${snippet.length > 0 ? ` · ${snippet}` : ''}`
-          }
-        }],
+        wants: [launch],
         operationType: wantAgent.OperationType.START_ABILITY,
-        requestCode: Math.abs(hashCode(agentId)) % 100000
+        requestCode: SUMMARY_ID,
+        wantAgentFlags: [wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG]
       };
       const agent = await wantAgent.getWantAgent(info);
       const req: notificationManager.NotificationRequest = {
-        id: Math.abs(hashCode(agentId)) % 100000,
+        id: SUMMARY_ID,
         wantAgent: agent,
         content: {
-          notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
-          normal: {
+          notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_MULTILINE,
+          multiLine: {
             title: title,
             text: body,
-            additionalText: '点按打开对话'
+            additionalText: '点按查看全部',
+            briefText: `${items.length} 条`,
+            longTitle: title,
+            lines: lines
           }
         }
       };
       await notificationManager.publish(req);
+      for (let i = 0; i < items.length; i++) {
+        try {
+          await notificationManager.cancel(Math.abs(hashCode(items[i].id)) % 100000);
+        } catch (_e) {
+        }
+      }
     } catch (e) {
       Log.warn(TAG, `publish failed: ${JSON.stringify(e)}`);
     }

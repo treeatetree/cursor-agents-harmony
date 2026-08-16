@@ -2,7 +2,7 @@
   overflow: hidden;
   background: var(--bg);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "HarmonyOS Sans", system-ui, sans-serif;
+  font-family: var(--font-ui, Geist, -apple-system, BlinkMacSystemFont, "HarmonyOS Sans", system-ui, sans-serif);
 }
 .theme-frame.cover { width: 459px; height: 672px; }
 .theme-frame[data-skin="hero"] {

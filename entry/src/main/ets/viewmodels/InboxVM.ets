@@ -6,10 +6,12 @@ import { AgentCache } from '../store/AgentCache';
 import { AgentListSource } from '../datasource/AgentListSource';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Log } from '../utils/Log';
-import { Notify } from '../utils/Notify';
 import { WidgetBridge } from '../utils/WidgetBridge';
 import { UnreadStore } from '../store/UnreadStore';
 import { clipNotice } from '../utils/MarkdownParse';
+import { isRunInFlight, mergeInboxLists, pickNewerIso, sortByRecency } from '../utils/InboxGrouping';
+import { AppState } from '../utils/AppState';
+import { LiveIsland } from '../utils/LiveIsland';
 import { DetailVM } from './DetailVM';
 
 const TAG = 'InboxVM';
@@ -29,8 +31,13 @@ export class InboxVM {
   needsPlanUpgrade: boolean = false;
   lastRefreshAt: number = 0;
   dirty: boolean = false;
+  actionBanner: string = '';
+  actionKind: string = '';
   private ctx: common.UIAbilityContext | undefined = undefined;
   private heldIds: string[] = [];
+  private refreshQueued: boolean = false;
+  private watchTimer: number = -1;
+  private watchBusy: boolean = false;
   private listeners: Array<() => void> = [];
 
   onChange(cb: () => void): void {
@@ -78,10 +85,8 @@ export class InboxVM {
     if (!ApiKeyStore.getInstance().isUnlocked()) {
       return;
     }
-    if (CursorApiClient.getInstance().isMutating()) {
-      return;
-    }
-    if (this.loading) {
+    if (this.loading || CursorApiClient.getInstance().isMutating()) {
+      this.refreshQueued = true;
       return;
     }
     this.loading = true;
@@ -92,25 +97,44 @@ export class InboxVM {
     this.authExpired = false;
     this.needsPlanUpgrade = false;
     try {
-      const resp = await CursorApiClient.getInstance()
-        .listAgents(50, undefined, this.includeArchived, this.prUrlFilter);
+      const client = CursorApiClient.getInstance();
+      const resp = await client.listAgents(100, undefined, this.includeArchived, this.prUrlFilter);
       const unwrapped = unwrapAgentsList(resp as object);
       let agents = unwrapped.items ?? [];
+      this.nextCursor = unwrapped.nextCursor ?? '';
+      if (this.nextCursor.length > 0) {
+        try {
+          const moreResp = await client.listAgents(100, this.nextCursor, this.includeArchived,
+            this.prUrlFilter);
+          const more = unwrapAgentsList(moreResp as object);
+          const extra = more.items ?? [];
+          for (let i = 0; i < extra.length; i++) {
+            agents.push(extra[i]);
+          }
+          this.nextCursor = more.nextCursor ?? '';
+        } catch (_e) {
+        }
+      }
       if (!this.includeArchived) {
         agents = agents.filter((a: AgentSummary) => a.status !== 'ARCHIVED');
       }
-      this.nextCursor = unwrapped.nextCursor ?? '';
       this.mergeRunStatus(agents);
       const prev = this.source.snapshot();
-      agents = this.mergeHeld(agents);
+      agents = mergeInboxLists(agents, prev, this.heldIds, Date.now());
+      agents = sortByRecency(agents);
+      this.heldIds = this.heldIdsStillMissing(agents);
       this.noteStatusChanges(prev, agents);
       this.source.replaceAll(agents);
-      AgentCache.getInstance().saveInbox(agents);
+      const filtered = this.includeArchived || this.prUrlFilter.length > 0;
+      AgentCache.getInstance().saveInbox(agents, filtered ? 'merge' : 'full');
       this.loadedOnce = true;
       this.lastRefreshAt = Date.now();
       this.dirty = this.heldIds.length > 0;
       Log.info(TAG, `inbox ${agents.length}`);
-      this.enrichRunStatuses(agents.slice(0, 8));
+      this.startWatch();
+      LiveIsland.syncRunning(this.inFlightAgents()).catch(() => {
+      });
+      this.enrichRunStatuses(this.inFlightAgents());
       UnreadStore.getInstance().syncBadge();
       this.pushWidget();
       this.emitChange();
@@ -119,41 +143,107 @@ export class InboxVM {
     } finally {
       this.loading = false;
       this.refreshing = false;
+      if (this.refreshQueued) {
+        this.refreshQueued = false;
+        this.refresh(true).catch(() => {
+        });
+      }
     }
   }
 
   private mergeRunStatus(agents: AgentSummary[]): void {
     const prev = this.source.snapshot();
     for (let i = 0; i < agents.length; i++) {
-      if (agents[i].latestRunStatus && `${agents[i].latestRunStatus}`.length > 0) {
-        continue;
-      }
       const id = agents[i].id;
       for (let j = 0; j < prev.length; j++) {
-        if (prev[j].id === id) {
+        if (prev[j].id !== id) {
+          continue;
+        }
+        const remoteRun = `${agents[i].latestRunId ?? ''}`;
+        const localRun = `${prev[j].latestRunId ?? ''}`;
+        if (remoteRun.length === 0 && localRun.length > 0) {
+          agents[i].latestRunId = prev[j].latestRunId;
+        }
+        const sameRun = `${agents[i].latestRunId ?? ''}` === localRun || localRun.length === 0;
+        if (sameRun && (!agents[i].latestRunStatus || `${agents[i].latestRunStatus}`.length === 0)) {
           const oldStatus = prev[j].latestRunStatus;
-          const oldResult = prev[j].latestResult ?? '';
-          const oldRepos = prev[j].repos;
           if (oldStatus) {
             agents[i].latestRunStatus = oldStatus;
           }
-          if (oldResult.length > 0) {
-            agents[i].latestResult = oldResult;
-          }
-          const curRepos = agents[i].repos;
-          if ((!curRepos || curRepos.length === 0) && oldRepos) {
-            agents[i].repos = oldRepos;
-          }
-          break;
         }
+        const oldResult = prev[j].latestResult ?? '';
+        const curResult = agents[i].latestResult ?? '';
+        if (sameRun && oldResult.length > 0 && curResult.length === 0) {
+          agents[i].latestResult = oldResult;
+        }
+        const oldRepos = prev[j].repos;
+        const curRepos = agents[i].repos;
+        if ((!curRepos || curRepos.length === 0) && oldRepos) {
+          agents[i].repos = oldRepos;
+        }
+        const userAt = pickNewerIso(agents[i].lastUserAt ?? '', prev[j].lastUserAt ?? '');
+        if (userAt.length > 0) {
+          agents[i].lastUserAt = userAt;
+        }
+        break;
       }
     }
   }
 
-  /** Fetch latest run status for a few agents so Inbox can show running state. */
+  startWatch(): void {
+    if (this.watchTimer >= 0) {
+      return;
+    }
+    this.tickWatch();
+    this.watchTimer = setInterval(() => {
+      this.tickWatch();
+    }, 1000) as number;
+  }
+
+  stopWatch(): void {
+    if (this.watchTimer >= 0) {
+      clearInterval(this.watchTimer);
+      this.watchTimer = -1;
+    }
+  }
+
+  private tickWatch(): void {
+    if (this.watchBusy || !ApiKeyStore.getInstance().isUnlocked()) {
+      return;
+    }
+    const inflight = this.inFlightAgents();
+    if (inflight.length === 0) {
+      return;
+    }
+    this.enrichRunStatuses(inflight).catch(() => {
+    });
+  }
+
+  private inFlightAgents(): AgentSummary[] {
+    const snap = this.source.snapshot();
+    const out: AgentSummary[] = [];
+    for (let i = 0; i < snap.length; i++) {
+      const a = snap[i];
+      if (a.status !== 'ACTIVE' || !a.latestRunId || a.latestRunId.length === 0) {
+        continue;
+      }
+      const st = `${a.latestRunStatus ?? ''}`;
+      if (st.length === 0 || isRunInFlight(st)) {
+        out.push(a);
+      }
+    }
+    return out;
+  }
+
+  /** Fetch latest run status for in-flight agents so finish can notify immediately. */
   private async enrichRunStatuses(agents: AgentSummary[]): Promise<void> {
+    if (this.watchBusy) {
+      return;
+    }
+    this.watchBusy = true;
     const tasks: Promise<void>[] = [];
-    for (let i = 0; i < agents.length; i++) {
+    const cap = agents.length > 12 ? 12 : agents.length;
+    for (let i = 0; i < cap; i++) {
       const a = agents[i];
       if (!a.latestRunId || a.latestRunId.length === 0 || a.status !== 'ACTIVE') {
         continue;
@@ -167,11 +257,19 @@ export class InboxVM {
           for (let j = 0; j < snap.length; j++) {
             if (snap[j].id === agentId) {
               const oldStatus = `${snap[j].latestRunStatus ?? ''}`;
-              snap[j].latestRunStatus = run.status;
-              applyRunGit(snap[j], run);
-              applyRunResult(snap[j], run);
-              this.source.updateAt(j, snap[j]);
-              this.noteTerminal(snap[j], oldStatus);
+              const next = copyAgent(snap[j]);
+              next.latestRunStatus = run.status;
+              if (run.updatedAt && run.updatedAt.length > 0) {
+                next.updatedAt = pickNewerIso(next.updatedAt, run.updatedAt);
+              }
+              if ((!next.lastUserAt || next.lastUserAt.length === 0) &&
+                run.createdAt && run.createdAt.length > 0) {
+                next.lastUserAt = run.createdAt;
+              }
+              applyRunGit(next, run);
+              applyRunResult(next, run);
+              this.source.updateAt(j, next);
+              this.noteTerminal(next, oldStatus);
               break;
             }
           }
@@ -179,12 +277,18 @@ export class InboxVM {
         }
       })());
     }
-    if (tasks.length > 0) {
-      await Promise.all(tasks);
-      AgentCache.getInstance().saveInbox(this.source.snapshot());
-      UnreadStore.getInstance().syncBadge();
-      this.pushWidget();
-      this.emitChange();
+    try {
+      if (tasks.length > 0) {
+        await Promise.all(tasks);
+        AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
+        UnreadStore.getInstance().syncBadge();
+        this.pushWidget();
+        LiveIsland.syncRunning(this.inFlightAgents()).catch(() => {
+        });
+        this.emitChange();
+      }
+    } finally {
+      this.watchBusy = false;
     }
   }
 
@@ -202,9 +306,10 @@ export class InboxVM {
         more = more.filter((a: AgentSummary) => a.status !== 'ARCHIVED');
       }
       this.nextCursor = unwrapped.nextCursor ?? '';
-      const merged = this.source.snapshot().concat(more);
+      const merged = sortByRecency(this.source.snapshot().concat(more));
       this.source.replaceAll(merged);
-      AgentCache.getInstance().saveInbox(merged);
+      const filtered = this.includeArchived || this.prUrlFilter.length > 0;
+      AgentCache.getInstance().saveInbox(merged, filtered ? 'merge' : 'full');
       this.emitChange();
     } catch (e) {
       this.applyError(e, '加载更多失败');
@@ -237,37 +342,88 @@ export class InboxVM {
     this.heldIds = [agent.id].concat(this.heldIds.filter((id: string) => id !== agent.id));
     this.dirty = true;
     this.source.prepend(agent);
-    AgentCache.getInstance().saveInbox(this.source.snapshot());
+    AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
     this.pushWidget();
     this.emitChange();
   }
 
-  private mergeHeld(remote: AgentSummary[]): AgentSummary[] {
+  /** Record the last user prompt time so Inbox can sort by it. */
+  markUserAt(agentId: string, whenIso: string = ''): void {
+    if (!agentId || agentId.length === 0) {
+      return;
+    }
+    const iso = whenIso.length > 0 ? whenIso : new Date().toISOString();
+    const snap = this.source.snapshot();
+    for (let i = 0; i < snap.length; i++) {
+      if (snap[i].id !== agentId) {
+        continue;
+      }
+      const item = copyAgent(snap[i]);
+      item.lastUserAt = pickNewerIso(item.lastUserAt ?? '', iso);
+      this.source.updateAt(i, item);
+      AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
+      this.dirty = true;
+      this.emitChange();
+      return;
+    }
+  }
+
+  /** Update name / run status only. Does not rewrite lastUserAt. */
+  touch(agentId: string, name?: string, status?: string, runUpdatedAt?: string): void {
+    if (!agentId || agentId.length === 0) {
+      return;
+    }
+    const snap = this.source.snapshot();
+    let found = -1;
+    for (let i = 0; i < snap.length; i++) {
+      if (snap[i].id === agentId) {
+        found = i;
+        break;
+      }
+    }
+    if (found < 0) {
+      return;
+    }
+    const item = copyAgent(snap[found]);
+    if (name && name.length > 0) {
+      item.name = name;
+    }
+    if (status && status.length > 0) {
+      item.latestRunStatus = status;
+    }
+    if (runUpdatedAt && runUpdatedAt.length > 0) {
+      item.updatedAt = pickNewerIso(item.updatedAt, runUpdatedAt);
+    }
+    this.source.updateAt(found, item);
+    AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
+    this.dirty = true;
+    this.emitChange();
+  }
+
+  replaceHeld(oldId: string, agent: AgentSummary): void {
+    this.heldIds = [agent.id].concat(this.heldIds.filter((id: string) => id !== oldId && id !== agent.id));
+    this.source.removeById(oldId);
+    this.source.removeById(agent.id);
+    this.source.prepend(agent);
+    this.dirty = true;
+    AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
+    this.pushWidget();
+    this.emitChange();
+  }
+
+  private heldIdsStillMissing(remote: AgentSummary[]): string[] {
     const seen: Record<string, boolean> = {};
     for (let i = 0; i < remote.length; i++) {
       seen[remote[i].id] = true;
     }
     const still: string[] = [];
-    const extra: AgentSummary[] = [];
-    const prev = this.source.snapshot();
     for (let i = 0; i < this.heldIds.length; i++) {
       const id = this.heldIds[i];
-      if (seen[id]) {
-        continue;
-      }
-      still.push(id);
-      for (let j = 0; j < prev.length; j++) {
-        if (prev[j].id === id) {
-          extra.push(prev[j]);
-          break;
-        }
+      if (!seen[id]) {
+        still.push(id);
       }
     }
-    this.heldIds = still;
-    if (extra.length === 0) {
-      return remote;
-    }
-    return extra.concat(remote);
+    return still;
   }
 
   private noteStatusChanges(prev: AgentSummary[], next: AgentSummary[]): void {
@@ -293,20 +449,18 @@ export class InboxVM {
       return;
     }
     const watching = DetailVM.getActive()?.agentId ?? '';
-    if (watching === a.id) {
+    if (watching === a.id && AppState.foreground) {
       return;
     }
     const zh = runStatusLabel(now);
     const snippet = clipNotice(a.latestResult ?? a.name ?? '', 56);
     UnreadStore.getInstance().markFinished(a.id, a.name ?? '', zh, snippet).catch(() => {
     });
-    Notify.runFinished(a.name ?? '', zh, a.id, snippet).catch(() => {
-    });
   }
 
   removeLocal(agentId: string): void {
     this.source.removeById(agentId);
-    AgentCache.getInstance().saveInbox(this.source.snapshot());
+    AgentCache.getInstance().removeInboxId(agentId);
     this.pushWidget();
     this.emitChange();
   }
@@ -320,28 +474,83 @@ export class InboxVM {
     });
   }
 
+  noteCreateFailed(name: string): void {
+    const title = name.length > 0 ? name : '新任务';
+    this.actionBanner = `「${title}」创建失败`;
+    this.actionKind = 'retry-create';
+    this.emitChange();
+  }
+
+  clearActionBanner(): void {
+    this.actionBanner = '';
+    this.actionKind = '';
+    this.emitChange();
+  }
+
+  private findIndex(agentId: string): number {
+    const snap = this.source.snapshot();
+    for (let i = 0; i < snap.length; i++) {
+      if (snap[i].id === agentId) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
   async archive(agentId: string): Promise<boolean> {
+    const idx = this.findIndex(agentId);
+    if (idx < 0) {
+      return false;
+    }
+    const prev = copyAgent(this.source.snapshot()[idx]);
+    const next = copyAgent(prev);
+    next.status = 'ARCHIVED';
+    this.includeArchived = true;
+    this.source.updateAt(idx, next);
+    this.dirty = true;
+    this.emitChange();
     try {
       await CursorApiClient.getInstance().archiveAgent(agentId);
-      if (!this.includeArchived) {
-        this.removeLocal(agentId);
-      } else {
-        await this.refresh(true);
-      }
+      this.refresh(true).catch(() => {
+      });
       return true;
     } catch (e) {
+      const cur = this.findIndex(agentId);
+      if (cur >= 0) {
+        this.source.updateAt(cur, prev);
+      } else {
+        this.source.prepend(prev);
+      }
       this.applyError(e, '归档失败');
+      this.emitChange();
       return false;
     }
   }
 
   async unarchive(agentId: string): Promise<boolean> {
+    const idx = this.findIndex(agentId);
+    let prev: AgentSummary | undefined = undefined;
+    if (idx >= 0) {
+      prev = copyAgent(this.source.snapshot()[idx]);
+      const next = copyAgent(prev);
+      next.status = 'ACTIVE';
+      this.source.updateAt(idx, next);
+      this.dirty = true;
+      this.emitChange();
+    }
     try {
       await CursorApiClient.getInstance().unarchiveAgent(agentId);
       await this.refresh(true);
       return true;
     } catch (e) {
+      if (prev) {
+        const cur = this.findIndex(agentId);
+        if (cur >= 0) {
+          this.source.updateAt(cur, prev);
+        }
+      }
       this.applyError(e, '取消归档失败');
+      this.emitChange();
       return false;
     }
   }
@@ -413,6 +622,48 @@ function runStatusLabel(status: string): string {
     return '已过期';
   }
   return status;
+}
+
+function copyAgent(a: AgentSummary): AgentSummary {
+  const next: AgentSummary = {
+    id: a.id,
+    name: a.name,
+    status: a.status,
+    url: a.url,
+    createdAt: a.createdAt,
+    updatedAt: a.updatedAt
+  };
+  if (a.lastUserAt && a.lastUserAt.length > 0) {
+    next.lastUserAt = a.lastUserAt;
+  }
+  if (a.latestRunId && a.latestRunId.length > 0) {
+    next.latestRunId = a.latestRunId;
+  }
+  if (a.latestRunStatus && `${a.latestRunStatus}`.length > 0) {
+    next.latestRunStatus = a.latestRunStatus;
+  }
+  if (a.latestResult && a.latestResult.length > 0) {
+    next.latestResult = a.latestResult;
+  }
+  if (a.repos) {
+    next.repos = a.repos;
+  }
+  if (a.env) {
+    next.env = a.env;
+  }
+  if (a.workOnCurrentBranch !== undefined) {
+    next.workOnCurrentBranch = a.workOnCurrentBranch;
+  }
+  if (a.autoCreatePR !== undefined) {
+    next.autoCreatePR = a.autoCreatePR;
+  }
+  if (a.openAsCursorGithubApp !== undefined) {
+    next.openAsCursorGithubApp = a.openAsCursorGithubApp;
+  }
+  if (a.skipReviewerRequest !== undefined) {
+    next.skipReviewerRequest = a.skipReviewerRequest;
+  }
+  return next;
 }
 
 function applyRunResult(agent: AgentSummary, run: Run): void {

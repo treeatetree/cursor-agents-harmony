@@ -16,7 +16,7 @@ struct LockScreenPage {
         .maxLines(2)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
-      Text(this.status.length > 0 ? `运行${this.status}` : '运行中')
+      Text(this.status.length > 0 ? this.status : '运行中')
         .fontSize(14)
         .fontColor('#A1A1AA')
         .maxLines(1)

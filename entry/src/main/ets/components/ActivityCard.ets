@@ -1,7 +1,7 @@
 import { TimelineItem } from '../models/Timeline';
 import { Tokens } from '../theme/Tokens';
 import { lastNonEmptyLine } from '../utils/StreamText';
-import { shimmerMs, shimmerOpacity } from '../utils/Motion';
+import { fadeTransition, motionMs, pressScaleOf, shimmerMs, shimmerOpacity } from '../utils/Motion';
 import { HuIcon } from './HuIcon';
 import { MarkdownLite } from './MarkdownLite';
 import { ToolCallRow } from './ToolCallRow';
@@ -19,6 +19,7 @@ export struct ActivityCard {
   @Prop body: string = '';
   @Prop tools: TimelineItem[] = [];
   @State opened: boolean = false;
+  @State private pressed: boolean = false;
   private boundKey: string = '';
   onToggle: () => void = () => {
   };
@@ -49,45 +50,59 @@ export struct ActivityCard {
     return lastNonEmptyLine(this.body, 72);
   }
 
+  private toggleOpen(): void {
+    if (!this.hasBody()) {
+      return;
+    }
+    animateTo({ duration: motionMs(), curve: Curve.EaseInOut }, () => {
+      this.opened = !this.opened;
+    });
+    this.onToggle();
+  }
+
   build() {
     Column({ space: 6 }) {
-      Row({ space: 6 }) {
-        if (this.hasBody()) {
-          HuIcon({
-            name: this.opened ? 'chevronDown' : 'chevronRight',
-            iconSize: 16,
-            tint: $r('app.color.text_secondary')
-          })
+      Column({ space: 6 }) {
+        Row({ space: 6 }) {
+          if (this.item.streaming === true) {
+            LoadingProgress()
+              .width(14)
+              .height(14)
+              .color($r('app.color.text_secondary'))
+          } else if (this.hasBody()) {
+            Column() {
+              HuIcon({
+                name: 'chevronRight',
+                iconSize: 16,
+                tint: $r('app.color.text_secondary')
+              })
+            }
+            .width(16)
+            .height(16)
+            .rotate({ angle: this.opened ? 90 : 0 })
+            .animation({ duration: motionMs(), curve: Curve.EaseInOut })
+          }
+          Text(this.title)
+            .fontSize(Tokens.typeCaption)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary'))
+            .opacity(this.runActive && this.item.streaming === true ? shimmerOpacity(this.shimmerOn) : 1)
+            .animation({ duration: shimmerMs(), curve: Curve.EaseInOut })
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
-        Text(this.title)
-          .fontSize(Tokens.typeCaption)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_secondary'))
-          .opacity(this.runActive && this.item.streaming === true ? shimmerOpacity(this.shimmerOn) : 1)
-          .animation({ duration: shimmerMs(), curve: Curve.EaseInOut })
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-      }
-      .width('100%')
-      .constraintSize({ minHeight: Tokens.touchMin })
-      .alignItems(VerticalAlign.Center)
-      .onClick(() => {
-        if (!this.hasBody()) {
-          return;
-        }
-        this.opened = !this.opened;
-        this.onToggle();
-      })
+        .width('100%')
+        .constraintSize({ minHeight: Tokens.touchMin })
+        .alignItems(VerticalAlign.Center)
 
-      if (!this.hasBody() && this.item.streaming !== true) {
-        Text('没有过程记录')
-          .fontSize(Tokens.typeMicro)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%')
-          .padding({ left: 22 })
-      } else if (!this.opened) {
-        if (this.preview().length > 0) {
+        if (!this.hasBody() && this.item.streaming !== true) {
+          Text('此设备未记录过程')
+            .fontSize(Tokens.typeMicro)
+            .fontColor($r('app.color.text_tertiary'))
+            .width('100%')
+            .padding({ left: 22 })
+        } else if (!this.opened && this.preview().length > 0) {
           Text(this.preview())
             .fontSize(Tokens.typeMicro)
             .fontColor($r('app.color.text_tertiary'))
@@ -96,21 +111,46 @@ export struct ActivityCard {
             .width('100%')
             .padding({ left: 22 })
         }
-      } else {
-        if (this.body.trim().length > 0) {
-          MarkdownLite({
-            content: this.body,
-            compact: true
-          })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
+      .opacity(this.pressed ? 0.88 : 1)
+      .animation({ duration: 120, curve: Curve.EaseOut })
+      .onTouch((e: TouchEvent) => {
+        if (!this.hasBody()) {
+          return;
         }
-        ForEach(this.tools, (tool: TimelineItem) => {
-          ToolCallRow({
-            item: tool,
-            onToggle: () => {
-              this.onToggleTool(tool.key);
-            }
-          })
-        }, (tool: TimelineItem) => tool.key)
+        if (e.type === TouchType.Down) {
+          this.pressed = true;
+        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          this.pressed = false;
+        }
+      })
+      .onClick(() => {
+        this.toggleOpen();
+      })
+
+      if (this.opened && this.hasBody()) {
+        Column({ space: 6 }) {
+          if (this.body.trim().length > 0) {
+            MarkdownLite({
+              content: this.body,
+              compact: true
+            })
+          }
+          ForEach(this.tools, (tool: TimelineItem) => {
+            ToolCallRow({
+              item: tool,
+              onToggle: () => {
+                this.onToggleTool(tool.key);
+              }
+            })
+          }, (tool: TimelineItem) => tool.key)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .transition(fadeTransition())
       }
     }
     .width('100%')
