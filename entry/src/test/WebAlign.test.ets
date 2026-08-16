@@ -7,6 +7,8 @@ import { fileNameOf, isImagePath, isVideoPath } from '../main/ets/utils/DisplayF
 import { sniffMime } from '../main/ets/utils/ImagePicker';
 import { isSubagentTool, subagentDetail } from '../main/ets/utils/StreamText';
 import { unwrapUsageRuns } from '../main/ets/api/ApiUnwrap';
+import { visibleTimeline } from '../main/ets/utils/TimelineView';
+import { TimelineItem } from '../main/ets/models/Timeline';
 
 function agent(partial: Record<string, string>): AgentSummary {
   return {
@@ -193,6 +195,24 @@ export default function webAlignTest() {
       const d = subagentDetail('{"description":"Scan auth","subagent_type":"explore","prompt":"look around"}');
       expect(d.indexOf('explore') >= 0).assertTrue();
       expect(d.indexOf('Scan auth') >= 0).assertTrue();
+    });
+  });
+
+  describe('TimelineView', () => {
+    it('keeps one process card and drops hidden tool rows', 0, () => {
+      const items: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'r1', text: 'hi' },
+        { key: 'h', kind: 'runHeader', runId: 'r1' },
+        { key: 't', kind: 'thinking', runId: 'r1', text: 'think' },
+        { key: 'p', kind: 'progress', runId: 'r1', text: 'step' },
+        { key: 'tool', kind: 'tool', runId: 'r1', text: 'read' },
+        { key: 'a', kind: 'assistant', runId: 'r1', text: '## 结论' }
+      ];
+      const out = visibleTimeline(items);
+      expect(out.length).assertEqual(3);
+      expect(out[0].kind).assertEqual('userPrompt');
+      expect(out[1].kind).assertEqual('thinking');
+      expect(out[2].kind).assertEqual('assistant');
     });
   });
 

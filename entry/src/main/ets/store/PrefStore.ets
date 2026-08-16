@@ -22,6 +22,7 @@ const KEY_TYPE = 'type_pref';
 const KEY_DENSITY = 'density_pref';
 const KEY_AVATAR = 'avatar_preset';
 const KEY_UNREAD = 'unread_items';
+const KEY_QUEUED = 'queued_followup';
 
 export class PrefStore {
   private static instance: PrefStore | undefined = undefined;
@@ -288,6 +289,39 @@ export class PrefStore {
       return;
     }
     await this.pref.put(KEY_LAST_TOOLS, raw);
+    await this.pref.flush();
+  }
+
+  async getQueuedFollowUp(agentId: string): Promise<string> {
+    if (!this.pref || agentId.length === 0) {
+      return '';
+    }
+    try {
+      const raw = (await this.pref.get(KEY_QUEUED, '{}')) as string;
+      const map = JSON.parse(raw) as Record<string, string>;
+      return map[agentId] ?? '';
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  async setQueuedFollowUp(agentId: string, text: string): Promise<void> {
+    if (!this.pref || agentId.length === 0) {
+      return;
+    }
+    let map: Record<string, string> = {};
+    try {
+      const raw = (await this.pref.get(KEY_QUEUED, '{}')) as string;
+      map = JSON.parse(raw) as Record<string, string>;
+    } catch (_e) {
+      map = {};
+    }
+    if (text.length === 0) {
+      delete map[agentId];
+    } else {
+      map[agentId] = text;
+    }
+    await this.pref.put(KEY_QUEUED, JSON.stringify(map));
     await this.pref.flush();
   }
 

@@ -27,6 +27,7 @@ import { copyToClipboard } from '../utils/Clipboard';
 import { confirmDanger } from '../utils/AppDialog';
 import { showToast } from '../utils/AppToast';
 import { Haptics } from '../utils/Haptics';
+import { visibleTimeline } from '../utils/TimelineView';
 
 function fmtTk(n: number | undefined): string {
   const v = n ?? 0;
@@ -78,6 +79,7 @@ struct AgentDetailPage {
   @State topInset: number = 0;
   @State bottomInset: number = 0;
   @State queuedFollowUp: string = '';
+  @State feed: TimelineItem[] = [];
   @State followUpMode: string = 'agent';
   @State compareUrl: string = '';
   @State pinned: boolean = false;
@@ -146,6 +148,7 @@ struct AgentDetailPage {
     this.usageRuns = this.vm.usageRuns;
     this.queuedFollowUp = this.vm.queuedFollowUp;
     this.followUpMode = this.vm.followUpMode;
+    this.rebuildFeed();
     this.compareUrl = this.vm.compareUrl;
     this.followToolsLabel = toolsChipLabel(defaultEnv(), this.followUpMcp, [] as CustomSubagentDef[],
       [] as EnvVarDef[]);
@@ -167,6 +170,18 @@ struct AgentDetailPage {
         }
       }, 16);
     }
+  }
+
+  private rebuildFeed(): void {
+    const rows = visibleTimeline(this.vm.source.snapshot());
+    const next: TimelineItem[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].kind === 'runOutcome' && this.shouldSkipOutcome(rows[i])) {
+        continue;
+      }
+      next.push(rows[i]);
+    }
+    this.feed = next;
   }
 
   private consumeNotice(): void {
@@ -681,8 +696,10 @@ struct AgentDetailPage {
           this.sync();
         });
         this.vm.open(this.agentId).then(() => {
-          this.sync();
-          this.consumeNotice();
+          this.vm.restoreQueue().then(() => {
+            this.sync();
+            this.consumeNotice();
+          });
         });
         UnreadStore.getInstance().markSeen(this.agentId).catch(() => {
         });
@@ -736,12 +753,11 @@ struct AgentDetailPage {
     } else {
       Column() {
         Stack({ alignContent: Alignment.Bottom }) {
-          List({ space: 12, scroller: this.listScroller }) {
-            LazyForEach(this.vm.source, (item: TimelineItem) => {
+          List({ space: 10, scroller: this.listScroller }) {
+            ForEach(this.feed, (item: TimelineItem) => {
               ListItem() {
                 this.timelineItem(item)
               }
-              .constraintSize({ minHeight: 4 })
             }, (item: TimelineItem) => this.rowKey(item))
           }
           .width('100%')

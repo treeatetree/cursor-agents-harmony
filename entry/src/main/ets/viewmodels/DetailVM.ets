@@ -323,7 +323,7 @@ export class DetailVM {
     this.artifacts = [];
     this.usageLabel = '';
     this.usageRuns = [];
-    this.queuedFollowUp = '';
+    this.persistQueue();
     this.queuedImages = [];
     this.queueRetries = 0;
     this.compareUrl = '';
@@ -358,6 +358,7 @@ export class DetailVM {
       this.queuedImages = images;
       this.errorMsg = '';
       this.streamNotice = '结束后发送';
+      this.persistQueue();
       this.notify();
       return true;
     }
@@ -369,6 +370,7 @@ export class DetailVM {
     this.queuedImages = [];
     this.queueRetries = 0;
     this.clearQueueTimer();
+    this.persistQueue();
     if (this.streamNotice === '结束后发送' || this.streamNotice.indexOf('结束后') >= 0) {
       this.streamNotice = '';
     }
@@ -428,6 +430,7 @@ export class DetailVM {
       if (e instanceof ApiException && (e.code === 409 || e.apiCode === 'agent_busy')) {
         this.queuedFollowUp = prompt;
         this.queuedImages = images;
+        this.persistQueue();
         this.streamNotice = 'Agent 忙碌，稍后自动发送';
         this.scheduleFlushQueue(800 * Math.max(1, this.queueRetries + 1));
         Haptics.warn();
@@ -465,12 +468,41 @@ export class DetailVM {
     }
   }
 
-  private async flushQueuedFollowUp(): Promise<void> {
-    const q = this.queuedFollowUp.trim();
-    if (q.length === 0 || this.sending || this.isRunActive()) {
+  private persistQueue(): void {
+    if (this.agentId.length === 0) {
       return;
     }
-    if (this.queueRetries >= 3) {
+    PrefStore.getInstance().setQueuedFollowUp(this.agentId, this.queuedFollowUp.trim()).catch(() => {
+    });
+  }
+
+  async restoreQueue(): Promise<void> {
+    if (this.agentId.length === 0) {
+      return;
+    }
+    const saved = await PrefStore.getInstance().getQueuedFollowUp(this.agentId);
+    if (saved.length === 0) {
+      return;
+    }
+    this.queuedFollowUp = saved;
+    if (this.isRunActive()) {
+      this.streamNotice = '结束后发送';
+      this.notify();
+      return;
+    }
+    this.scheduleFlushQueue(400);
+  }
+
+  private async flushQueuedFollowUp(): Promise<void> {
+    const q = this.queuedFollowUp.trim();
+    if (q.length === 0) {
+      return;
+    }
+    if (this.sending || this.isRunActive()) {
+      this.scheduleFlushQueue(1600);
+      return;
+    }
+    if (this.queueRetries >= 5) {
       this.errorMsg = '追问排队发送失败，请手动重试';
       this.notify();
       return;
@@ -479,10 +511,16 @@ export class DetailVM {
     const imgs = this.queuedImages;
     this.queuedFollowUp = '';
     this.queuedImages = [];
+    this.persistQueue();
     if (this.streamNotice === '结束后发送' || this.streamNotice.indexOf('稍后自动') >= 0) {
       this.streamNotice = '';
     }
-    await this.sendFollowUp(q, imgs);
+    const ok = await this.sendFollowUp(q, imgs);
+    if (!ok && this.queuedFollowUp.length === 0) {
+      this.queuedFollowUp = q;
+      this.queuedImages = imgs;
+      this.persistQueue();
+    }
   }
 
   private announceFinished(status: string, raw: string): void {
@@ -504,7 +542,9 @@ export class DetailVM {
     this.loadArtifactsAndUsage();
     this.refreshRunUsage(this.activeRunId);
     this.recomputeCompareUrl();
-    this.scheduleFlushQueue();
+    if (!this.isRunActive()) {
+      this.scheduleFlushQueue(400);
+    }
   }
 
   private async refreshRunUsage(runId: string): Promise<void> {
@@ -874,7 +914,9 @@ export class DetailVM {
       this.clearPoll();
       this.finishStreamingItems();
       this.eventIdFlush.flush();
-      this.afterRunSettled();
+      if (!this.isRunActive()) {
+        this.afterRunSettled();
+      }
       this.notify();
     }
   }
