@@ -364,15 +364,15 @@ export struct PromptShell {
   @Builder
   moreChipsRow() {
     Row({ space: 6 }) {
-      HuChip({
-        label: this.imageCount > 0 ? `图片 ${this.imageCount}` : '图片',
-        on: this.imageCount > 0,
-        maxVp: 88,
-        onTap: () => {
-          this.onImage();
-        }
-      })
       if (!this.follow) {
+        HuChip({
+          label: this.imageCount > 0 ? `图片 ${this.imageCount}` : '图片',
+          on: this.imageCount > 0,
+          maxVp: 88,
+          onTap: () => {
+            this.onImage();
+          }
+        })
         HuChip({
           label: this.repo.length > 0 ? this.repo : '仓库',
           on: this.repo.length > 0,
@@ -399,26 +399,26 @@ export struct PromptShell {
         })
       } else {
         HuChip({
-          label: this.modelLabel.length > 0 ? this.modelLabel : '沿用',
-          on: this.modelLabel.length > 0 && this.modelLabel !== '沿用' && this.modelLabel !== '自动',
-          maxVp: 120,
-          onTap: () => {
-            this.onModel();
-          }
-        })
-        HuChip({
-          label: this.followUpMode === 'plan' ? '规划' : '代理',
+          label: this.followUpMode === 'plan' ? 'plan' : 'agent',
           on: this.followUpMode === 'plan',
           onTap: () => {
             this.onModeChange(this.followUpMode === 'plan' ? 'agent' : 'plan');
           }
         })
         HuChip({
-          label: this.toolsOn && this.toolsLabel.length > 0 ? this.toolsLabel : '能力',
-          on: this.toolsOn,
-          maxVp: 120,
+          label: this.modelLabel.length > 0 ? this.modelLabel : 'model',
+          on: this.modelLabel.length > 0,
+          maxVp: 168,
           onTap: () => {
-            this.onTools();
+            this.onModel();
+          }
+        })
+        HuChip({
+          label: this.imageCount > 0 ? `图片 ${this.imageCount}` : '图片',
+          on: this.imageCount > 0,
+          maxVp: 88,
+          onTap: () => {
+            this.onImage();
           }
         })
         if (this.failedFollow) {

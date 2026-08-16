@@ -801,7 +801,7 @@ export struct NewAgentPage {
           .width('100%')
         Row({ space: 6 }) {
           HuChip({
-            label: '代理',
+            label: 'agent',
             on: this.mode !== 'plan',
             onTap: () => {
               this.mode = 'agent';
@@ -810,7 +810,7 @@ export struct NewAgentPage {
             }
           })
           HuChip({
-            label: '规划',
+            label: 'plan',
             on: this.mode === 'plan',
             onTap: () => {
               this.mode = 'plan';

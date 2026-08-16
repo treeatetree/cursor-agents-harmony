@@ -412,7 +412,7 @@ struct Index {
 
   private newSheetHeight(): number | SheetSize {
     if (this.keyboardInset > 16) {
-      return Math.max(this.bpStore.heightVp - 12, 420);
+      return Math.max(this.bpStore.heightVp - this.keyboardInset, 280);
     }
     return SheetSize.MEDIUM;
   }
@@ -609,6 +609,7 @@ struct Index {
         detents: [SheetSize.MEDIUM, SheetSize.LARGE],
         dragBar: true,
         showClose: false,
+        keyboardAvoidMode: SheetKeyboardAvoidMode.TRANSLATE_AND_RESIZE,
         backgroundColor: $r('app.color.overlay')
       })
     }

@@ -7,8 +7,8 @@ import { NewAgentVM } from '../viewmodels/NewAgentVM';
 import { ModelPicker } from '../components/ModelPicker';
 import { StatusBanner } from '../components/StatusBanner';
 import {
-  buildParamRows, groupModels, ModelParamRow, ModelVendorGroup, rowsToParams,
-  shortModelName, variantLabel, variantSectionTitle
+  buildParamRows, formatFollowChip, groupModels, isAutoModel, ModelParamRow,
+  ModelVendorGroup, rowsToParams, variantLabel, variantSectionTitle
 } from '../utils/ModelGroups';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
@@ -92,7 +92,7 @@ struct AgentDetailPage {
   @State queuedFollowUp: string = '';
   @State feed: TimelineItem[] = [];
   @State followUpMode: string = 'agent';
-  @State followModelLabel: string = '沿用';
+  @State followModelLabel: string = '';
   @State followUpModel: string = '';
   @State followVariantIndex: number = -1;
   @State followVariant: string = '';
@@ -423,10 +423,27 @@ struct AgentDetailPage {
   }
 
   private followModelLabelText(): string {
-    if (this.followUpModel.length === 0) {
-      return '沿用';
+    const name = this.followModelLabel.length > 0 ? this.followModelLabel : this.followUpModel;
+    return formatFollowChip(name, this.vm.followUpParams);
+  }
+
+  private ensureFollowModel(): void {
+    if (this.followUpModel.length > 0) {
+      this.refreshFollowModelMeta();
+      return;
     }
-    return shortModelName(this.followModelLabel.length > 0 ? this.followModelLabel : this.followUpModel);
+    const fromVm = this.modelVm.selectedModel;
+    if (fromVm.length > 0) {
+      this.pickFollowModel(fromVm);
+      return;
+    }
+    const models = this.modelVm.models;
+    for (let i = 0; i < models.length; i++) {
+      if (!isAutoModel(models[i])) {
+        this.pickFollowModel(models[i].id);
+        return;
+      }
+    }
   }
 
   private pickFollowModel(id: string): void {
@@ -447,7 +464,7 @@ struct AgentDetailPage {
     this.followVariantOptions = [];
     this.followVariantTitle = '模式';
     this.followParamRows = [];
-    this.followModelLabel = '沿用';
+    this.followModelLabel = '';
     if (this.followUpModel.length === 0) {
       return;
     }
@@ -970,8 +987,10 @@ struct AgentDetailPage {
         });
         this.modelVm.hydrateFromCache();
         this.syncFollowModels();
+        this.ensureFollowModel();
         this.modelVm.loadMeta(false).then(() => {
           this.syncFollowModels();
+          this.ensureFollowModel();
         });
         PrefStore.getInstance().getLastTools().then((raw: string) => {
           if (this.followUpMcp.length === 0) {
@@ -1199,7 +1218,7 @@ struct AgentDetailPage {
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
-      Text('默认沿用创建时的模型。选了才覆盖这一轮。')
+      Text('这一轮用的模型和参数。')
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%')
@@ -1210,8 +1229,7 @@ struct AgentDetailPage {
         variantOptions: this.followVariantOptions,
         variantTitle: this.followVariantTitle,
         paramRows: this.followParamRows,
-        allowAuto: true,
-        autoLabel: '沿用',
+        allowAuto: false,
         onPick: (id: string) => {
           this.pickFollowModel(id);
         },
@@ -1405,6 +1423,14 @@ struct AgentDetailPage {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       .padding({ bottom: 8 })
+      Text(countMcp(this.followUpMcp) > 0 ? `能力 · ${this.followToolsLabel}` : '能力')
+        .width('100%')
+        .height(48)
+        .fontSize(Tokens.typeProse)
+        .fontColor($r('app.color.text_primary'))
+        .onClick(() => {
+          this.sheetKind = 'tools';
+        })
       if (this.prLabel().length > 0) {
         Text(this.prLabel())
           .width('100%')

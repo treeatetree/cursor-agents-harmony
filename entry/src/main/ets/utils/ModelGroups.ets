@@ -16,7 +16,51 @@ export interface ModelParamRow {
 const VENDOR_ORDER: string[] = ['Cursor', 'xAI', 'Anthropic', 'OpenAI', 'Google', '其他'];
 
 export function shortModelName(name: string): string {
-  return name.replace(/^Cursor\s+/i, '');
+  return name
+    .replace(/^Cursor\s+/i, '')
+    .replace(/^Anthropic\s+/i, '')
+    .replace(/^OpenAI\s+/i, '')
+    .replace(/^Google\s+/i, '')
+    .replace(/^xAI\s+/i, '')
+    .replace(/^Claude\s+/i, '')
+    .trim();
+}
+
+/** Chip: model name + effort/fast only when those params are on. */
+export function formatFollowChip(name: string, params: Object[]): string {
+  const bits: string[] = [];
+  const short = shortModelName(name);
+  if (short.length > 0) {
+    bits.push(short);
+  }
+  let effortOn = false;
+  let fastOn = false;
+  for (let i = 0; i < params.length; i++) {
+    const row = params[i] as Record<string, Object>;
+    const id = `${row['id'] ?? ''}`.toLowerCase();
+    const val = `${row['value'] ?? ''}`.toLowerCase();
+    if (id === 'effort' || id === 'reasoning') {
+      if (isEffortOn(val)) {
+        effortOn = true;
+      }
+    } else if (id === 'fast' || id === 'speed') {
+      if (val === 'true' || val === '1' || val === 'fast') {
+        fastOn = true;
+      }
+    }
+  }
+  if (effortOn) {
+    bits.push('effort');
+  }
+  if (fastOn) {
+    bits.push('fast');
+  }
+  return bits.join(' · ');
+}
+
+function isEffortOn(val: string): boolean {
+  return val.length > 0 && val !== 'false' && val !== '0' && val !== 'off' && val !== 'none' &&
+    val !== 'low';
 }
 
 /** What we actually POST as `model` — for logs and the user-bubble caption. */
