@@ -385,6 +385,22 @@ struct AgentDetailPage {
     return '';
   }
 
+  private cardProcessTitle(item: TimelineItem): string {
+    const live = this.runActive && (item.streaming === true || item.runId === this.vm.activeRunId);
+    if (!live) {
+      return this.activityTitle(item);
+    }
+    const _t = this.tick;
+    let elapsed = '';
+    if (this.runStartMs > 0) {
+      elapsed = elapsedLabel(Math.max(0, Math.floor((Date.now() - this.runStartMs) / 1000)));
+    }
+    if (item.runId === 'pending' || (item.text ?? '').trim().length === 0) {
+      return elapsed.length > 0 ? `正在连接 · ${elapsed}` : '正在连接…';
+    }
+    return elapsed.length > 0 ? `推理中 · ${elapsed}` : '推理中';
+  }
+
   private processLabel(): string {
     const _t = this.tick;
     let elapsed = '';
@@ -818,6 +834,14 @@ struct AgentDetailPage {
       .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 4 })
     }
 
+    if (this.sending || this.streamNotice.length > 0) {
+      Text(this.streamNotice.length > 0 ? this.streamNotice : '正在提交…')
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+        .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 4 })
+    }
+
     PromptShell({
       follow: true,
       placeholder: '追问…',
@@ -825,6 +849,7 @@ struct AgentDetailPage {
       live: this.runActive,
       cancelling: this.cancelling,
       busy: this.sending,
+      status: this.sending ? '发送中' : '',
       imageCount: this.attachedImages.length,
       imageUris: $imageUris,
       toolsOn: countMcp(this.followUpMcp) > 0,
@@ -835,15 +860,20 @@ struct AgentDetailPage {
       onSend: async () => {
         const text = this.draft;
         const imgs = this.attachedImages;
+        this.draft = '';
+        this.attachedImages = [];
+        this.imageUris = [];
+        this.sending = true;
         this.vm.followUpMcp = this.followUpMcp;
         const ok = await this.vm.followUp(text, imgs);
-        if (ok) {
-          this.draft = '';
-          for (let i = 0; i < this.attachedImages.length; i++) {
-            dropPreviewMap(previewSrc(this.attachedImages[i]));
+        if (!ok) {
+          this.draft = text;
+          this.attachedImages = imgs;
+          this.syncImageUris();
+        } else {
+          for (let i = 0; i < imgs.length; i++) {
+            dropPreviewMap(previewSrc(imgs[i]));
           }
-          this.attachedImages = [];
-          this.imageUris = [];
         }
         this.sync();
       },
@@ -1325,7 +1355,7 @@ struct AgentDetailPage {
           item: item,
           runActive: this.runActive,
           shimmerOn: this.shimmerOn,
-          title: this.processLabel().length > 0 ? this.processLabel() : this.activityTitle(item),
+          title: this.cardProcessTitle(item),
           body: this.processBodyForRun(item.runId),
           tools: this.toolsForRun(item.runId),
           onToggle: () => {

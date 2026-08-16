@@ -378,6 +378,7 @@ struct NewAgentPage {
       return;
     }
     this.busy = true;
+    this.errorMsg = '';
     const resp = await this.vm.submit();
     this.syncFromVm();
     if (resp && resp.agent) {
@@ -436,6 +437,18 @@ struct NewAgentPage {
         })
         .margin({ top: this.topInset })
 
+        if (this.busy) {
+          Text('正在创建任务… 对话页马上打开')
+            .fontSize(Tokens.typeCaption)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+            .padding({
+              left: Tokens.pagePad,
+              right: Tokens.pagePad,
+              bottom: 8
+            })
+        }
+
         if (this.errorMsg.length > 0) {
           Text(this.errorMsg)
             .fontSize(Tokens.typeCaption)
@@ -453,6 +466,7 @@ struct NewAgentPage {
             placeholder: '要做什么？目标和约束',
             text: $prompt,
             busy: this.busy,
+            status: '创建中',
             repo: this.repoChipLabel(),
             modelLabel: this.modelLabel(),
             autoPr: this.autoCreatePR,

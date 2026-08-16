@@ -78,6 +78,7 @@ export class DetailVM {
   private queueTimer: number = -1;
   private queueRetries: number = 0;
   private convKey: string = '';
+  private streamRunId: string = '';
   private onUi: (() => void) | undefined = undefined;
 
   constructor() {
@@ -319,6 +320,7 @@ export class DetailVM {
     this.branches = [];
     this.runStatus = '';
     this.activeRunId = '';
+    this.streamRunId = '';
     this.durationMs = 0;
     this.artifacts = [];
     this.usageLabel = '';
@@ -380,6 +382,7 @@ export class DetailVM {
   private async sendFollowUp(prompt: string, images: PromptImage[] = []): Promise<boolean> {
     this.sending = true;
     this.errorMsg = '';
+    this.streamNotice = '正在提交…';
     const tempKey = `user-${Date.now()}`;
     this.source.append({
       key: tempKey,
@@ -387,8 +390,17 @@ export class DetailVM {
       runId: 'pending',
       text: images.length > 0 ? `${prompt}\n（${images.length} 张图）` : prompt
     });
+    this.source.append({
+      key: `thinking-${tempKey}`,
+      kind: 'thinking',
+      runId: 'pending',
+      text: '',
+      collapsed: true,
+      streaming: true
+    });
     this.stickToBottom = true;
     this.notify();
+    this.uiFlush.flush();
     try {
       const body: Record<string, Object> = {};
       const promptObj: Record<string, Object> = {};
@@ -412,6 +424,15 @@ export class DetailVM {
         item.runId = run.id;
         this.source.updateAt(idx, item);
       }
+      const thinkIdx = this.source.findIndexByKey(`thinking-${tempKey}`);
+      if (thinkIdx >= 0) {
+        const think = this.source.getData(thinkIdx);
+        think.key = `thinking-${run.id}`;
+        think.runId = run.id;
+        think.streaming = true;
+        this.source.updateAt(thinkIdx, think);
+        this.activeThinkingKey = think.key;
+      }
       this.source.append({
         key: `run-${run.id}`,
         kind: 'runHeader',
@@ -420,12 +441,19 @@ export class DetailVM {
         text: `运行 · ${runStatusZh(run.status)}`
       });
       this.applyRunSnapshot(run);
+      this.sending = false;
+      this.notify();
+      this.uiFlush.flush();
       await this.startStream(run.id);
       return true;
     } catch (e) {
       const idx = this.source.findIndexByKey(tempKey);
       if (idx >= 0) {
         this.source.removeAt(idx);
+      }
+      const thinkIdx = this.source.findIndexByKey(`thinking-${tempKey}`);
+      if (thinkIdx >= 0) {
+        this.source.removeAt(thinkIdx);
       }
       if (e instanceof ApiException && (e.code === 409 || e.apiCode === 'agent_busy')) {
         this.queuedFollowUp = prompt;
@@ -539,6 +567,9 @@ export class DetailVM {
     ThemeStore.getInstance().setKeepScreenOn(false);
     LiveIsland.finish(runStatusZh(this.runStatus)).catch(() => {
     });
+    if (this.streamRunId === this.activeRunId) {
+      this.streamRunId = '';
+    }
     this.loadArtifactsAndUsage();
     this.refreshRunUsage(this.activeRunId);
     this.recomputeCompareUrl();
@@ -658,12 +689,14 @@ export class DetailVM {
 
   private async startStream(runId: string, resume: boolean = false): Promise<void> {
     this.activeRunId = runId;
+    this.streamRunId = runId;
     if (!resume) {
       this.activeAssistantKey = '';
-      this.activeThinkingKey = '';
       this.activeProgressKey = '';
       this.progressSealed = true;
       this.runHasTools = false;
+      const existingThink = this.source.findIndexByKey(`thinking-${runId}`);
+      this.activeThinkingKey = existingThink >= 0 ? `thinking-${runId}` : '';
     }
     this.streamNotice = '连接中…';
     ThemeStore.getInstance().setKeepScreenOn(true);
@@ -674,12 +707,18 @@ export class DetailVM {
     // CREATING / flap fallback — design: ~5–15s; use 5s while CREATING else 8s
     const pollMs = this.runStatus === 'CREATING' ? 5000 : 8000;
     this.pollTimer = setInterval(async () => {
+      if (this.streamRunId.length > 0 && this.streamRunId !== runId) {
+        return;
+      }
       if (!this.isRunActive()) {
         this.clearPoll();
         return;
       }
       try {
         const run = await CursorApiClient.getInstance().getRun(this.agentId, runId);
+        if (this.streamRunId.length > 0 && this.streamRunId !== runId) {
+          return;
+        }
         this.applyRunSnapshot(run);
         if (isTerminal(run.status)) {
           this.finishStreamingItems();
@@ -926,26 +965,27 @@ export class DetailVM {
     if (key.length === 0) {
       key = `thinking-${this.activeRunId}`;
       this.activeThinkingKey = key;
-      this.source.append({
-        key: key,
-        kind: 'thinking',
-        runId: this.activeRunId,
-        text: delta,
-        collapsed: true,
-        streaming: true
-      });
-      return;
     }
     const idx = this.source.findIndexByKey(key);
     if (idx >= 0) {
       this.source.mutateAt(idx, (item: TimelineItem) => {
         item.text = `${item.text ?? ''}${delta}`;
         item.streaming = true;
+        item.runId = this.activeRunId;
         if (item.pinnedOpen !== true) {
           item.collapsed = true;
         }
       });
+      return;
     }
+    this.source.append({
+      key: key,
+      kind: 'thinking',
+      runId: this.activeRunId,
+      text: delta,
+      collapsed: true,
+      streaming: true
+    });
   }
 
   private appendAssistant(delta: string): void {
@@ -1519,6 +1559,9 @@ export class DetailVM {
   }
 
   private applyRunSnapshot(run: Run): void {
+    if (this.streamRunId.length > 0 && run.id !== this.streamRunId) {
+      return;
+    }
     const prev = this.runStatus;
     this.activeRunId = run.id;
     this.runStatus = run.status;

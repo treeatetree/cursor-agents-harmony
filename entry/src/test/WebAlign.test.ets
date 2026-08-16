@@ -214,6 +214,20 @@ export default function webAlignTest() {
       expect(out[1].kind).assertEqual('thinking');
       expect(out[2].kind).assertEqual('assistant');
     });
+
+    it('keeps a process card per run after follow-up', 0, () => {
+      const items: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'r1', text: 'one' },
+        { key: 't1', kind: 'thinking', runId: 'r1', text: 'old reason' },
+        { key: 'a1', kind: 'assistant', runId: 'r1', text: 'done' },
+        { key: 'u2', kind: 'userPrompt', runId: 'r2', text: 'two' },
+        { key: 't2', kind: 'thinking', runId: 'r2', text: '', streaming: true }
+      ];
+      const out = visibleTimeline(items);
+      expect(out.length).assertEqual(5);
+      expect(out[1].key).assertEqual('t1');
+      expect(out[4].key).assertEqual('t2');
+    });
   });
 
   describe('MarkdownParse', () => {

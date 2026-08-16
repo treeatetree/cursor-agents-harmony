@@ -80,7 +80,7 @@ export struct ActivityCard {
         this.onToggle();
       })
 
-      if (!this.hasBody()) {
+      if (!this.hasBody() && this.item.streaming !== true) {
         Text('没有过程记录')
           .fontSize(Tokens.typeMicro)
           .fontColor($r('app.color.text_tertiary'))

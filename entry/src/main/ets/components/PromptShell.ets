@@ -27,6 +27,7 @@ export struct PromptShell {
   @Prop moreLabel: string = '更多';
   @Prop followUpMode: string = 'agent';
   @Prop queued: string = '';
+  @Prop status: string = '';
   @Prop bottomPad: number = 12;
   @State private focused: boolean = false;
   @State private wantFocus: boolean = false;
@@ -105,11 +106,11 @@ export struct PromptShell {
       this.sentScale = 1;
     }
     Haptics.commit();
+    this.onSend();
     setTimeout(() => {
       this.sent = false;
       this.sentScale = 1;
-      this.onSend();
-    }, prefersReducedMotion() ? 0 : 320);
+    }, prefersReducedMotion() ? 0 : 280);
   }
 
   private focusComposer(): void {
@@ -310,6 +311,13 @@ export struct PromptShell {
           })
         }
       }
+    } else if (this.busy) {
+      HuChip({
+        label: this.status.length > 0 ? this.status : '发送中',
+        on: true,
+        onTap: () => {
+        }
+      })
     } else {
       HuChip({
         label: '发送',
