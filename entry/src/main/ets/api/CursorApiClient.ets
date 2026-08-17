@@ -284,6 +284,8 @@ export class CursorApiClient {
         } else {
           message = '请求过于频繁，请稍后重试';
         }
+      } else if (code === 400) {
+        message = mapClient400(apiCode, message);
       } else if (creating && (code === 500 || code === 502 || code === 503 || code === 504)) {
         message = 'Cursor 创建任务繁忙，请稍后再发';
       } else if (code === 503) {
@@ -309,6 +311,18 @@ function looksLikeConcurrencyLimit(message: string): boolean {
   return low.indexOf('limit') >= 0 || low.indexOf('upgrade') >= 0 ||
     low.indexOf('simultaneous') >= 0 || low.indexOf('concurrent') >= 0 ||
     message.indexOf('上限') >= 0 || message.indexOf('同时') >= 0;
+}
+
+function mapClient400(apiCode: string, message: string): string {
+  const low = message.toLowerCase();
+  if (low.indexOf('not supported in your region') >= 0 ||
+    (apiCode === 'invalid_model' && low.indexOf('region') >= 0)) {
+    return '这个模型在当前地区不可用，换 Composer、Grok、Kimi 或 GLM';
+  }
+  if (apiCode === 'invalid_model') {
+    return '这个模型或参数不被支持，换一组参数或换模型';
+  }
+  return sanitizeApiMessage(message, '请求失败（400）');
 }
 
 /** Drop raw JSON / HTML / "body..." so toasts stay readable. */

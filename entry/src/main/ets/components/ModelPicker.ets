@@ -2,7 +2,7 @@ import { ModelInfo } from '../models/Api';
 import { Tokens } from '../theme/Tokens';
 import { HuChip } from './HuChip';
 import {
-  ModelParamRow, ModelVendorGroup, shortModelName
+  ModelParamRow, ModelVendorGroup, regionRestrictedHint, shortModelName
 } from '../utils/ModelGroups';
 
 @Component
@@ -22,6 +22,10 @@ export struct ModelPicker {
   };
   onPickVariant: (idx: number) => void = (_idx: number) => {
   };
+
+  private regionNote(): string {
+    return regionRestrictedHint(this.selectedModel);
+  }
 
   build() {
     Column({ space: 8 }) {
@@ -62,6 +66,13 @@ export struct ModelPicker {
         .width('100%')
         .alignItems(HorizontalAlign.Start)
       }, (g: ModelVendorGroup) => g.vendor)
+      if (this.regionNote().length > 0) {
+        Text(this.regionNote())
+          .fontSize(Tokens.typeCaption)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .padding({ top: 4, bottom: 2 })
+      }
       if (this.paramRows.length > 0) {
         Column({ space: 8 }) {
           ForEach(this.paramRows, (row: ModelParamRow) => {

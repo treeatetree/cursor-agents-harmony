@@ -185,6 +185,17 @@ export function vendorOf(m: ModelInfo): string {
   return '其他';
 }
 
+export function regionRestrictedHint(modelId: string): string {
+  const id = modelId.trim().toLowerCase();
+  if (id.length === 0) {
+    return '';
+  }
+  if (id.indexOf('gpt-') === 0 || id.indexOf('claude-') === 0 || id.indexOf('gemini-') === 0) {
+    return 'OpenAI / Claude / Gemini 在当前地区常不可用，可改用 Composer、Grok、Kimi 或 GLM';
+  }
+  return '';
+}
+
 export function groupModels(models: ModelInfo[]): ModelVendorGroup[] {
   const out: ModelVendorGroup[] = [];
   for (let i = 0; i < VENDOR_ORDER.length; i++) {
