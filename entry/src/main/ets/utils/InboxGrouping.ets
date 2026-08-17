@@ -169,6 +169,77 @@ export function firstPrUrl(a: AgentSummary): string {
   return '';
 }
 
+export interface InboxDelta {
+  ids: string[];
+  added: number;
+  updated: number;
+}
+
+export function emptyInboxDelta(): InboxDelta {
+  return { ids: [], added: 0, updated: 0 };
+}
+
+function agentRefreshSig(a: AgentSummary): string {
+  const result = a.latestResult ?? '';
+  const clip = result.length > 80 ? result.substring(0, 80) : result;
+  return `${a.updatedAt}|${a.lastUserAt ?? ''}|${a.status}|${a.latestRunId ?? ''}|${a.latestRunStatus ?? ''}|${a.name}|${clip}|${firstPrUrl(a)}`;
+}
+
+/** Compare two inbox snapshots. Empty prev (first fetch) is not a delta. */
+export function diffInboxAgents(prev: AgentSummary[], next: AgentSummary[]): InboxDelta {
+  if (prev.length === 0) {
+    return emptyInboxDelta();
+  }
+  const oldSig: Record<string, string> = {};
+  for (let i = 0; i < prev.length; i++) {
+    oldSig[prev[i].id] = agentRefreshSig(prev[i]);
+  }
+  const ids: string[] = [];
+  let added = 0;
+  let updated = 0;
+  for (let i = 0; i < next.length; i++) {
+    const id = next[i].id;
+    const sig = agentRefreshSig(next[i]);
+    const old = oldSig[id];
+    if (old === undefined) {
+      ids.push(id);
+      added++;
+    } else if (old !== sig) {
+      ids.push(id);
+      updated++;
+    }
+  }
+  return { ids: ids, added: added, updated: updated };
+}
+
+export function inboxDeltaLabel(d: InboxDelta): string {
+  if (d.ids.length === 0) {
+    return '已是最新';
+  }
+  if (d.added > 0 && d.updated === 0) {
+    return `${d.added} 个新会话`;
+  }
+  if (d.updated > 0 && d.added === 0) {
+    return `${d.updated} 个会话有更新`;
+  }
+  return `${d.ids.length} 个会话有更新`;
+}
+
+export function filterAgentsByIds(items: AgentSummary[], ids: string[]): AgentSummary[] {
+  const map: Record<string, AgentSummary> = {};
+  for (let i = 0; i < items.length; i++) {
+    map[items[i].id] = items[i];
+  }
+  const out: AgentSummary[] = [];
+  for (let i = 0; i < ids.length; i++) {
+    const a = map[ids[i]];
+    if (a) {
+      out.push(a);
+    }
+  }
+  return out;
+}
+
 export function urgencyOf(a: AgentSummary): number {
   const run = `${a.latestRunStatus ?? ''}`;
   if (isRunInFlight(run)) {

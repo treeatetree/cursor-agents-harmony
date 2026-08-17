@@ -125,6 +125,7 @@ struct Index {
   @State unreadIds: string[] = [];
   @State unreadItems: UnreadItem[] = [];
   @State unreadCount: number = 0;
+  @State deltaIds: string[] = [];
   @State renameDraft: string = '';
   @StorageLink('aliasRev') @Watch('onAliasRev') aliasRev: number = 0;
   @State setupKey: string = '';
@@ -328,12 +329,35 @@ struct Index {
   private async runInboxRefresh(okText: string = ''): Promise<void> {
     const ok = await this.inbox.refresh(false);
     this.pullInboxUi();
-    if (ok) {
-      notifyResult(true, okText.length > 0 ? okText : `已更新 · ${this.agentCount} 条`);
+    if (!ok) {
+      const err = this.inboxError.length > 0 ? this.inboxError : '刷新失败';
+      notifyResult(false, '', err);
       return;
     }
-    const err = this.inboxError.length > 0 ? this.inboxError : '刷新失败';
-    notifyResult(false, '', err);
+    if (okText.length > 0) {
+      this.clearDelta();
+      notifyResult(true, okText);
+      return;
+    }
+    const delta = this.inbox.lastDelta;
+    if (delta.ids.length === 0) {
+      notifyResult(true, '已是最新');
+      return;
+    }
+    this.deltaIds = delta.ids;
+    this.recomputeView();
+  }
+
+  private clearDelta(): void {
+    if (this.deltaIds.length === 0) {
+      return;
+    }
+    this.deltaIds = [];
+    this.recomputeView();
+  }
+
+  private isFresh(id: string): boolean {
+    return this.unreadIds.indexOf(id) >= 0 || this.deltaIds.indexOf(id) >= 0;
   }
 
   /** Recompute flat / grouped view models from the inbox source + current toolbar state. */
@@ -635,6 +659,15 @@ struct Index {
   private openAgent(id: string): void {
     if (id.length === 0) {
       return;
+    }
+    const next: string[] = [];
+    for (let i = 0; i < this.deltaIds.length; i++) {
+      if (this.deltaIds[i] !== id) {
+        next.push(this.deltaIds[i]);
+      }
+    }
+    if (next.length !== this.deltaIds.length) {
+      this.deltaIds = next;
     }
     Haptics.click();
     this.selectedId = id;
@@ -1326,7 +1359,7 @@ struct Index {
           preview: AgentCache.getInstance().peekSummary(item.id),
           list: true,
           pinned: isPinnedId(item.id, this.pinnedIds),
-          unread: this.unreadIds.indexOf(item.id) >= 0,
+          unread: this.isFresh(item.id),
           active: item.id === this.selectedId,
           onOpen: (id: string) => {
             this.openAgent(id);
@@ -1492,7 +1525,7 @@ struct Index {
       showRepo: this.groupMode !== 'repo',
       preview: AgentCache.getInstance().peekSummary(item.id),
       pinned: isPinnedId(item.id, this.pinnedIds),
-      unread: this.unreadIds.indexOf(item.id) >= 0,
+      unread: this.isFresh(item.id),
       onOpen: (id: string) => {
         this.openAgent(id);
       },

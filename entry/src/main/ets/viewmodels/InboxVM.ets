@@ -11,7 +11,10 @@ import { WidgetBridge } from '../utils/WidgetBridge';
 import { UnreadStore } from '../store/UnreadStore';
 import { PrefStore } from '../store/PrefStore';
 import { clipNotice } from '../utils/MarkdownParse';
-import { isRunInFlight, mergeInboxLists, pickNewerIso, sortByRecency } from '../utils/InboxGrouping';
+import {
+  InboxDelta, diffInboxAgents, emptyInboxDelta, isRunInFlight, mergeInboxLists, pickNewerIso,
+  sortByRecency
+} from '../utils/InboxGrouping';
 import { repoTail } from '../utils/DisplayFmt';
 import { AppState } from '../utils/AppState';
 import { LiveIsland } from '../utils/LiveIsland';
@@ -36,6 +39,7 @@ export class InboxVM {
   dirty: boolean = false;
   actionBanner: string = '';
   actionKind: string = '';
+  lastDelta: InboxDelta = emptyInboxDelta();
   private ctx: common.UIAbilityContext | undefined = undefined;
   private heldIds: string[] = [];
   private refreshQueued: boolean = false;
@@ -129,6 +133,7 @@ export class InboxVM {
       agents = sortByRecency(agents);
       this.heldIds = this.heldIdsStillMissing(agents);
       this.noteStatusChanges(prev, agents);
+      this.lastDelta = silent ? emptyInboxDelta() : diffInboxAgents(prev, agents);
       this.source.replaceAll(agents);
       const filtered = this.includeArchived || this.prUrlFilter.length > 0;
       AgentCache.getInstance().saveInbox(agents, filtered ? 'merge' : 'full');
