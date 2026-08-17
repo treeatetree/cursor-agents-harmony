@@ -1,5 +1,5 @@
 import { ApiException, AgentDetail, AgentSummary, ArtifactInfo, ConversationMessage,
-  ConversationResponse, GitBranch, McpServerDef, Run, RunStatus, RunUsage } from '../models/Api';
+  GitBranch, McpServerDef, Run, RunStatus, RunUsage } from '../models/Api';
 import { SseFrame, ToolCallEvent } from '../models/Sse';
 import { TimelineItem } from '../models/Timeline';
 import { CursorApiClient } from '../api/CursorApiClient';
@@ -24,8 +24,10 @@ import { countSteps, dropLastStep, isProgressText, lastNonEmptyLine, lastStep } 
 import { usedToolFromEvent } from '../utils/TimelineCopy';
 import { gitCompareUrl } from '../utils/GitLinks';
 import { PromptImage, toApiImages } from '../utils/ImagePicker';
-import { formatModelSent, modelSentJson } from '../utils/ModelGroups';
-import { convFingerprint, mergeCachedActivity } from '../utils/TimelineMerge';
+import { formatModelSent, modelSentJson, modelSentTags } from '../utils/ModelGroups';
+import { convFingerprint, mergeCachedActivity, restoreUserSentTags } from '../utils/TimelineMerge';
+import { SessionDiag } from '../utils/SessionDiag';
+import { countNewContent, findUnreadAnchor, lastContentKey, visibleTimeline } from '../utils/TimelineView';
 
 const TAG = 'DetailVM';
 
@@ -74,6 +76,9 @@ export class DetailVM {
   startingRef: string = '';
   compareUrl: string = '';
   syncing: boolean = false;
+  convError: string = '';
+  unreadAnchorKey: string = '';
+  unreadNewCount: number = 0;
   source: TimelineSource = new TimelineSource();
 
   private uiFlush: Throttle;
@@ -94,6 +99,8 @@ export class DetailVM {
   private queueRetries: number = 0;
   private convKey: string = '';
   private streamRunId: string = '';
+  private streamFrames: number = 0;
+  private openWasUnread: boolean = false;
   private onUi: (() => void) | undefined = undefined;
 
   constructor() {
@@ -127,32 +134,48 @@ export class DetailVM {
     this.agentId = agentId;
     AppStorage.setOrCreate('watchingAgentId', agentId);
     this.errorMsg = '';
+    this.convError = '';
     this.deleted = false;
     this.needsPlanUpgrade = false;
     this.createRetryable = false;
     this.convKey = '';
+    this.unreadAnchorKey = '';
+    this.unreadNewCount = 0;
+    this.openWasUnread = UnreadStore.getInstance().isUnread(agentId);
 
     const cached = AgentCache.getInstance().loadAgent(agentId);
     let painted = false;
+    let cacheHit = 'none';
     if (cached?.detail) {
       this.applyDetail(cached.detail);
       painted = true;
+      cacheHit = 'detail';
     }
     if (cached?.runs && cached.runs.length > 0) {
       this.applyLatestRunMeta(cached.runs);
       painted = true;
+      cacheHit = cacheHit === 'none' ? 'runs' : `${cacheHit}+runs`;
     }
     if (cached?.messages && cached.messages.length > 0) {
       this.buildConversation(cached.messages);
       this.applyMergedActivity(cached.timeline);
       this.convKey = convFingerprint(cached.messages);
       painted = true;
+      cacheHit = cacheHit === 'none' ? 'messages' : `${cacheHit}+messages`;
     } else if (cached?.timeline && cached.timeline.length > 0) {
       this.source.replaceAll(cached.timeline);
       painted = true;
+      cacheHit = cacheHit === 'none' ? 'timeline' : `${cacheHit}+timeline`;
     }
+    this.applyUnreadScroll();
     this.loading = !painted;
     this.syncing = true;
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'open',
+      agentId: agentId,
+      extra: `cache=${cacheHit} unread=${this.openWasUnread ? 1 : 0} n=${this.source.totalCount()}`
+    });
     this.notify();
     this.uiFlush.flush();
 
@@ -160,10 +183,7 @@ export class DetailVM {
       const client = CursorApiClient.getInstance();
       const settled = await Promise.all([
         client.getAgent(agentId),
-        client.getRuns(agentId, 20),
-        client.getConversation(agentId).catch((_e: Object): ConversationResponse => {
-          return { messages: [] } as ConversationResponse;
-        })
+        client.getRuns(agentId, 20)
       ]);
       const detail = unwrapAgentDetail(settled[0] as object);
       this.applyDetail(detail);
@@ -171,19 +191,41 @@ export class DetailVM {
       const runs = extractRuns(settled[1] as object);
       this.applyLatestRunMeta(runs);
 
-      const conv = settled[2] as ConversationResponse;
-      const messages = conv.messages ?? [];
+      const convStarted = Date.now();
+      let messages: ConversationMessage[] = [];
+      let convOk = false;
+      try {
+        const conv = await client.getConversation(agentId);
+        messages = conv.messages ?? [];
+        convOk = true;
+        this.convError = '';
+      } catch (_e) {
+        convOk = false;
+        this.convError = '同步对话失败';
+      }
+      const convMs = Date.now() - convStarted;
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'conv',
+        agentId: agentId,
+        elapsedMs: convMs,
+        extra: `ok=${convOk ? 1 : 0} n=${messages.length} cache=${painted ? 1 : 0}`
+      });
       const nextKey = convFingerprint(messages);
-      if (messages.length > 0 && nextKey !== this.convKey) {
+      if (convOk && messages.length > 0 && nextKey !== this.convKey) {
         const live = this.source.snapshot();
         this.buildConversation(messages);
         this.applyMergedActivity(cached?.timeline);
         this.applyMergedActivity(live);
         this.convKey = nextKey;
-      } else if (messages.length === 0 && !painted) {
+        this.applyUnreadScroll();
+      } else if (convOk && messages.length === 0 && !painted) {
         this.buildRunsFallback(runs);
+        this.applyUnreadScroll();
+      } else if (!convOk && !painted) {
+        this.errorMsg = this.convError;
       }
-      AgentCache.getInstance().saveAgent(agentId, detail, runs, undefined, messages);
+      AgentCache.getInstance().saveAgent(agentId, detail, runs, undefined, convOk ? messages : undefined);
       this.persistTimeline(true);
 
       if (this.activeRunId.length > 0) {
@@ -217,8 +259,60 @@ export class DetailVM {
     } finally {
       this.loading = false;
       this.syncing = false;
+      this.rememberSeen();
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'open_done',
+        agentId: agentId,
+        extra: `stick=${this.stickToBottom ? 1 : 0} anchor=${this.unreadAnchorKey.length > 0 ? 1 : 0} n=${this.source.totalCount()}`
+      });
       this.notify();
       this.uiFlush.flush();
+    }
+  }
+
+  applyAlias(name: string): void {
+    this.name = name;
+    this.notify();
+  }
+
+  async retryConversation(): Promise<void> {
+    if (this.agentId.length === 0) {
+      return;
+    }
+    this.convError = '';
+    this.syncing = true;
+    this.notify();
+    const started = Date.now();
+    try {
+      const conv = await CursorApiClient.getInstance().getConversation(this.agentId);
+      const messages = conv.messages ?? [];
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'conv_retry',
+        agentId: this.agentId,
+        elapsedMs: Date.now() - started,
+        extra: `n=${messages.length}`
+      });
+      const nextKey = convFingerprint(messages);
+      if (messages.length > 0 && nextKey !== this.convKey) {
+        const live = this.source.snapshot();
+        this.buildConversation(messages);
+        this.applyMergedActivity(live);
+        this.convKey = nextKey;
+      }
+    } catch (_e) {
+      this.convError = '同步对话失败';
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'conv_retry',
+        agentId: this.agentId,
+        elapsedMs: Date.now() - started,
+        extra: 'fail'
+      });
+    } finally {
+      this.syncing = false;
+      this.notify();
     }
   }
 
@@ -240,7 +334,7 @@ export class DetailVM {
     await CreateDraftStore.getInstance().hydrate();
     const draft = CreateDraftStore.getInstance().peek();
     const prompt = draft?.prompt ?? '';
-    this.name = draft?.name ?? '新任务';
+    this.name = PrefStore.getInstance().displayName(localId, draft?.name ?? '新任务');
     const createModel = draft ? createModelOf(draft.body) : undefined;
     Log.info(TAG, `create model ${modelSentJson(createModel)}`);
     this.source.replaceAll([
@@ -249,7 +343,8 @@ export class DetailVM {
         kind: 'userPrompt',
         runId: 'pending',
         text: prompt,
-        usageShort: formatModelSent(createModel)
+        usageShort: formatModelSent(createModel),
+        sentTags: modelSentTags(createModel)
       },
       {
         key: 'seed-think',
@@ -360,7 +455,8 @@ export class DetailVM {
   }
 
   private applyDetail(detail: AgentDetail): void {
-    this.name = detail.name ?? this.agentId;
+    const apiName = detail.name ?? this.agentId;
+    this.name = PrefStore.getInstance().displayName(this.agentId, apiName);
     this.status = detail.status ?? '';
     this.url = detail.url ?? '';
     this.activeRunId = detail.latestRunId ?? this.activeRunId;
@@ -621,14 +717,15 @@ export class DetailVM {
       kind: 'userPrompt',
       runId: 'pending',
       text: images.length > 0 ? `${prompt}\n（${images.length} 张图）` : prompt,
-      usageShort: formatModelSent(followModel)
+      usageShort: formatModelSent(followModel),
+      sentTags: modelSentTags(followModel)
     });
     this.source.append({
       key: `thinking-${tempKey}`,
       kind: 'thinking',
       runId: 'pending',
       text: '',
-      collapsed: true,
+      collapsed: false,
       streaming: true
     });
     this.stickToBottom = true;
@@ -660,6 +757,13 @@ export class DetailVM {
         body['mcpServers'] = mcp;
       }
       const run = await CursorApiClient.getInstance().createRun(this.agentId, body);
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'createRun',
+        agentId: this.agentId,
+        runId: run.id,
+        extra: 'ok'
+      });
       this.lastFailedPrompt = '';
       this.lastFailedImages = [];
       this.queueRetries = 0;
@@ -675,6 +779,7 @@ export class DetailVM {
         think.key = `thinking-${run.id}`;
         think.runId = run.id;
         think.streaming = true;
+        think.collapsed = false;
         this.source.updateAt(thinkIdx, think);
         this.activeThinkingKey = think.key;
       }
@@ -832,8 +937,9 @@ export class DetailVM {
     AppStorage.setOrCreate('pendingNotice',
       snippet.length > 0 ? `${this.name} ${zh} · ${snippet}` : `${this.name} ${zh}`);
     if (DetailVM.activeInstance !== this) {
-      UnreadStore.getInstance().markFinished(this.agentId, this.name, zh, snippet).catch(() => {
-      });
+      UnreadStore.getInstance().markFinished(this.agentId, this.name, zh, snippet, this.repoLabel)
+        .catch(() => {
+        });
     }
   }
 
@@ -1018,6 +1124,14 @@ export class DetailVM {
   private async startStream(runId: string, resume: boolean = false): Promise<void> {
     this.activeRunId = runId;
     this.streamRunId = runId;
+    this.streamFrames = 0;
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'stream_start',
+      agentId: this.agentId,
+      runId: runId,
+      extra: resume ? 'resume' : 'fresh'
+    });
     if (resume) {
       this.freezeLiveOverlay();
     }
@@ -1104,12 +1218,26 @@ export class DetailVM {
       this.clearConnectNoticeTimer();
       this.streamNotice = '';
       this.eventIdFlush.flush();
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'stream_terminal',
+        agentId: this.agentId,
+        runId: this.activeRunId,
+        extra: `kind=done frames=${this.streamFrames}`
+      });
       this.fetchTerminal();
     } else if (kind === 'error') {
       this.pendingConnectNotice = false;
       this.clearConnectNoticeTimer();
       this.freezeLiveOverlay();
       this.streamNotice = detail.length > 0 ? detail : 'SSE 异常，已切换轮询';
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'stream_terminal',
+        agentId: this.agentId,
+        runId: this.activeRunId,
+        extra: `kind=error frames=${this.streamFrames}`
+      });
     }
     this.notify();
   }
@@ -1191,6 +1319,7 @@ export class DetailVM {
     if (frame.event === 'heartbeat' || frame.event === 'unknown') {
       return;
     }
+    this.streamFrames += 1;
     this.timelineFlush.kick();
     if (frame.event === 'status') {
       const st = parseJson(frame.data);
@@ -1721,7 +1850,8 @@ export class DetailVM {
           failed: it.failed,
           streaming: false,
           stepCount: it.stepCount,
-          usageShort: it.usageShort
+          usageShort: it.usageShort,
+          sentTags: it.sentTags
         });
       }
     }
@@ -1749,7 +1879,7 @@ export class DetailVM {
       return;
     }
     const snap = this.source.snapshot();
-    const merged = mergeCachedActivity(snap, cached);
+    const merged = restoreUserSentTags(mergeCachedActivity(snap, cached), cached);
     if (merged !== snap) {
       this.source.replaceAll(merged);
     }
@@ -1849,8 +1979,33 @@ export class DetailVM {
     }
     flushAsAssistant();
     this.source.replaceAll(items);
-    // Open on latest turn (Linear/issue detail convention).
-    this.stickToBottom = true;
+    this.applyUnreadScroll();
+  }
+
+  private applyUnreadScroll(): void {
+    if (!this.openWasUnread) {
+      this.stickToBottom = true;
+      this.unreadAnchorKey = '';
+      this.unreadNewCount = 0;
+      return;
+    }
+    const vis = visibleTimeline(this.source.snapshot());
+    const lastSeen = UnreadStore.getInstance().lastSeenKey(this.agentId);
+    this.unreadAnchorKey = findUnreadAnchor(vis, lastSeen);
+    this.unreadNewCount = countNewContent(vis, lastSeen);
+    this.stickToBottom = this.unreadAnchorKey.length === 0;
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'unread_scroll',
+      agentId: this.agentId,
+      extra: `stick=${this.stickToBottom ? 1 : 0} new=${this.unreadNewCount} anchor=${this.unreadAnchorKey.length > 0 ? 1 : 0}`
+    });
+  }
+
+  private rememberSeen(): void {
+    const key = lastContentKey(this.source.snapshot());
+    UnreadStore.getInstance().markSeen(this.agentId, key).catch(() => {
+    });
   }
 
   /** Fallback when conversation API is unavailable: avoid N empty "运行·已完成" rows. */

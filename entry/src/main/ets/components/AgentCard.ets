@@ -5,6 +5,8 @@ import { repoTail, shortAgentId, elapsedSince } from '../utils/DisplayFmt';
 import { firstPrUrl, hasPr, isRunInFlight, userStampIso } from '../utils/InboxGrouping';
 import { Haptics } from '../utils/Haptics';
 import { pressMs, pressScaleOf } from '../utils/Motion';
+import { PrefStore } from '../store/PrefStore';
+import { HuIcon } from './HuIcon';
 
 @Component
 export struct AgentCard {
@@ -22,6 +24,7 @@ export struct AgentCard {
   @Prop pinned: boolean = false;
   @Prop unread: boolean = false;
   @Prop active: boolean = false;
+  @StorageLink('aliasRev') aliasRev: number = 0;
   @State private pressed: boolean = false;
   @State private tick: number = 0;
   private skipOpen: boolean = false;
@@ -99,7 +102,8 @@ export struct AgentCard {
   }
 
   private titleText(): string {
-    const name = `${this.agent.name ?? ''}`;
+    const api = `${this.agent.name ?? ''}`;
+    const name = PrefStore.getInstance().displayName(`${this.agent.id ?? ''}`, api);
     return name.length > 0 ? name : shortAgentId(`${this.agent.id ?? ''}`);
   }
 
@@ -164,8 +168,11 @@ export struct AgentCard {
           .fontFamily(Tokens.fontUi)
           .fontColor($r('app.color.text_secondary'))
           .lineHeight(Tokens.lineMicro)
-          .maxLines(1)
-          .height(Tokens.lineMicro)
+          .maxLines(2)
+          .constraintSize({
+            minHeight: Tokens.lineMicro,
+            maxHeight: Tokens.lineMicro * 2
+          })
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
       }
@@ -192,15 +199,23 @@ export struct AgentCard {
             .fontColor(this.statusColor())
         }
         if (this.prText().length > 0) {
-          Text(this.prText())
-            .fontSize(Tokens.typeMicro)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .onClick(() => {
-              this.skipOpen = true;
-              Haptics.tick();
-              this.onOpenPr(firstPrUrl(this.agent));
+          Row({ space: 3 }) {
+            Text(this.prText())
+              .fontSize(Tokens.typeMicro)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary'))
+            HuIcon({
+              name: 'external',
+              iconSize: 10,
+              tint: $r('app.color.text_tertiary')
             })
+          }
+          .alignItems(VerticalAlign.Center)
+          .onClick(() => {
+            this.skipOpen = true;
+            Haptics.tick();
+            this.onOpenPr(firstPrUrl(this.agent));
+          })
         }
         Blank().layoutWeight(1)
         Text(this.timeText())

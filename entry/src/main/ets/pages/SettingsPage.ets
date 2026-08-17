@@ -10,6 +10,7 @@ import { HuAvatar, HuAvatarPicker } from '../components/HuAvatar';
 import { materializeForCrop, pickOneImageUri, resolveAvatarPhoto, toFileUri } from '../utils/ImagePicker';
 import { AvatarCrop } from '../components/AvatarCrop';
 import { HuButton } from '../components/HuButton';
+import { HuTextButton } from '../components/HuTextButton';
 import { HuIconButton } from '../components/HuIconButton';
 import { HuSwitch } from '../components/HuSwitch';
 import { normalizeAvatarId } from '../utils/AvatarPresets';
@@ -17,6 +18,7 @@ import { SessionVM } from '../viewmodels/SessionVM';
 import { confirmDanger } from '../utils/AppDialog';
 import { notifyResult, showToast } from '../utils/AppToast';
 import { readClipboardText } from '../utils/Clipboard';
+import { pushInAppBrowser, WebLinks } from '../utils/WebLinks';
 
 @Builder
 export function SettingsPageBuilder() {
@@ -40,6 +42,7 @@ struct SettingsPage {
   @State hapticsEnabled: boolean = true;
   @State soundsEnabled: boolean = true;
   @State notifyEnabled: boolean = true;
+  @State diagEnabled: boolean = true;
   @State defaultModel: string = '';
   @State appVersion: string = '1.0.0';
   @State topInset: number = 0;
@@ -73,6 +76,7 @@ struct SettingsPage {
     this.hapticsEnabled = await prefs.getHapticsEnabled();
     this.soundsEnabled = await prefs.getSoundsEnabled();
     this.notifyEnabled = await prefs.getNotifyEnabled();
+    this.diagEnabled = await prefs.getDiagEnabled();
     this.defaultModel = await prefs.getDefaultModel();
     const preset = normalizeAvatarId(await prefs.getAvatarPreset());
     const photo = await resolveAvatarPhoto(await prefs.getAvatarPhoto());
@@ -235,7 +239,9 @@ struct SettingsPage {
                   });
                 })
               } else {
+                this.keyGuide()
                 this.keyPaste()
+                this.privacyNote()
               }
             }
             .width('100%')
@@ -285,6 +291,15 @@ struct SettingsPage {
                 onToggle: async () => {
                   this.notifyEnabled = !this.notifyEnabled;
                   await PrefStore.getInstance().setNotifyEnabled(this.notifyEnabled);
+                }
+              })
+              HuSwitch({
+                on: this.diagEnabled,
+                label: '诊断日志',
+                hint: '写入本机文件，不含正文和密钥',
+                onToggle: async () => {
+                  this.diagEnabled = !this.diagEnabled;
+                  await PrefStore.getInstance().setDiagEnabled(this.diagEnabled);
                 }
               })
               this.hair()
@@ -459,6 +474,51 @@ struct SettingsPage {
           action();
         }
       })
+  }
+
+  @Builder
+  keyGuide() {
+    Column({ space: 8 }) {
+      Text('在 Cursor 网站创建 User API Key，复制以 crsr_ 开头的一串。')
+        .fontSize(Tokens.typeCallout)
+        .fontColor($r('app.color.text_secondary'))
+        .lineHeight(Tokens.lineCaption)
+        .width('100%')
+      Row({ space: 16 }) {
+        HuTextButton({
+          label: '打开 API Keys',
+          color: $r('app.color.text_link'),
+          compact: true,
+          external: true,
+          onTap: () => {
+            pushInAppBrowser(this.navStack, WebLinks.apiKeys, 'API Keys');
+          }
+        })
+        HuTextButton({
+          label: '官方说明',
+          color: $r('app.color.text_link'),
+          compact: true,
+          external: true,
+          onTap: () => {
+            pushInAppBrowser(this.navStack, WebLinks.docsApiOverview, 'API 说明');
+          }
+        })
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .padding({ top: 12, bottom: 4 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  privacyNote() {
+    Text('本应用使用 Cursor 官方开放 API。所有信息都直达 Cursor 服务器，无需担心安全和隐私问题。')
+      .fontSize(Tokens.typeMicro)
+      .fontColor($r('app.color.text_tertiary'))
+      .lineHeight(Tokens.lineMicro)
+      .width('100%')
+      .padding({ bottom: 12 })
   }
 
   @Builder

@@ -47,7 +47,8 @@ function copyItem(src: TimelineItem): TimelineItem {
     failed: src.failed,
     streaming: false,
     stepCount: src.stepCount,
-    usageShort: src.usageShort
+    usageShort: src.usageShort,
+    sentTags: src.sentTags
   };
 }
 
@@ -210,4 +211,99 @@ export function mergeCachedActivity(conv: TimelineItem[], cached: TimelineItem[]
     merged.push(tail[i]);
   }
   return merged;
+}
+
+function looksLikeTokenShort(s: string): boolean {
+  const t = s.trim();
+  if (t.length === 0) {
+    return true;
+  }
+  const last = t.charAt(t.length - 1);
+  if (last === 'k' || last === 'K') {
+    return true;
+  }
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charAt(i);
+    if (c !== '.' && (c < '0' || c > '9')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Conversation rebuild drops local sentTags. Copy them back onto matching user turns.
+ */
+export function restoreUserSentTags(conv: TimelineItem[], cached: TimelineItem[]): TimelineItem[] {
+  if (!cached || cached.length === 0 || !conv || conv.length === 0) {
+    return conv;
+  }
+  const src: TimelineItem[] = [];
+  for (let i = 0; i < cached.length; i++) {
+    if (cached[i].kind !== 'userPrompt') {
+      continue;
+    }
+    const tags = cached[i].sentTags;
+    const short = cached[i].usageShort ?? '';
+    if ((tags && tags.length > 0) || (short.length > 0 && !looksLikeTokenShort(short))) {
+      src.push(cached[i]);
+    }
+  }
+  if (src.length === 0) {
+    return conv;
+  }
+  let si = 0;
+  let changed = false;
+  const next: TimelineItem[] = [];
+  for (let i = 0; i < conv.length; i++) {
+    const it = conv[i];
+    if (it.kind !== 'userPrompt') {
+      next.push(it);
+      continue;
+    }
+    if (it.sentTags && it.sentTags.length > 0) {
+      next.push(it);
+      si += 1;
+      continue;
+    }
+    let found = -1;
+    const text = it.text ?? '';
+    for (let j = si; j < src.length; j++) {
+      if ((src[j].text ?? '') === text) {
+        found = j;
+        break;
+      }
+    }
+    const take = found >= 0 ? src[found] : (si < src.length ? src[si] : undefined);
+    if (!take) {
+      next.push(it);
+      continue;
+    }
+    const copy: TimelineItem = {
+      key: it.key,
+      kind: it.kind,
+      runId: it.runId,
+      text: it.text,
+      tool: it.tool,
+      statusLabel: it.statusLabel,
+      collapsed: it.collapsed,
+      pinnedOpen: it.pinnedOpen,
+      failed: it.failed,
+      streaming: it.streaming,
+      stepCount: it.stepCount,
+      usageShort: it.usageShort,
+      sentTags: it.sentTags
+    };
+    if (take.sentTags && take.sentTags.length > 0) {
+      copy.sentTags = take.sentTags;
+    }
+    const srcShort = take.usageShort ?? '';
+    if (srcShort.length > 0 && !looksLikeTokenShort(srcShort)) {
+      copy.usageShort = srcShort;
+    }
+    next.push(copy);
+    changed = true;
+    si = found >= 0 ? found + 1 : si + 1;
+  }
+  return changed ? next : conv;
 }

@@ -79,6 +79,7 @@ export struct OutcomeStrip {
               compact: true,
               color: $r('app.color.accent'),
               active: true,
+              external: true,
               onTap: () => {
                 this.onOpenPr(this.firstPr());
               }
@@ -88,6 +89,7 @@ export struct OutcomeStrip {
             HuTextButton({
               label: '改动',
               compact: true,
+              external: true,
               onTap: () => {
                 this.onOpenCompare(this.compareUrl);
               }
@@ -105,6 +107,7 @@ export struct OutcomeStrip {
           HuTextButton({
             label: '网页打开',
             compact: true,
+            external: true,
             onTap: () => {
               this.onOpenAgent();
             }

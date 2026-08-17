@@ -48,6 +48,9 @@ export struct HuIcon {
     if (this.name === 'chevronDown') {
       return $r('app.media.ic_chevron_down');
     }
+    if (this.name === 'chevronUp') {
+      return $r('app.media.ic_chevron_up');
+    }
     if (this.name === 'check') {
       return $r('app.media.ic_check');
     }

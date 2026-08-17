@@ -4,6 +4,7 @@ import { relativeTime } from '../utils/TimeFmt';
 import { shortRepoName } from '../utils/DisplayFmt';
 import { userStampIso } from '../utils/InboxGrouping';
 import { pressMs } from '../utils/Motion';
+import { PrefStore } from '../store/PrefStore';
 
 @Reusable
 @Component
@@ -29,6 +30,12 @@ export struct AgentRow {
   aboutToReuse(): void {
     // Reset transient state when the reusable component is recycled to a new row.
     this.pressed = false;
+  }
+
+  private titleText(): string {
+    const api = `${this.agent.name ?? ''}`;
+    const name = PrefStore.getInstance().displayName(`${this.agent.id ?? ''}`, api);
+    return name.length > 0 ? name : `${this.agent.id ?? ''}`;
   }
 
   private isRunning(): boolean {
@@ -119,7 +126,7 @@ export struct AgentRow {
         .margin({ top: 14 })
 
       Column({ space: 3 }) {
-        Text(this.agent.name.length > 0 ? this.agent.name : this.agent.id)
+        Text(this.titleText())
           .fontSize(Tokens.typeBody)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))

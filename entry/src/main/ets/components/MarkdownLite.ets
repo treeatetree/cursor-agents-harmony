@@ -18,6 +18,11 @@ interface TableRow {
 export struct MarkdownLite {
   @Prop content: string = '';
   @Prop compact: boolean = false;
+  onQuote: (text: string) => void = (_text: string) => {
+  };
+  @State private selSrc: string = '';
+  @State private selStart: number = 0;
+  @State private selEnd: number = 0;
 
   private proseSize(): number {
     return this.compact ? Tokens.typeCallout : Tokens.typeProse;
@@ -108,7 +113,34 @@ export struct MarkdownLite {
     .lineHeight(line)
     .textAlign(TextAlign.Start)
     .wordBreak(WordBreak.BREAK_ALL)
+    .copyOption(CopyOptions.InApp)
+    .onTextSelectionChange((start: number, end: number) => {
+      this.selSrc = text;
+      this.selStart = start;
+      this.selEnd = end;
+    })
+    .bindSelectionMenu(TextSpanType.TEXT, this.quoteMenu, TextResponseType.SELECT)
     .width('100%')
+  }
+
+  @Builder
+  quoteMenu() {
+    Menu() {
+      MenuItem({ content: '引用' })
+        .onClick(() => {
+          let t = '';
+          if (this.selEnd > this.selStart && this.selSrc.length > 0) {
+            t = this.selSrc.substring(this.selStart, this.selEnd);
+          }
+          if (t.trim().length === 0) {
+            t = this.selSrc;
+          }
+          const q = t.trim();
+          if (q.length > 0) {
+            this.onQuote(q);
+          }
+        })
+    }
   }
 
   private softWrapCode(raw: string): string {
@@ -261,8 +293,8 @@ export struct MarkdownLite {
         Text('复制')
           .fontSize(Tokens.typeMicro)
           .fontColor($r('app.color.text_secondary'))
-          .constraintSize({ minHeight: Tokens.touchMin })
-          .padding({ left: 8, right: 4 })
+          .height(28)
+          .padding({ left: 8, right: 8 })
           .textAlign(TextAlign.Center)
           .onClick(() => {
             Haptics.click();
@@ -272,7 +304,9 @@ export struct MarkdownLite {
           })
       }
       .width('100%')
-      .padding({ left: 12, right: 8, top: 6, bottom: 6 })
+      .height(32)
+      .padding({ left: 12, right: 4 })
+      .alignItems(VerticalAlign.Center)
       .backgroundColor($r('app.color.bg2'))
 
       Text(b.text)

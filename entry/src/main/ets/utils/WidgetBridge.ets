@@ -3,6 +3,7 @@ import { preferences } from '@kit.ArkData';
 import { formBindingData, formProvider } from '@kit.FormKit';
 import { AgentSummary } from '../models/Api';
 import { Log } from './Log';
+import { PrefStore } from '../store/PrefStore';
 
 const TAG = 'WidgetBridge';
 const PREF = 'cursor_widget';
@@ -27,14 +28,16 @@ export class WidgetBridge {
     for (let i = 0; i < agents.length; i++) {
       const st = `${agents[i].latestRunStatus ?? ''}`;
       if (st === 'RUNNING' || st === 'CREATING') {
-        name = agents[i].name.length > 0 ? agents[i].name : '未命名';
+        name = PrefStore.getInstance().displayName(agents[i].id,
+          agents[i].name.length > 0 ? agents[i].name : '未命名');
         status = '运行中';
         id = agents[i].id;
         return { running, latestName: name, latestStatus: status, latestAgentId: id };
       }
     }
     if (agents.length > 0) {
-      name = agents[0].name.length > 0 ? agents[0].name : '未命名';
+      name = PrefStore.getInstance().displayName(agents[0].id,
+        agents[0].name.length > 0 ? agents[0].name : '未命名');
       status = widgetStatusZh(`${agents[0].latestRunStatus ?? agents[0].status}`);
       id = agents[0].id;
     }

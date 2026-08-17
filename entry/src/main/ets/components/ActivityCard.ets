@@ -89,26 +89,28 @@ export struct ActivityCard {
             .fontColor($r('app.color.text_secondary'))
             .opacity(this.runActive && this.item.streaming === true ? shimmerOpacity(this.shimmerOn) : 1)
             .animation({ duration: shimmerMs(), curve: Curve.EaseInOut })
-            .layoutWeight(1)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .constraintSize({ maxWidth: '55%' })
+          if (!this.opened && this.preview().length > 0) {
+            Text(this.preview())
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.text_tertiary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+          } else {
+            Blank()
+          }
         }
         .width('100%')
-        .constraintSize({ minHeight: Tokens.touchMin })
+        .constraintSize({ minHeight: 36 })
         .alignItems(VerticalAlign.Center)
 
         if (!this.hasBody() && this.item.streaming !== true) {
           Text('此设备未记录过程')
             .fontSize(Tokens.typeMicro)
             .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-            .padding({ left: 22 })
-        } else if (!this.opened && this.preview().length > 0) {
-          Text(this.preview())
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
             .width('100%')
             .padding({ left: 22 })
         }

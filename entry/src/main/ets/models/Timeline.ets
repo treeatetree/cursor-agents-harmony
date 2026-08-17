@@ -25,4 +25,5 @@ export interface TimelineItem {
   streaming?: boolean;
   stepCount?: number;
   usageShort?: string;
+  sentTags?: string[];
 }

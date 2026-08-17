@@ -62,30 +62,42 @@ function isEffortOn(val: string): boolean {
   return val.length > 0 && val !== 'false' && val !== '0' && val !== 'off' && val !== 'none';
 }
 
-/** What we actually POST as `model` — for logs and the user-bubble caption. */
-export function formatModelSent(model: Record<string, Object> | undefined): string {
+/** Chip tags under a user bubble: model id + effort + fast, English as sent. */
+export function modelSentTags(model: Record<string, Object> | undefined): string[] {
   if (!model) {
-    return '自动';
+    return ['Auto'];
   }
   const id = `${model['id'] ?? ''}`;
   if (id.length === 0) {
-    return '自动';
+    return ['Auto'];
   }
-  const bits: string[] = [shortModelName(id)];
+  const tags: string[] = [];
+  const short = shortModelName(id);
+  tags.push(short.length > 0 ? short : id);
   const raw = model['params'];
   if (raw) {
     const rows = raw as Object[];
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i] as Record<string, Object>;
-      const pid = `${row['id'] ?? ''}`;
-      const val = `${row['value'] ?? ''}`;
-      if (pid.length === 0) {
-        continue;
+      const pid = `${row['id'] ?? ''}`.toLowerCase();
+      const val = `${row['value'] ?? ''}`.toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ').trim();
+      if (pid === 'effort' || pid === 'reasoning') {
+        if (isEffortOn(val)) {
+          tags.push(val);
+        }
+      } else if (pid === 'fast' || pid === 'speed') {
+        if (val === 'true' || val === '1' || val === 'fast') {
+          tags.push('fast');
+        }
       }
-      bits.push(`${paramTitle(pid)} ${paramValueLabel(pid, val)}`);
     }
   }
-  return bits.join(' · ');
+  return tags;
+}
+
+/** What we actually POST as `model` — for logs. */
+export function formatModelSent(model: Record<string, Object> | undefined): string {
+  return modelSentTags(model).join(' · ');
 }
 
 export function modelSentJson(model: Record<string, Object> | undefined): string {
@@ -150,6 +162,17 @@ export function groupModels(models: ModelInfo[]): ModelVendorGroup[] {
     }
     if (items.length > 0) {
       out.push({ vendor: vendor, items: items });
+    }
+  }
+  if (out.length === 0 && models.length > 0) {
+    const rest: ModelInfo[] = [];
+    for (let j = 0; j < models.length; j++) {
+      if (!isAutoModel(models[j])) {
+        rest.push(models[j]);
+      }
+    }
+    if (rest.length > 0) {
+      out.push({ vendor: '模型', items: rest });
     }
   }
   return out;

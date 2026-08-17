@@ -428,7 +428,7 @@ export struct PromptShell {
         HuChip({
           label: this.modelLabel.length > 0 ? this.modelLabel : '自动',
           on: false,
-          maxVp: 120,
+          maxVp: 220,
           onTap: () => {
             this.onModel();
           }
@@ -451,7 +451,7 @@ export struct PromptShell {
         })
         HuChip({
           label: this.modelLabel.length > 0 ? this.modelLabel : '自动',
-          on: this.modelLabel.length > 0,
+          on: false,
           maxVp: 168,
           onTap: () => {
             this.onModel();

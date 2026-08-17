@@ -1,6 +1,7 @@
-import { PrefStore } from './PrefStore';
+import { PrefStore, UnreadRow } from './PrefStore';
 import { Notify } from '../utils/Notify';
 import { clipNotice } from '../utils/MarkdownParse';
+import { SessionDiag } from '../utils/SessionDiag';
 
 export interface UnreadItem {
   id: string;
@@ -8,6 +9,7 @@ export interface UnreadItem {
   statusZh: string;
   snippet: string;
   at: number;
+  repo: string;
 }
 
 /**
@@ -27,7 +29,19 @@ export class UnreadStore {
   }
 
   async load(): Promise<void> {
-    this.items = await PrefStore.getInstance().getUnreadItems();
+    const rows = await PrefStore.getInstance().getUnreadItems();
+    const next: UnreadItem[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      next.push({
+        id: rows[i].id,
+        name: rows[i].name,
+        statusZh: rows[i].statusZh,
+        snippet: rows[i].snippet,
+        at: rows[i].at,
+        repo: rows[i].repo ?? ''
+      });
+    }
+    this.items = next;
     this.loaded = true;
     this.syncBadge();
   }
@@ -52,6 +66,10 @@ export class UnreadStore {
     return this.items.length > 0 ? this.items[0].id : '';
   }
 
+  first(): UnreadItem | undefined {
+    return this.items.length > 0 ? this.items[0] : undefined;
+  }
+
   isUnread(id: string): boolean {
     for (let i = 0; i < this.items.length; i++) {
       if (this.items[i].id === id) {
@@ -59,6 +77,10 @@ export class UnreadStore {
       }
     }
     return false;
+  }
+
+  lastSeenKey(id: string): string {
+    return PrefStore.getInstance().lastSeenKey(id);
   }
 
   headline(): string {
@@ -73,7 +95,8 @@ export class UnreadStore {
     return `${this.items.length} 条新结果 · ${first.name} ${first.statusZh}`;
   }
 
-  async markFinished(id: string, name: string, statusZh: string, snippet: string): Promise<void> {
+  async markFinished(id: string, name: string, statusZh: string, snippet: string,
+    repo: string = ''): Promise<void> {
     if (id.length === 0) {
       return;
     }
@@ -88,17 +111,36 @@ export class UnreadStore {
       name: name.length > 0 ? name : '任务',
       statusZh: statusZh,
       snippet: clipNotice(snippet, 56),
-      at: Date.now()
+      at: Date.now(),
+      repo: repo
     });
     if (next.length > 20) {
       next.length = 20;
     }
     this.items = next;
+    SessionDiag.emit({
+      tag: 'Unread',
+      event: 'markFinished',
+      agentId: id,
+      extra: `n=${this.items.length} status=${statusZh} repo=${repo}`
+    });
     await this.persist();
   }
 
-  async markSeen(id: string): Promise<void> {
-    if (id.length === 0 || !this.isUnread(id)) {
+  async markSeen(id: string, lastKey: string = ''): Promise<void> {
+    if (id.length === 0) {
+      return;
+    }
+    if (lastKey.length > 0) {
+      await PrefStore.getInstance().setLastSeenKey(id, lastKey);
+    }
+    if (!this.isUnread(id)) {
+      SessionDiag.emit({
+        tag: 'Unread',
+        event: 'markSeen',
+        agentId: id,
+        extra: `n=${this.items.length} already_read lastKey=${lastKey.length > 0 ? '1' : '0'}`
+      });
       return;
     }
     const next: UnreadItem[] = [];
@@ -108,6 +150,12 @@ export class UnreadStore {
       }
     }
     this.items = next;
+    SessionDiag.emit({
+      tag: 'Unread',
+      event: 'markSeen',
+      agentId: id,
+      extra: `n=${this.items.length} lastKey=${lastKey.length > 0 ? '1' : '0'}`
+    });
     await this.persist();
   }
 
@@ -120,13 +168,30 @@ export class UnreadStore {
   }
 
   private async persist(): Promise<void> {
-    await PrefStore.getInstance().setUnreadItems(this.items);
+    const rows: UnreadRow[] = [];
+    for (let i = 0; i < this.items.length; i++) {
+      const it = this.items[i];
+      rows.push({
+        id: it.id,
+        name: it.name,
+        statusZh: it.statusZh,
+        snippet: it.snippet,
+        at: it.at,
+        repo: it.repo
+      });
+    }
+    await PrefStore.getInstance().setUnreadItems(rows);
     this.syncBadge();
     Notify.refreshInbox(this.items).catch(() => {
     });
   }
 
   syncBadge(): void {
+    SessionDiag.emit({
+      tag: 'Unread',
+      event: 'count',
+      extra: `${this.items.length}`
+    });
     Notify.setBadge(this.items.length).catch(() => {
     });
   }

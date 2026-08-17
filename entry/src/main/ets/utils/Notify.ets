@@ -1,12 +1,14 @@
 import { notificationManager } from '@kit.NotificationKit';
 import { Want, wantAgent } from '@kit.AbilityKit';
 import { Log } from './Log';
+import { SessionDiag } from './SessionDiag';
 
 interface InboxLine {
   id: string;
   name: string;
   statusZh: string;
   snippet: string;
+  repo?: string;
 }
 
 const TAG = 'Notify';
@@ -14,7 +16,7 @@ const SUMMARY_ID = 435552;
 
 /**
  * Local notification when a Cloud Agent run finishes.
- * One inbox-style card lists every unread result; tap opens the in-app list.
+ * One unread → open that session. Several → Inbox unread list.
  */
 export class Notify {
   private static enabled: boolean = true;
@@ -51,25 +53,38 @@ export class Notify {
     if (!Notify.enabled || items.length === 0) {
       try {
         await notificationManager.cancel(SUMMARY_ID);
+        SessionDiag.emit({ tag: TAG, event: 'cancel', extra: 'empty_or_off' });
       } catch (_e) {
       }
       return;
     }
     try {
+      const first = items[0];
+      const repoBit = (first.repo ?? '').length > 0 ? ` · ${first.repo}` : '';
       const title = items.length === 1 ?
-        `${items[0].name} · ${items[0].statusZh}` :
+        `${first.name}${repoBit} · ${first.statusZh}` :
         `${items.length} 条新结果`;
       const lines: string[] = [];
       for (let i = 0; i < items.length && i < 8; i++) {
         const it = items[i];
+        const r = (it.repo ?? '').length > 0 ? `${it.repo} · ` : '';
         const bit = it.snippet.length > 0 ? ` · ${it.snippet}` : '';
-        lines.push(`${it.name} ${it.statusZh}${bit}`);
+        lines.push(`${it.name} ${r}${it.statusZh}${bit}`);
       }
       if (items.length > 8) {
         lines.push(`另有 ${items.length - 8} 条`);
       }
       const body = lines.length > 0 ? lines[0] : '点按查看全部';
-      const launch: Want = {
+      const single = items.length === 1;
+      const launch: Want = single ? {
+        bundleName: 'com.brian.cursor.mobile',
+        abilityName: 'EntryAbility',
+        action: 'action.ohos.cursor.openAgent',
+        uri: `cursoragent://open/${first.id}`,
+        parameters: {
+          'agentId': first.id
+        }
+      } : {
         bundleName: 'com.brian.cursor.mobile',
         abilityName: 'EntryAbility',
         action: 'action.ohos.cursor.openInbox',
@@ -78,6 +93,12 @@ export class Notify {
           'showUnread': '1'
         }
       };
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'publish',
+        agentId: first.id,
+        extra: `n=${items.length} want=${single ? 'open' : 'inbox'} repo=${first.repo ?? ''}`
+      });
       const info: wantAgent.WantAgentInfo = {
         wants: [launch],
         operationType: wantAgent.OperationType.START_ABILITY,
@@ -93,7 +114,7 @@ export class Notify {
           multiLine: {
             title: title,
             text: body,
-            additionalText: '点按查看全部',
+            additionalText: single ? '点按打开会话' : '点按查看全部',
             briefText: `${items.length} 条`,
             longTitle: title,
             lines: lines
@@ -109,6 +130,7 @@ export class Notify {
       }
     } catch (e) {
       Log.warn(TAG, `publish failed: ${JSON.stringify(e)}`);
+      SessionDiag.emit({ tag: TAG, event: 'publish_fail', extra: 'err' });
     }
   }
 }
