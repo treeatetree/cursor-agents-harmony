@@ -19,8 +19,9 @@ import { defaultEnv, envNameLabel, hasTools, serializeTools, toolsChipLabel, use
 import { repoTail } from '../utils/DisplayFmt';
 import { collectRecentRepos, pairRecentRepos, RecentRepo, RecentRepoRow } from '../utils/InboxGrouping';
 import {
-  buildParamRows, formatChipFromRows, formatFollowChip, groupModels, ModelParamRow, ModelVendorGroup, paramRowsStamp, rowsToParams,
-  shortModelName, variantLabel, variantSectionTitle
+  buildParamRows, formatChipFromRows, formatFollowChip, findModel, groupModels, ModelParamRow,
+  ModelVendorGroup, paramRowsStamp, rowsToParams, shortModelName, snapParamRows, variantLabel,
+  variantSectionTitle
 } from '../utils/ModelGroups';
 import { HuChip } from '../components/HuChip';
 import { HuTextButton } from '../components/HuTextButton';
@@ -175,7 +176,7 @@ export struct NewAgentPage {
   }
 
   private moreSummary(): string {
-    if (this.toolsOn || this.mode === 'plan' || this.workOnCurrentBranch ||
+    if (this.toolsOn || this.workOnCurrentBranch ||
       this.openAsCursorGithubApp || this.skipReviewerRequest || this.agentName.length > 0) {
       return '更多·';
     }
@@ -188,6 +189,7 @@ export struct NewAgentPage {
     this.vm.selectedBranch = this.selectedBranch;
     this.vm.selectedPrUrl = this.selectedPrUrl;
     this.vm.repoMode = this.repoMode;
+    this.vm.mode = this.mode;
     this.vm.agentName = this.agentName;
     this.vm.env = this.env;
     this.vm.mcpServers = this.mcpServers;
@@ -373,8 +375,8 @@ export struct NewAgentPage {
         this.modelDisplayName = m.displayName ?? m.id;
         const rows = buildParamRows(m);
         if (rows.length > 0) {
-          this.paramRows = rows;
-          this.vm.selectedParams = rowsToParams(rows);
+          this.paramRows = snapParamRows(m, rows, '', -1);
+          this.vm.selectedParams = rowsToParams(this.paramRows);
           this.refreshModelChip();
           return;
         }
@@ -408,19 +410,8 @@ export struct NewAgentPage {
   }
 
   private pickParam(rowId: string, valueIdx: number): void {
-    const next: ModelParamRow[] = [];
-    for (let i = 0; i < this.paramRows.length; i++) {
-      const r = this.paramRows[i];
-      next.push({
-        id: r.id,
-        title: r.title,
-        labels: r.labels,
-        values: r.values,
-        selected: r.id === rowId ? valueIdx : r.selected
-      });
-    }
-    this.paramRows = next;
-    this.vm.selectedParams = rowsToParams(next);
+    this.paramRows = snapParamRows(findModel(this.models, this.selectedModel), this.paramRows, rowId, valueIdx);
+    this.vm.selectedParams = rowsToParams(this.paramRows);
     this.refreshModelChip();
     this.refreshCanSubmit();
   }
@@ -625,6 +616,7 @@ export struct NewAgentPage {
           status: '',
           repo: this.repoChipLabel(),
           modelLabel: this.modelChipLabel,
+          followUpMode: this.mode,
           autoPr: this.autoCreatePR,
           imageCount: this.imageNames.length,
           imageUris: $imageUris,
@@ -646,6 +638,11 @@ export struct NewAgentPage {
           },
           onModel: () => {
             this.openSheet('model');
+          },
+          onModeChange: (mode: string) => {
+            this.mode = mode;
+            this.vm.mode = mode;
+            this.refreshCanSubmit();
           },
           onTools: () => {
             this.openSheet('options');
@@ -1071,7 +1068,7 @@ export struct NewAgentPage {
             }
           })
           HuChip({
-            label: 'Plan',
+            label: '规划',
             on: this.mode === 'plan',
             onTap: () => {
               this.mode = 'plan';

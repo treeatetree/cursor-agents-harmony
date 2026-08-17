@@ -369,6 +369,167 @@ export function rowsToParams(rows: ModelParamRow[]): ModelVariantParam[] {
   return out;
 }
 
+export function findModel(models: ModelInfo[], id: string): ModelInfo | undefined {
+  if (id.length === 0) {
+    return undefined;
+  }
+  for (let i = 0; i < models.length; i++) {
+    if (models[i].id === id) {
+      return models[i];
+    }
+  }
+  return undefined;
+}
+
+function stripHiddenParams(params: ModelVariantParam[]): ModelVariantParam[] {
+  const out: ModelVariantParam[] = [];
+  for (let i = 0; i < params.length; i++) {
+    if (params[i].id === 'cyber') {
+      continue;
+    }
+    out.push(params[i]);
+  }
+  return out;
+}
+
+function paramWeight(id: string): number {
+  if (id === 'context') {
+    return 3;
+  }
+  if (id === 'effort' || id === 'reasoning' || id === 'thinking') {
+    return 3;
+  }
+  if (id === 'fast' || id === 'speed') {
+    return 1;
+  }
+  return 2;
+}
+
+function variantMatchScore(variant: ModelVariantParam[], wanted: ModelVariantParam[], preferId: string): number {
+  if (preferId.length > 0) {
+    const preferVal = valueOf(wanted, preferId);
+    if (preferVal.length > 0 && valueOf(variant, preferId) !== preferVal) {
+      return -1;
+    }
+  }
+  let score = 0;
+  for (let i = 0; i < wanted.length; i++) {
+    const id = wanted[i].id;
+    if (id === 'cyber') {
+      continue;
+    }
+    if (valueOf(variant, id) === wanted[i].value) {
+      score += paramWeight(id);
+    }
+  }
+  return score;
+}
+
+function nearestVariant(model: ModelInfo, wanted: ModelVariantParam[], preferId: string): ModelVariantParam[] {
+  const variants = model.variants ?? [];
+  if (variants.length === 0) {
+    return [];
+  }
+  let bestIdx = -1;
+  let bestScore = -1;
+  for (let i = 0; i < variants.length; i++) {
+    const score = variantMatchScore(variants[i].params ?? [], wanted, preferId);
+    if (score < 0) {
+      continue;
+    }
+    let ranked = score;
+    if (variants[i].isDefault === true) {
+      ranked += 1;
+    }
+    if (ranked > bestScore) {
+      bestScore = ranked;
+      bestIdx = i;
+    }
+  }
+  if (bestIdx < 0 && preferId.length > 0) {
+    for (let i = 0; i < variants.length; i++) {
+      const score = variantMatchScore(variants[i].params ?? [], wanted, '');
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+  }
+  if (bestIdx < 0) {
+    return [];
+  }
+  return stripHiddenParams(variants[bestIdx].params ?? []);
+}
+
+function applyVariantToRows(rows: ModelParamRow[], variant: ModelVariantParam[]): ModelParamRow[] {
+  const out: ModelParamRow[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const val = valueOf(variant, r.id);
+    let selected = r.selected;
+    if (val.length > 0) {
+      for (let j = 0; j < r.values.length; j++) {
+        if (r.values[j] === val) {
+          selected = j;
+          break;
+        }
+      }
+    }
+    out.push({
+      id: r.id,
+      title: r.title,
+      labels: r.labels,
+      values: r.values,
+      selected: selected
+    });
+  }
+  return out;
+}
+
+/**
+ * After the user taps one param, snap the rest onto a real variant.
+ * gpt-5.6-sol has no 1m+fast combo; picking 1m forces fast=false.
+ */
+export function snapParamRows(model: ModelInfo | undefined, rows: ModelParamRow[], preferId: string,
+  preferIdx: number): ModelParamRow[] {
+  const next: ModelParamRow[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    let selected = r.selected;
+    if (r.id === preferId && preferIdx >= 0 && preferIdx < r.values.length) {
+      selected = preferIdx;
+    }
+    next.push({
+      id: r.id,
+      title: r.title,
+      labels: r.labels,
+      values: r.values,
+      selected: selected
+    });
+  }
+  if (!model || !model.variants || model.variants.length === 0) {
+    return next;
+  }
+  const variant = nearestVariant(model, rowsToParams(next), preferId);
+  if (variant.length === 0) {
+    return next;
+  }
+  return applyVariantToRows(next, variant);
+}
+
+/** Submit-time: replace independent chips with one catalog variant (drops `cyber`). */
+export function coerceParamsToVariant(model: ModelInfo | undefined, params: ModelVariantParam[]): ModelVariantParam[] {
+  const cleaned = stripHiddenParams(params);
+  if (!model || !model.variants || model.variants.length === 0 || cleaned.length === 0) {
+    return cleaned;
+  }
+  const variant = nearestVariant(model, cleaned, '');
+  if (variant.length === 0) {
+    return cleaned;
+  }
+  return variant;
+}
+
 function defaultVariantParams(model: ModelInfo): ModelVariantParam[] {
   const variants = model.variants ?? [];
   for (let i = 0; i < variants.length; i++) {

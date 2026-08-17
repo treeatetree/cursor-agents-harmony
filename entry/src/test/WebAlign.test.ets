@@ -4,7 +4,7 @@ import { applyInboxQuery, groupAgents, mergeInboxLists, recencyMs } from '../mai
 import { unwrapAgentsList } from '../main/ets/api/ApiUnwrap';
 import { agentIdFromLaunch, noticeTextFromLaunch } from '../main/ets/utils/WantParse';
 import { citationQuote, clipNotice, isCitationFence, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
-import { AgentSummary } from '../main/ets/models/Api';
+import { AgentSummary, ConversationMessage, ModelInfo, ModelParamValue, ModelVariant, ModelVariantParam } from '../main/ets/models/Api';
 import { fileNameOf, isImagePath, isVideoPath } from '../main/ets/utils/DisplayFmt';
 import { sniffMime } from '../main/ets/utils/ImagePicker';
 import { isSubagentTool, subagentDetail } from '../main/ets/utils/StreamText';
@@ -12,9 +12,10 @@ import { unwrapUsageRuns } from '../main/ets/api/ApiUnwrap';
 import { isWaitingThink, nextUserJumpAt, visibleTimeline } from '../main/ets/utils/TimelineView';
 import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, usedToolLine, waitingThinkLabel } from '../main/ets/utils/TimelineCopy';
 import { convFingerprint, keepPendingTurns, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
-import { formatModelSent, modelSentTags } from '../main/ets/utils/ModelGroups';
+import {
+  buildParamRows, coerceParamsToVariant, formatModelSent, ModelParamRow, modelSentTags, rowsToParams, snapParamRows
+} from '../main/ets/utils/ModelGroups';
 import { TimelineItem } from '../main/ets/models/Timeline';
-import { ConversationMessage } from '../main/ets/models/Api';
 
 function agent(partial: Record<string, string>): AgentSummary {
   const row: AgentSummary = {
@@ -31,6 +32,72 @@ function agent(partial: Record<string, string>): AgentSummary {
     row.lastUserAt = partial['lastUserAt'];
   }
   return row;
+}
+
+function pv(value: string): ModelParamValue {
+  return { value: value };
+}
+
+function vp(id: string, value: string): ModelVariantParam {
+  return { id: id, value: value };
+}
+
+function solVariant(context: string, reasoning: string, fast: string, isDefault: boolean): ModelVariant {
+  const v: ModelVariant = {
+    params: [vp('reasoning', reasoning), vp('fast', fast), vp('context', context)]
+  };
+  if (isDefault) {
+    v.isDefault = true;
+  }
+  return v;
+}
+
+function gpt56sol(): ModelInfo {
+  const reasonings: string[] = ['none', 'low', 'medium', 'high'];
+  const variants: ModelVariant[] = [];
+  for (let i = 0; i < reasonings.length; i++) {
+    const r = reasonings[i];
+    variants.push(solVariant('272k', r, 'true', false));
+    variants.push(solVariant('272k', r, 'false', false));
+    variants.push(solVariant('1m', r, 'false', r === 'medium'));
+  }
+  return {
+    id: 'gpt-5.6-sol',
+    displayName: 'GPT-5.6 sol',
+    params: [
+      { id: 'reasoning', values: [pv('none'), pv('low'), pv('medium'), pv('high')] },
+      { id: 'fast', values: [pv('true'), pv('false')] },
+      { id: 'context', values: [pv('272k'), pv('1m')] }
+    ],
+    variants: variants
+  };
+}
+
+function rowIndex(rows: ModelParamRow[], id: string): number {
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].id === id) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function valueIndex(row: ModelParamRow, value: string): number {
+  for (let i = 0; i < row.values.length; i++) {
+    if (row.values[i] === value) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function paramValue(params: ModelVariantParam[], id: string): string {
+  for (let i = 0; i < params.length; i++) {
+    if (params[i].id === id) {
+      return params[i].value;
+    }
+  }
+  return '';
 }
 
 export default function webAlignTest() {
@@ -657,6 +724,53 @@ export default function webAlignTest() {
       expect(tags.length).assertEqual(1);
       expect(tags[0]).assertEqual('Composer 1.5 · high · fast');
       expect(formatModelSent(model)).assertEqual(tags[0]);
+    });
+  });
+
+  describe('ModelVariants', () => {
+    it('snaps 1m plus fast to a legal gpt-5.6-sol variant', 0, () => {
+      const model = gpt56sol();
+      const rows = buildParamRows(model);
+      const fastIdx = rowIndex(rows, 'fast');
+      const ctxIdx = rowIndex(rows, 'context');
+      const reasonIdx = rowIndex(rows, 'reasoning');
+      expect(fastIdx >= 0 && ctxIdx >= 0 && reasonIdx >= 0).assertTrue();
+      rows[reasonIdx].selected = valueIndex(rows[reasonIdx], 'high');
+      rows[fastIdx].selected = valueIndex(rows[fastIdx], 'true');
+      const snapped = snapParamRows(model, rows, 'context', valueIndex(rows[ctxIdx], '1m'));
+      const params = rowsToParams(snapped);
+      expect(paramValue(params, 'context')).assertEqual('1m');
+      expect(paramValue(params, 'reasoning')).assertEqual('high');
+      expect(paramValue(params, 'fast')).assertEqual('false');
+    });
+
+    it('snaps fast on 1m back to 272k', 0, () => {
+      const model = gpt56sol();
+      const rows = buildParamRows(model);
+      const fastIdx = rowIndex(rows, 'fast');
+      const ctxIdx = rowIndex(rows, 'context');
+      const reasonIdx = rowIndex(rows, 'reasoning');
+      rows[reasonIdx].selected = valueIndex(rows[reasonIdx], 'high');
+      rows[ctxIdx].selected = valueIndex(rows[ctxIdx], '1m');
+      rows[fastIdx].selected = valueIndex(rows[fastIdx], 'false');
+      const snapped = snapParamRows(model, rows, 'fast', valueIndex(rows[fastIdx], 'true'));
+      const params = rowsToParams(snapped);
+      expect(paramValue(params, 'fast')).assertEqual('true');
+      expect(paramValue(params, 'context')).assertEqual('272k');
+      expect(paramValue(params, 'reasoning')).assertEqual('high');
+    });
+
+    it('coerces illegal 1m+high+fast submit params', 0, () => {
+      const model = gpt56sol();
+      const illegal: ModelVariantParam[] = [
+        { id: 'reasoning', value: 'high' },
+        { id: 'fast', value: 'true' },
+        { id: 'context', value: '1m' }
+      ];
+      const coerced = coerceParamsToVariant(model, illegal);
+      expect(paramValue(coerced, 'context')).assertEqual('1m');
+      expect(paramValue(coerced, 'reasoning')).assertEqual('high');
+      expect(paramValue(coerced, 'fast')).assertEqual('false');
     });
   });
 

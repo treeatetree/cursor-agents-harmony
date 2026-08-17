@@ -9,8 +9,9 @@ import { NewAgentVM } from '../viewmodels/NewAgentVM';
 import { ModelPicker } from '../components/ModelPicker';
 import { StatusBanner } from '../components/StatusBanner';
 import {
-  buildParamRows, formatChipFromRows, formatFollowChip, groupModels, isAutoModel, ModelParamRow,
-  ModelVendorGroup, paramRowsStamp, rowsToParams, variantLabel, variantSectionTitle
+  buildParamRows, formatChipFromRows, formatFollowChip, findModel, groupModels, isAutoModel,
+  ModelParamRow, ModelVendorGroup, paramRowsStamp, rowsToParams, snapParamRows, variantLabel,
+  variantSectionTitle
 } from '../utils/ModelGroups';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
@@ -674,8 +675,8 @@ struct AgentDetailPage {
       this.followModelLabel = m.displayName ?? m.id;
       const rows = buildParamRows(m);
       if (rows.length > 0) {
-        this.followParamRows = rows;
-        this.modelVm.selectedParams = rowsToParams(rows);
+        this.followParamRows = snapParamRows(m, rows, '', -1);
+        this.modelVm.selectedParams = rowsToParams(this.followParamRows);
         this.refreshFollowChip();
         return;
       }
@@ -706,19 +707,9 @@ struct AgentDetailPage {
   }
 
   private pickFollowParam(rowId: string, valueIdx: number): void {
-    const next: ModelParamRow[] = [];
-    for (let i = 0; i < this.followParamRows.length; i++) {
-      const r = this.followParamRows[i];
-      next.push({
-        id: r.id,
-        title: r.title,
-        labels: r.labels,
-        values: r.values,
-        selected: r.id === rowId ? valueIdx : r.selected
-      });
-    }
-    this.followParamRows = next;
-    this.modelVm.selectedParams = rowsToParams(next);
+    this.followParamRows = snapParamRows(findModel(this.modelVm.models, this.followUpModel),
+      this.followParamRows, rowId, valueIdx);
+    this.modelVm.selectedParams = rowsToParams(this.followParamRows);
     const payload = this.modelVm.modelPayload();
     this.vm.followUpParams = payload && payload['params'] ? payload['params'] as Object[] : [];
     this.refreshFollowChip();

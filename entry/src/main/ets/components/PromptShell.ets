@@ -462,9 +462,21 @@ export struct PromptShell {
   }
 
   @Builder
+  modeChip() {
+    HuChip({
+      label: this.followUpMode === 'plan' ? '规划' : 'Agent',
+      on: this.followUpMode === 'plan',
+      onTap: () => {
+        this.onModeChange(this.followUpMode === 'plan' ? 'agent' : 'plan');
+      }
+    })
+  }
+
+  @Builder
   moreChipsRow() {
     Row({ space: 6 }) {
       if (!this.follow) {
+        this.modeChip()
         HuChip({
           label: this.imageCount > 0 ? `图片 ${this.imageCount}` : '图片',
           on: false,
@@ -498,13 +510,7 @@ export struct PromptShell {
           }
         })
       } else {
-        HuChip({
-          label: this.followUpMode === 'plan' ? 'Plan' : 'Agent',
-          on: this.followUpMode === 'plan',
-          onTap: () => {
-            this.onModeChange(this.followUpMode === 'plan' ? 'agent' : 'plan');
-          }
-        })
+        this.modeChip()
         HuChip({
           label: this.modelLabel.length > 0 ? this.modelLabel : '自动',
           on: false,

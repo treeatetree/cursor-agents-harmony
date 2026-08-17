@@ -14,7 +14,7 @@ import {
   toApiSubagents, usesNamedEnv
 } from '../utils/AgentCapabilities';
 import { Log } from '../utils/Log';
-import { modelSentJson } from '../utils/ModelGroups';
+import { coerceParamsToVariant, findModel, modelSentJson } from '../utils/ModelGroups';
 import { util } from '@kit.ArkTS';
 
 const TAG = 'NewAgentVM';
@@ -324,14 +324,9 @@ export class NewAgentVM {
   /** Map selected params / variant index → API `model.params` array. */
   private resolveVariantParams(): Object[] {
     if (this.selectedParams.length > 0) {
-      const out: Object[] = [];
-      for (let i = 0; i < this.selectedParams.length; i++) {
-        const p: Record<string, Object> = {};
-        p['id'] = this.selectedParams[i].id;
-        p['value'] = this.selectedParams[i].value;
-        out.push(p);
-      }
-      return out;
+      const model = findModel(this.models, this.selectedModel);
+      const coerced = coerceParamsToVariant(model, this.selectedParams);
+      return variantParamsToObjects(coerced);
     }
     if (this.selectedVariantIndex < 0 || this.selectedModel.length === 0) {
       return [];
@@ -345,18 +340,24 @@ export class NewAgentVM {
         return [];
       }
       const v = m.variants[this.selectedVariantIndex];
-      const params = v.params ?? [];
-      const out: Object[] = [];
-      for (let j = 0; j < params.length; j++) {
-        const p: Record<string, Object> = {};
-        p['id'] = params[j].id;
-        p['value'] = params[j].value;
-        out.push(p);
-      }
-      return out;
+      return variantParamsToObjects(coerceParamsToVariant(m, v.params ?? []));
     }
     return [];
   }
+}
+
+function variantParamsToObjects(params: ModelVariantParam[]): Object[] {
+  const out: Object[] = [];
+  for (let i = 0; i < params.length; i++) {
+    if (params[i].id === 'cyber') {
+      continue;
+    }
+    const p: Record<string, Object> = {};
+    p['id'] = params[i].id;
+    p['value'] = params[i].value;
+    out.push(p);
+  }
+  return out;
 }
 
 function repoCooldownActive(): boolean {

@@ -6,6 +6,7 @@ import {
 } from '../models/Api';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Log } from '../utils/Log';
+import { SessionDiag } from '../utils/SessionDiag';
 
 const TAG = 'CursorApi';
 const BASE = 'https://api.cursor.com';
@@ -259,6 +260,11 @@ export class CursorApiClient {
         }
       }
       Log.warn(TAG, `${method} ${path} -> ${code} ${message}`);
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'http',
+        extra: `${method} ${path} ${code}${apiCode.length > 0 ? ` ${apiCode}` : ''} ${clipDiag(message, 160)}`
+      });
 
       const creating = method === 'POST' && path === '/v1/agents';
       const retryable = code >= 500;
@@ -323,4 +329,12 @@ function sanitizeApiMessage(message: string, fallback: string): string {
     return fallback;
   }
   return t;
+}
+
+function clipDiag(s: string, max: number): string {
+  const t = s.replace(/\n/g, ' ').trim();
+  if (t.length <= max) {
+    return t;
+  }
+  return t.substring(0, max);
 }
