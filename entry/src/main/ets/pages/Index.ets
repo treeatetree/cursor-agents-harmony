@@ -230,8 +230,6 @@ struct Index {
     });
     if (this.hasKey && this.session.keyReady) {
       this.inbox.prefetchOnShow();
-      warmCreateMeta().catch(() => {
-      });
       this.inbox.refresh(true).then(() => {
         this.pullInboxUi();
       });

@@ -68,7 +68,7 @@ export class NewAgentVM {
     }
   }
 
-  async loadMeta(forceRepos: boolean = false): Promise<void> {
+  async loadMeta(_forceRepos: boolean = false): Promise<void> {
     this.errorMsg = '';
     const cache = AgentCache.getInstance();
     if (this.repos.length === 0) {
@@ -77,35 +77,8 @@ export class NewAgentVM {
     if (this.models.length === 0) {
       this.models = cache.loadModels();
     }
-    this.loadingMeta = this.repos.length === 0 || forceRepos;
+    this.loadingMeta = false;
     try {
-
-      const lastOk = cache.reposFetchedAt();
-      const lastTry = Math.max(lastOk, lastReposAttemptAt);
-      const withinCooldown = lastTry > 0 && (Date.now() - lastTry) < REPO_COOLDOWN_MS;
-      // GET /v1/repositories is 1/user/min. Cache + cooldown; never double-fetch.
-      if (this.repos.length === 0 || forceRepos) {
-        if (!reposInFlight && withinCooldown) {
-          if (forceRepos) {
-            this.errorMsg = REPO_LIMIT_MSG;
-          }
-        } else {
-          try {
-            this.repos = await fetchReposShared();
-          } catch (e) {
-            if (this.repos.length === 0) {
-              if (e instanceof ApiException) {
-                throw new ApiException(e.code, e.message, e.apiCode, e.retryable);
-              }
-              throw new ApiException(0, '加载仓库失败', 'repos_failed', true);
-            }
-            if (e instanceof ApiException) {
-              this.errorMsg = e.message;
-            }
-          }
-        }
-      }
-
       if (this.models.length === 0 || cache.isStale(cache.modelsFetchedAt())) {
         try {
           const modelResp = await CursorApiClient.getInstance().listModels();
@@ -140,9 +113,40 @@ export class NewAgentVM {
       if (e instanceof ApiException) {
         this.errorMsg = e.message;
       } else {
-        this.errorMsg = '加载仓库/模型失败';
+        this.errorMsg = '加载模型失败';
       }
       Log.error(TAG, this.errorMsg);
+    }
+  }
+
+  /** GET /v1/repositories is 1/user/min. Only call from explicit UI (仓库 chip / pull / 刷新). */
+  async refreshRepos(force: boolean = false): Promise<void> {
+    const cache = AgentCache.getInstance();
+    if (this.repos.length === 0) {
+      this.repos = cache.loadRepos();
+    }
+    if (repoCooldownActive()) {
+      if (force) {
+        this.errorMsg = REPO_LIMIT_MSG;
+      }
+      return;
+    }
+    this.errorMsg = '';
+    this.loadingMeta = true;
+    try {
+      this.repos = await fetchReposShared();
+      if (this.selectedRepo.length === 0 && this.repos.length > 0) {
+        this.selectedRepo = this.repos[0].repository;
+      }
+    } catch (e) {
+      if (this.repos.length === 0 || force) {
+        if (e instanceof ApiException) {
+          this.errorMsg = e.code === 429 ? REPO_LIMIT_MSG : e.message;
+        } else {
+          this.errorMsg = '加载仓库失败';
+        }
+        Log.error(TAG, this.errorMsg);
+      }
     } finally {
       this.loadingMeta = false;
     }
@@ -355,6 +359,12 @@ export class NewAgentVM {
   }
 }
 
+function repoCooldownActive(): boolean {
+  const lastOk = AgentCache.getInstance().reposFetchedAt();
+  const lastTry = Math.max(lastOk, lastReposAttemptAt);
+  return lastTry > 0 && (Date.now() - lastTry) < REPO_COOLDOWN_MS;
+}
+
 async function fetchReposShared(): Promise<RepoInfo[]> {
   if (reposInFlight) {
     return reposInFlight;
@@ -563,16 +573,6 @@ export async function warmCreateMeta(): Promise<void> {
     try {
       const modelResp = await CursorApiClient.getInstance().listModels();
       cache.saveModels(normalizeModels(modelResp));
-    } catch (_e) {
-    }
-  }
-  if (cache.isStale(cache.reposFetchedAt(), META_WARM_MS)) {
-    const lastTry = Math.max(cache.reposFetchedAt(), lastReposAttemptAt);
-    if (lastTry > 0 && (Date.now() - lastTry) < REPO_COOLDOWN_MS) {
-      return;
-    }
-    try {
-      await fetchReposShared();
     } catch (_e) {
     }
   }

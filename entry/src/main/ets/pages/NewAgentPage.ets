@@ -88,6 +88,7 @@ export struct NewAgentPage {
   @State moreLabel: string = '更多';
   @State showAdvanced: boolean = false;
   @State recentRepos: RecentRepo[] = [];
+  @State reposRefreshing: boolean = false;
   @State modelsLoading: boolean = false;
   @State modelsError: string = '';
   private attachedImages: PromptImage[] = [];
@@ -324,6 +325,21 @@ export struct NewAgentPage {
     this.vm.repoQuery = '';
     this.repos = this.vm.filteredRepos();
     this.openSheet('repo');
+    this.vm.refreshRepos(false).then(() => {
+      this.syncFromVm();
+    });
+  }
+
+  private async pullRepos(force: boolean): Promise<void> {
+    await this.vm.refreshRepos(force);
+    this.syncFromVm();
+    if (this.vm.errorMsg.length > 0) {
+      notifyResult(false, '', this.vm.errorMsg);
+      this.vm.errorMsg = '';
+      this.errorMsg = '';
+    } else if (force) {
+      notifyResult(true, `已刷新 · ${this.vm.repos.length} 个仓库`);
+    }
   }
 
   private pickRecentRepo(item: RecentRepo): void {
@@ -639,14 +655,24 @@ export struct NewAgentPage {
             top: 20,
             bottom: 8
           })
-        Scroll() {
-          this.recentRepoBlock()
+        Refresh({ refreshing: $$this.reposRefreshing }) {
+          Scroll() {
+            this.recentRepoBlock()
+          }
+          .width('100%')
+          .height('100%')
+          .align(Alignment.Top)
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
         }
         .layoutWeight(1)
         .width('100%')
-        .align(Alignment.Top)
-        .scrollBar(BarState.Off)
-        .edgeEffect(EdgeEffect.Spring)
+        .onRefreshing(async () => {
+          Haptics.tick();
+          this.reposRefreshing = true;
+          await this.pullRepos(true);
+          this.reposRefreshing = false;
+        })
       }
       .width('100%')
       .layoutWeight(1)
@@ -804,13 +830,8 @@ export struct NewAgentPage {
           isEnabled: !this.loadingMeta,
           onTap: async () => {
             this.loadingMeta = true;
-            await this.vm.loadMeta(true);
-            this.syncFromVm();
-            if (this.vm.errorMsg.length > 0) {
-              notifyResult(false, '', this.vm.errorMsg);
-            } else {
-              notifyResult(true, `已刷新 · ${this.vm.repos.length} 个仓库`);
-            }
+            await this.pullRepos(true);
+            this.loadingMeta = false;
           }
         })
         HuTextButton({
