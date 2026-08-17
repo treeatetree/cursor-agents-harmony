@@ -3,6 +3,7 @@ import { common } from '@kit.AbilityKit';
 import { Haptics } from '../utils/Haptics';
 import { Sounds } from '../utils/Sounds';
 import { Notify } from '../utils/Notify';
+import { SessionDiag } from '../utils/SessionDiag';
 import { Log } from '../utils/Log';
 
 const TAG = 'PrefStore';
@@ -15,6 +16,9 @@ const KEY_DEFAULT_AUTO_PR = 'default_auto_pr';
 const KEY_HAPTICS = 'haptics_enabled';
 const KEY_SOUNDS = 'sounds_enabled';
 const KEY_NOTIFY = 'notify_enabled';
+const KEY_DIAG = 'diag_enabled';
+const KEY_ALIAS = 'alias_by_id';
+const KEY_LAST_SEEN = 'last_seen_by_id';
 const KEY_INBOX_VIEW = 'inbox_view';
 const KEY_INBOX_GROUP = 'inbox_group';
 const KEY_INBOX_SORT = 'inbox_sort';
@@ -36,6 +40,8 @@ const KEY_CREATE_SEED = 'create_seed';
 export class PrefStore {
   private static instance: PrefStore | undefined = undefined;
   private pref: preferences.Preferences | undefined = undefined;
+  private aliasById: Record<string, string> = {};
+  private lastSeenById: Record<string, string> = {};
 
   static getInstance(): PrefStore {
     if (!PrefStore.instance) {
@@ -59,6 +65,11 @@ export class PrefStore {
       });
       const notifyOn = await this.getNotifyEnabled();
       Notify.setEnabled(notifyOn);
+      SessionDiag.init(context);
+      const diagOn = await this.getDiagEnabled();
+      SessionDiag.setEnabled(diagOn);
+      this.aliasById = await this.loadStringMap(KEY_ALIAS);
+      this.lastSeenById = await this.loadStringMap(KEY_LAST_SEEN);
     } catch (e) {
       Log.warn(TAG, `init failed: ${JSON.stringify(e)}`);
     }
@@ -174,6 +185,73 @@ export class PrefStore {
     }
     await this.pref.put(KEY_NOTIFY, value);
     await this.pref.flush();
+  }
+
+  async getDiagEnabled(): Promise<boolean> {
+    if (!this.pref) {
+      return true;
+    }
+    return (await this.pref.get(KEY_DIAG, true)) as boolean;
+  }
+
+  async setDiagEnabled(value: boolean): Promise<void> {
+    SessionDiag.setEnabled(value);
+    if (!this.pref) {
+      return;
+    }
+    await this.pref.put(KEY_DIAG, value);
+    await this.pref.flush();
+  }
+
+  displayName(id: string, apiName: string): string {
+    const alias = this.aliasById[id] ?? '';
+    if (alias.length > 0) {
+      return alias;
+    }
+    return apiName;
+  }
+
+  aliasOf(id: string): string {
+    return this.aliasById[id] ?? '';
+  }
+
+  async setAlias(id: string, name: string): Promise<void> {
+    if (id.length === 0) {
+      return;
+    }
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      const next: Record<string, string> = {};
+      const keys = Object.keys(this.aliasById);
+      for (let i = 0; i < keys.length; i++) {
+        if (keys[i] !== id) {
+          next[keys[i]] = this.aliasById[keys[i]];
+        }
+      }
+      this.aliasById = next;
+    } else {
+      this.aliasById[id] = trimmed;
+    }
+    await this.saveStringMap(KEY_ALIAS, this.aliasById);
+    try {
+      AppStorage.setOrCreate('aliasRev', Date.now());
+    } catch (_e) {
+    }
+  }
+
+  lastSeenKey(id: string): string {
+    return this.lastSeenById[id] ?? '';
+  }
+
+  async setLastSeenKey(id: string, key: string): Promise<void> {
+    if (id.length === 0) {
+      return;
+    }
+    if (key.length === 0) {
+      return;
+    }
+    this.lastSeenById[id] = key;
+    await this.saveStringMap(KEY_LAST_SEEN, this.lastSeenById);
   }
 
   async getInboxView(): Promise<string> {
@@ -530,16 +608,28 @@ export class PrefStore {
     await this.pref.flush();
   }
 
-  private async loadEventMap(): Promise<Record<string, string>> {
+  private async loadStringMap(key: string): Promise<Record<string, string>> {
     if (!this.pref) {
       return {};
     }
     try {
-      const raw = (await this.pref.get(KEY_LAST_EVENT, '{}')) as string;
+      const raw = (await this.pref.get(key, '{}')) as string;
       return JSON.parse(raw) as Record<string, string>;
     } catch (_e) {
       return {};
     }
+  }
+
+  private async saveStringMap(key: string, map: Record<string, string>): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    await this.pref.put(key, JSON.stringify(map));
+    await this.pref.flush();
+  }
+
+  private async loadEventMap(): Promise<Record<string, string>> {
+    return this.loadStringMap(KEY_LAST_EVENT);
   }
 }
 
@@ -549,4 +639,5 @@ export interface UnreadRow {
   statusZh: string;
   snippet: string;
   at: number;
+  repo?: string;
 }

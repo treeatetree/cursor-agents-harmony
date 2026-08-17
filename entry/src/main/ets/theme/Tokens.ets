@@ -18,7 +18,7 @@ export class Tokens {
   static chromePad: number = 12;
   static cardPad: number = 12;
   static sec: number = 12;
-  /** Unified inbox card height (title 2 + outcome 1 + footer). */
+  /** Unified inbox card height (title up to 2 + preview up to 2 + footer). */
   static cardH: number = 116;
   /** Split master list row. */
   static listCardH: number = 68;
@@ -35,6 +35,11 @@ export class Tokens {
   /** HarmonyOS half-sheet default. All bindSheets share this; do not shrink to field/card. */
   static readonly radiusSheet: number = 32;
   static readonly radiusPill: number = 999;
+  /** bindSheet inset. Match horizontal inset below the drag bar; extra bottom for home indicator. */
+  static readonly sheetPadH: number = 20;
+  static readonly sheetPadTop: number = 20;
+  static readonly sheetPadBottom: number = 28;
+  static readonly sheetGap: number = 14;
 
   static readonly touchMin: number = 44;
   static readonly rowMin: number = 52;

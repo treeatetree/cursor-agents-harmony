@@ -6,10 +6,13 @@ import { AgentCache } from '../store/AgentCache';
 import { AgentListSource } from '../datasource/AgentListSource';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Log } from '../utils/Log';
+import { SessionDiag } from '../utils/SessionDiag';
 import { WidgetBridge } from '../utils/WidgetBridge';
 import { UnreadStore } from '../store/UnreadStore';
+import { PrefStore } from '../store/PrefStore';
 import { clipNotice } from '../utils/MarkdownParse';
 import { isRunInFlight, mergeInboxLists, pickNewerIso, sortByRecency } from '../utils/InboxGrouping';
+import { repoTail } from '../utils/DisplayFmt';
 import { AppState } from '../utils/AppState';
 import { LiveIsland } from '../utils/LiveIsland';
 import { DetailVM } from './DetailVM';
@@ -96,6 +99,8 @@ export class InboxVM {
     this.errorMsg = '';
     this.authExpired = false;
     this.needsPlanUpgrade = false;
+    const started = Date.now();
+    const prevN = this.source.totalCount();
     try {
       const client = CursorApiClient.getInstance();
       const resp = await client.listAgents(100, undefined, this.includeArchived, this.prUrlFilter);
@@ -130,6 +135,13 @@ export class InboxVM {
       this.loadedOnce = true;
       this.lastRefreshAt = Date.now();
       this.dirty = this.heldIds.length > 0;
+      const nextN = agents.length;
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'refresh',
+        elapsedMs: Date.now() - started,
+        extra: `n=${nextN} prev=${prevN} diff=${nextN - prevN} silent=${silent ? 1 : 0}`
+      });
       Log.info(TAG, `inbox ${agents.length}`);
       this.startWatch();
       LiveIsland.syncRunning(this.inFlightAgents()).catch(() => {
@@ -458,7 +470,15 @@ export class InboxVM {
     }
     const zh = runStatusLabel(now);
     const snippet = clipNotice(a.latestResult ?? a.name ?? '', 56);
-    UnreadStore.getInstance().markFinished(a.id, a.name ?? '', zh, snippet).catch(() => {
+    const repo = (a.repos && a.repos.length > 0) ? repoTail(a.repos[0].url ?? '') : '';
+    const shown = PrefStore.getInstance().displayName(a.id, a.name ?? '');
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'noteTerminal',
+      agentId: a.id,
+      extra: `status=${now} old=${oldStatus} repo=${repo}`
+    });
+    UnreadStore.getInstance().markFinished(a.id, shown, zh, snippet, repo).catch(() => {
     });
   }
 

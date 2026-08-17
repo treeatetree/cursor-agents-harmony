@@ -30,7 +30,7 @@
     { "name": "banner_error_bg", "value": "#F8E4E1" },
     { "name": "outcome_ok_bg", "value": "#FFFFFF" },
     { "name": "outcome_hi_bg", "value": "#F4F4F5" },
-    { "name": "user_bubble", "value": "#EEF4FA" },
+    { "name": "user_bubble", "value": "#F4F4F5" },
     { "name": "agent_bubble", "value": "#FAFAFA" },
     { "name": "assistant_rail", "value": "#E4E4E7" },
     { "name": "code_bg", "value": "#F4F4F5" },

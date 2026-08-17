@@ -19,11 +19,12 @@ import { defaultEnv, envNameLabel, hasTools, serializeTools, toolsChipLabel, use
 import { repoTail } from '../utils/DisplayFmt';
 import { collectRecentRepos, pairRecentRepos, RecentRepo, RecentRepoRow } from '../utils/InboxGrouping';
 import {
-  buildParamRows, groupModels, ModelParamRow, ModelVendorGroup, rowsToParams,
+  buildParamRows, formatFollowChip, groupModels, ModelParamRow, ModelVendorGroup, rowsToParams,
   shortModelName, variantLabel, variantSectionTitle
 } from '../utils/ModelGroups';
 import { HuChip } from '../components/HuChip';
 import { HuTextButton } from '../components/HuTextButton';
+import { SheetPickRow } from '../components/SheetAction';
 import { ModelPicker } from '../components/ModelPicker';
 import { StatusBanner } from '../components/StatusBanner';
 import { notifyResult } from '../utils/AppToast';
@@ -87,6 +88,8 @@ export struct NewAgentPage {
   @State moreLabel: string = '更多';
   @State showAdvanced: boolean = false;
   @State recentRepos: RecentRepo[] = [];
+  @State modelsLoading: boolean = false;
+  @State modelsError: string = '';
   private attachedImages: PromptImage[] = [];
   private draftTimer: number = -1;
 
@@ -117,6 +120,9 @@ export struct NewAgentPage {
   private openSheet(kind: string): void {
     this.sheetKind = kind;
     this.showSheet = true;
+    if (kind === 'model') {
+      this.ensureModelsLoaded(this.modelGroups.length === 0);
+    }
   }
 
   private closeSheet(): void {
@@ -131,6 +137,30 @@ export struct NewAgentPage {
       PrefStore.getInstance().setDraft(text);
       this.draftTimer = -1;
     }, 500) as number;
+  }
+
+  private ensureModelsLoaded(force: boolean = false): void {
+    this.models = this.vm.models;
+    this.updateModelMeta();
+    if (!force && this.modelGroups.length > 0) {
+      this.modelsError = '';
+      return;
+    }
+    this.modelsLoading = true;
+    this.modelsError = '';
+    this.vm.loadMeta(false).then(() => {
+      this.modelsLoading = false;
+      this.syncFromVm();
+      if (this.modelGroups.length === 0 && this.models.length === 0) {
+        this.modelsError = '模型列表没加载到，点重试。';
+      }
+    }, () => {
+      this.modelsLoading = false;
+      this.syncFromVm();
+      if (this.modelGroups.length === 0) {
+        this.modelsError = '模型列表没加载到，点重试。';
+      }
+    });
   }
 
   private refreshCanSubmit(): void {
@@ -241,7 +271,7 @@ export struct NewAgentPage {
   private refreshRecentRepos(): void {
     const seen: string[] = [];
     const out: RecentRepo[] = [];
-    const recent = collectRecentRepos(InboxVM.getInstance().source.snapshot(), 40);
+    const recent = collectRecentRepos(InboxVM.getInstance().source.snapshot(), 80);
     for (let i = 0; i < recent.length; i++) {
       const url = recent[i].url;
       if (url.length === 0 || seen.indexOf(url) >= 0) {
@@ -265,13 +295,16 @@ export struct NewAgentPage {
   }
 
   private repoGridItems(): RecentRepo[] {
+    const cap = 20;
+    const total = this.recentRepos.length;
+    const n = Math.min(cap, total);
     const items: RecentRepo[] = [];
-    const n = Math.min(5, this.recentRepos.length);
     for (let i = 0; i < n; i++) {
       items.push(this.recentRepos[i]);
     }
-    const more: RecentRepo = { url: '__more__', ref: '', title: '全部' };
-    items.push(more);
+    if (total > cap) {
+      items.push({ url: '__more__', ref: '', title: '全部' });
+    }
     return items;
   }
 
@@ -420,7 +453,10 @@ export struct NewAgentPage {
       return '自动';
     }
     const name = this.modelDisplayName.length > 0 ? this.modelDisplayName : this.selectedModel;
-    return shortModelName(name);
+    const payload = this.vm.modelPayload();
+    const params = payload && payload['params'] ? payload['params'] as Object[] : [];
+    const chip = formatFollowChip(name, params);
+    return chip.length > 0 ? chip : '自动';
   }
 
   private setRepoMode(mode: string): void {
@@ -593,7 +629,24 @@ export struct NewAgentPage {
             this.refreshCanSubmit();
           }
         })
-        this.recentRepoBlock()
+        Text('仓库')
+          .fontSize(Tokens.typeCaption)
+          .fontColor($r('app.color.text_tertiary'))
+          .width('100%')
+          .padding({
+            left: Tokens.pagePad,
+            right: Tokens.pagePad,
+            top: 20,
+            bottom: 8
+          })
+        Scroll() {
+          this.recentRepoBlock()
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .align(Alignment.Top)
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
       }
       .width('100%')
       .layoutWeight(1)
@@ -605,7 +658,8 @@ export struct NewAgentPage {
     .height('100%')
     .backgroundColor($r('app.color.bg0'))
     .bindSheet($$this.showSheet, this.sheetBody(), {
-      height: this.sheetKind === 'branch' || this.sheetKind === 'model' ? SheetSize.FIT_CONTENT :
+      height: this.sheetKind === 'model' ? SheetSize.MEDIUM :
+        this.sheetKind === 'branch' ? SheetSize.FIT_CONTENT :
         SheetSize.LARGE,
       dragBar: true,
       showClose: false,
@@ -617,11 +671,6 @@ export struct NewAgentPage {
   @Builder
   recentRepoBlock() {
     Column({ space: 8 }) {
-      Text('仓库')
-        .fontSize(Tokens.typeCaption)
-        .fontColor($r('app.color.text_tertiary'))
-        .width('100%')
-        .padding({ top: 4, bottom: 2 })
       ForEach(this.repoRows(), (row: RecentRepoRow) => {
         Row({ space: 8 }) {
           Column() {
@@ -642,7 +691,7 @@ export struct NewAgentPage {
       }, (row: RecentRepoRow) => row.key)
     }
     .width('100%')
-    .padding({ left: Tokens.pagePad, right: Tokens.pagePad, top: 4 })
+    .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 8 })
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -740,10 +789,10 @@ export struct NewAgentPage {
 
   @Builder
   repoSheet() {
-    Column({ space: 10 }) {
+    Column({ space: Tokens.sheetGap }) {
       Row({ space: 8 }) {
         Text('仓库')
-          .fontSize(17)
+          .fontSize(Tokens.typeHeadline)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .layoutWeight(1)
@@ -836,22 +885,20 @@ export struct NewAgentPage {
             this.repos = this.vm.filteredRepos();
           })
 
-        List({ space: 6 }) {
+        List({ space: 8 }) {
           ForEach(this.repos, (r: RepoInfo) => {
             ListItem() {
-              Text(this.repoSheetName(r))
-                .fontSize(14)
-                .fontColor($r('app.color.text_primary'))
-                .width('100%')
-                .padding(12)
-                .backgroundColor($r('app.color.bg2'))
-                .borderRadius(Tokens.radiusMd)
-                .onClick(() => {
+              SheetPickRow({
+                title: this.repoSheetName(r),
+                caption: r.owner,
+                selected: this.selectedRepo === r.repository,
+                onTap: () => {
                   this.selectedRepo = r.repository;
                   this.vm.selectedRepo = r.repository;
                   this.closeSheet();
                   this.refreshCanSubmit();
-                })
+                }
+              })
             }
           }, (r: RepoInfo) => r.repository)
         }
@@ -887,16 +934,21 @@ export struct NewAgentPage {
         .width('100%')
       }
     }
-    .padding(16)
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
+    })
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.bg1'))
+    .backgroundColor($r('app.color.bg0'))
   }
 
   @Builder
   optionsSheet() {
     Scroll() {
-      Column({ space: 14 }) {
+      Column({ space: Tokens.sheetGap }) {
         Text('更多')
           .fontSize(Tokens.typeHeadline)
           .fontWeight(FontWeight.Medium)
@@ -1012,13 +1064,18 @@ export struct NewAgentPage {
         }
       }
       .width('100%')
-      .padding(16)
+      .padding({
+        left: Tokens.sheetPadH,
+        right: Tokens.sheetPadH,
+        top: Tokens.sheetPadTop,
+        bottom: Tokens.sheetPadBottom
+      })
       .alignItems(HorizontalAlign.Start)
     }
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Off)
-    .backgroundColor($r('app.color.bg1'))
+    .backgroundColor($r('app.color.bg0'))
     .onDisAppear(() => {
       this.vm.mcpServers = this.mcpServers;
       this.vm.subagents = this.subagents;
@@ -1029,40 +1086,78 @@ export struct NewAgentPage {
 
   @Builder
   modelSheet() {
-    Column({ space: 10 }) {
+    Column({ space: Tokens.sheetGap }) {
       Text('模型')
         .fontSize(Tokens.typeHeadline)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
-      ModelPicker({
-        selectedModel: this.selectedModel,
-        selectedVariantIndex: this.selectedVariantIndex,
-        groups: this.modelGroups,
-        variantOptions: this.variantOptions,
-        variantTitle: this.variantTitle,
-        paramRows: this.paramRows,
-        onPick: (id: string) => {
-          this.pickModel(id);
-          this.refreshCanSubmit();
-        },
-        onPickParam: (rowIdx: number, valueIdx: number) => {
-          this.pickParam(rowIdx, valueIdx);
-        },
-        onPickVariant: (idx: number) => {
-          this.selectedVariantIndex = idx;
-          this.vm.selectedVariantIndex = idx;
-          if (idx >= 0 && idx < this.variantOptions.length) {
-            this.selectedVariant = this.variantOptions[idx];
-            this.vm.selectedVariant = this.selectedVariant;
-          }
-          this.refreshCanSubmit();
+      if (this.modelsLoading && this.modelGroups.length === 0) {
+        Text('正在加载模型…')
+          .fontSize(Tokens.typeCallout)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .padding({ top: 12, bottom: 12 })
+      } else if (this.modelGroups.length === 0) {
+        Column({ space: 8 }) {
+          Text(this.modelsError.length > 0 ? this.modelsError : '模型列表还没加载出来。')
+            .fontSize(Tokens.typeCallout)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+          Text('重新加载')
+            .fontSize(Tokens.typeCallout)
+            .fontColor($r('app.color.text_link'))
+            .onClick(() => {
+              Haptics.click();
+              this.ensureModelsLoaded(true);
+            })
         }
-      })
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ top: 8, bottom: 8 })
+      }
+      Scroll() {
+        ModelPicker({
+          selectedModel: this.selectedModel,
+          selectedVariantIndex: this.selectedVariantIndex,
+          groups: this.modelGroups,
+          variantOptions: this.variantOptions,
+          variantTitle: this.variantTitle,
+          paramRows: this.paramRows,
+          onPick: (id: string) => {
+            this.pickModel(id);
+            this.refreshCanSubmit();
+          },
+          onPickParam: (rowIdx: number, valueIdx: number) => {
+            this.pickParam(rowIdx, valueIdx);
+          },
+          onPickVariant: (idx: number) => {
+            this.selectedVariantIndex = idx;
+            this.vm.selectedVariantIndex = idx;
+            if (idx >= 0 && idx < this.variantOptions.length) {
+              this.selectedVariant = this.variantOptions[idx];
+              this.vm.selectedVariant = this.selectedVariant;
+            }
+            this.refreshCanSubmit();
+          }
+        })
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .align(Alignment.Top)
+      .edgeEffect(EdgeEffect.Spring)
     }
-    .padding(16)
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
+    })
     .width('100%')
-    .backgroundColor($r('app.color.bg1'))
+    .height('100%')
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor($r('app.color.bg0'))
   }
 
   @Builder
@@ -1257,9 +1352,9 @@ export struct NewAgentPage {
 
   @Builder
   branchSheet() {
-    Column({ space: 12 }) {
+    Column({ space: Tokens.sheetGap }) {
       Text('分支 / ref')
-        .fontSize(17)
+        .fontSize(Tokens.typeHeadline)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
@@ -1290,9 +1385,14 @@ export struct NewAgentPage {
         }
       })
     }
-    .padding(16)
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
+    })
     .width('100%')
-    .backgroundColor($r('app.color.bg1'))
+    .backgroundColor($r('app.color.bg0'))
   }
 
   @Builder

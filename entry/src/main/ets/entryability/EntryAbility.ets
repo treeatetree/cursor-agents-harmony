@@ -17,6 +17,7 @@ import { UnreadStore } from '../store/UnreadStore';
 import { AppState } from '../utils/AppState';
 import { agentIdFromLaunch, noticeTextFromLaunch, showUnreadFromLaunch } from '../utils/WantParse';
 import { applyAppFont, registerAppFonts } from '../theme/AppFonts';
+import { SessionDiag } from '../utils/SessionDiag';
 
 const DOMAIN = 0x435552;
 const TAG = 'CursorMobile';
@@ -223,15 +224,28 @@ export default class EntryAbility extends UIAbility {
   private consumeWant(want: Want): void {
     try {
       const raw = want.parameters as Record<string, Object> | undefined;
-      if (showUnreadFromLaunch(raw) || (want.uri ?? '').indexOf('cursoragent://inbox') === 0) {
-        AppStorage.setOrCreate('pendingUnreadSheet', '1');
-        AppStorage.setOrCreate('pendingUnreadRev', Date.now());
-        return;
-      }
-      const id = agentIdFromLaunch(raw, want.uri ?? '');
+      const uri = want.uri ?? '';
+      const id = agentIdFromLaunch(raw, uri);
+      const unread = showUnreadFromLaunch(raw) || uri.indexOf('cursoragent://inbox') === 0;
+      SessionDiag.emit({
+        tag: 'Want',
+        event: 'consume',
+        agentId: id,
+        extra: `unread=${unread ? 1 : 0} uri=${uri.length > 0 ? '1' : '0'}`
+      });
       if (id.length > 0) {
         AppStorage.setOrCreate('pendingAgentId', id);
         AppStorage.setOrCreate('pendingAgentRev', Date.now());
+        const notice = noticeTextFromLaunch(raw);
+        if (notice.length > 0) {
+          AppStorage.setOrCreate('pendingNotice', notice);
+        }
+        return;
+      }
+      if (unread) {
+        AppStorage.setOrCreate('pendingUnreadSheet', '1');
+        AppStorage.setOrCreate('pendingUnreadRev', Date.now());
+        return;
       }
       const notice = noticeTextFromLaunch(raw);
       if (notice.length > 0) {

@@ -2,6 +2,7 @@ import { ArtifactInfo } from '../models/Api';
 import { Tokens } from '../theme/Tokens';
 import { fileNameOf, formatBytes, isImagePath, isVideoPath } from '../utils/DisplayFmt';
 import { relativeTime } from '../utils/TimeFmt';
+import { HuIcon } from './HuIcon';
 
 @Component
 export struct ArtifactRow {
@@ -102,14 +103,21 @@ export struct ArtifactRow {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        Text('打开')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.accent'))
-          .constraintSize({ minHeight: Tokens.touchMin })
-          .textAlign(TextAlign.Center)
+        Row({ space: 4 }) {
+          Text('打开')
+            .fontSize(Tokens.typeCaption)
+            .fontColor($r('app.color.accent'))
+          HuIcon({
+            name: 'external',
+            iconSize: 12,
+            tint: $r('app.color.accent')
+          })
+        }
+        .alignItems(VerticalAlign.Center)
       }
       .width('100%')
       .constraintSize({ minHeight: Tokens.touchMin })
+      .alignItems(VerticalAlign.Center)
       .onClick(() => {
         this.open();
       })

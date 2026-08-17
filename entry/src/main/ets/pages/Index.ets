@@ -26,6 +26,7 @@ import { HuIcon } from '../components/HuIcon';
 import { HuIconButton } from '../components/HuIconButton';
 import { HuChip } from '../components/HuChip';
 import { HuTextButton } from '../components/HuTextButton';
+import { SheetActionRow, SheetActionTile } from '../components/SheetAction';
 import { normalizeAvatarId } from '../utils/AvatarPresets';
 import { confirmDanger } from '../utils/AppDialog';
 import { notifyResult, showToast } from '../utils/AppToast';
@@ -36,7 +37,8 @@ import { InAppBrowserPageBuilder, shouldUseInAppBrowser } from './InAppBrowserPa
 import { shortAgentId } from '../utils/DisplayFmt';
 import { materializeForCrop, pickOneImageUri, resolveAvatarPhoto, toFileUri } from '../utils/ImagePicker';
 import { AvatarCrop } from '../components/AvatarCrop';
-import { pushInAppBrowser } from '../utils/WebLinks';
+import { pushInAppBrowser, WebLinks } from '../utils/WebLinks';
+import { readClipboardText } from '../utils/Clipboard';
 import {
   FilterMode,
   GroupMode,
@@ -122,6 +124,12 @@ struct Index {
   @State unreadLine: string = '';
   @State unreadIds: string[] = [];
   @State unreadItems: UnreadItem[] = [];
+  @State unreadCount: number = 0;
+  @State renameDraft: string = '';
+  @StorageLink('aliasRev') @Watch('onAliasRev') aliasRev: number = 0;
+  @State setupKey: string = '';
+  @State setupBusy: boolean = false;
+  @State setupError: string = '';
 
   aboutToAppear(): void {
     const ctx = getContext(this) as common.UIAbilityContext;
@@ -229,6 +237,12 @@ struct Index {
       if (!this.hasKey) {
         return;
       }
+      if (this.inbox.runningCount() > 0) {
+        return;
+      }
+      if (!this.inbox.shouldRefresh(30000)) {
+        return;
+      }
       this.inbox.refresh(true).then(() => {
         this.pullInboxUi();
       });
@@ -240,6 +254,22 @@ struct Index {
       clearInterval(this.pollTimer);
       this.pollTimer = -1;
     }
+  }
+
+  private async saveSetupKey(): Promise<void> {
+    if (this.setupBusy) {
+      return;
+    }
+    this.setupBusy = true;
+    this.setupError = '';
+    const ok: boolean = await this.session.saveAndValidate(this.setupKey);
+    if (ok) {
+      this.setupKey = '';
+      showToast('已保存');
+    } else {
+      this.setupError = this.session.errorMsg.length > 0 ? this.session.errorMsg : '验证失败';
+    }
+    this.setupBusy = false;
   }
 
   private openBrowser(url: string, title: string = 'Web'): void {
@@ -291,6 +321,7 @@ struct Index {
     this.unreadLine = unread.headline();
     this.unreadIds = unread.ids();
     this.unreadItems = unread.peek();
+    this.unreadCount = unread.count();
     this.recomputeView();
   }
 
@@ -471,7 +502,8 @@ struct Index {
 
   private bindLong(agent: AgentSummary): void {
     this.menuAgentId = agent.id;
-    this.menuAgentName = agent.name.length > 0 ? agent.name : shortAgentId(agent.id);
+    this.menuAgentName = PrefStore.getInstance().displayName(agent.id,
+      agent.name.length > 0 ? agent.name : shortAgentId(agent.id));
     this.menuAgentUrl = agent.url;
     this.menuAgentStatus = agent.status;
     this.menuAgentPinned = isPinnedId(agent.id, this.pinnedIds);
@@ -539,6 +571,10 @@ struct Index {
     this.consumePendingUnread();
   }
 
+  onAliasRev(): void {
+    this.recomputeView();
+  }
+
   private consumePendingUnread(): void {
     let flag = '';
     try {
@@ -602,9 +638,6 @@ struct Index {
     }
     Haptics.click();
     this.selectedId = id;
-    UnreadStore.getInstance().markSeen(id).then(() => {
-      this.pullInboxUi();
-    });
     const active = DetailVM.getActive();
     if (active && active.agentId === id) {
       return;
@@ -693,8 +726,21 @@ struct Index {
 
   @Builder
   topBar() {
-    Row() {
-      Blank()
+    Row({ space: 10 }) {
+      Image($r('app.media.app_icon'))
+        .width(28)
+        .height(28)
+        .objectFit(ImageFit.Cover)
+        .borderRadius(8)
+        .draggable(false)
+      Text('Cursor Cloud Agents')
+        .fontSize(Tokens.typeHeadline)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+        .constraintSize({ minWidth: 0 })
       HuIconButton({
         name: 'settings',
         label: '设置',
@@ -705,10 +751,11 @@ struct Index {
       })
     }
     .width('100%')
+    .constraintSize({ minHeight: Tokens.touchMin })
     .alignItems(VerticalAlign.Center)
     .padding({
       left: this.pagePad,
-      right: this.pagePad,
+      right: this.pagePad - 4,
       top: this.topInset + 2,
       bottom: 6
     })
@@ -716,30 +763,219 @@ struct Index {
 
   @Builder
   emptyNoKey() {
-    Column({ space: Tokens.space3 }) {
-      Text('Cursor Agents')
-        .fontSize(Tokens.typeTitle)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-      Text('粘贴个人 API Key，在鸿蒙上指挥云端 Agent。\n与 cursor.com/agents 共用同一批任务。')
-        .fontSize(Tokens.typeBody)
-        .fontColor($r('app.color.text_secondary'))
-        .textAlign(TextAlign.Center)
-        .lineHeight(Tokens.lineBody)
-        .padding({ left: 28, right: 28 })
-      HuButton({
-        label: '粘贴 API Key',
-        variant: 'primary',
-        onTap: () => {
-          this.navStack.pushPath({ name: 'Settings' });
+    Scroll() {
+      Column() {
+        Column({ space: Tokens.space5 }) {
+          this.setupHowCard()
+          this.setupPasteCard()
+          this.setupPrivacyCard()
         }
+        .width('100%')
+        .constraintSize({ maxWidth: 440 })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Center)
+      .padding({
+        left: this.pagePad,
+        right: this.pagePad,
+        top: 8,
+        bottom: (this.keyboardInset > this.bottomInset ? this.keyboardInset : this.bottomInset) + 24
       })
-        .margin({ top: 8 })
     }
     .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
     .width('100%')
-    .constraintSize({ maxWidth: 560 })
+    .align(Alignment.Top)
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  setupHowCard() {
+    Column({ space: Tokens.space4 }) {
+      Text('如何拿到 Key')
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+      Column({ space: Tokens.space3 }) {
+        this.setupStep('1', '打开 Cursor 网站并登录你的账号')
+        this.setupStep('2', '进入 API Keys，新建一把 User API Key')
+        this.setupStep('3', '复制以 crsr_ 开头的那一串，回到这里粘贴')
+      }
+      .width('100%')
+      Column({ space: Tokens.space2 }) {
+        Row() {
+          Column({ space: 2 }) {
+            Text('去 Cursor 创建 Key')
+              .fontSize(Tokens.typeCallout)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary'))
+            Text('cursor.com/dashboard/api')
+              .fontSize(Tokens.typeMicro)
+              .fontColor($r('app.color.text_tertiary'))
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          HuIcon({
+            name: 'external',
+            iconSize: 18,
+            tint: $r('app.color.text_tertiary')
+          })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+        .backgroundColor($r('app.color.bg2'))
+        .borderRadius(Tokens.radiusMd)
+        .opacity(this.pressKey === 'setup-api' ? 0.7 : 1)
+        .animation({ duration: 180, curve: Curve.EaseOut })
+        .onTouch((e: TouchEvent) => {
+          if (e.type === TouchType.Down) {
+            this.pressKey = 'setup-api';
+          } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+            this.pressKey = '';
+          }
+        })
+        .onClick(() => {
+          Haptics.click();
+          this.openBrowser(WebLinks.apiKeys, 'API Keys');
+        })
+        HuTextButton({
+          label: '官方说明',
+          color: $r('app.color.text_link'),
+          compact: true,
+          external: true,
+          onTap: () => {
+            this.openBrowser(WebLinks.docsApiOverview, 'API 说明');
+          }
+        })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+    }
+    .width('100%')
+    .padding(16)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor($r('app.color.bg1'))
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: 1, color: $r('app.color.border') })
+  }
+
+  @Builder
+  setupStep(n: string, title: string) {
+    Row({ space: 12 }) {
+      Column() {
+        Text(n)
+          .fontSize(Tokens.typeMicro)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_secondary'))
+      }
+      .width(22)
+      .height(22)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .backgroundColor($r('app.color.bg2'))
+      .borderRadius(Tokens.radiusPill)
+      Text(title)
+        .fontSize(Tokens.typeCallout)
+        .fontColor($r('app.color.text_primary'))
+        .lineHeight(Tokens.lineCaption)
+        .layoutWeight(1)
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Top)
+  }
+
+  @Builder
+  setupPasteCard() {
+    Column({ space: Tokens.space3 }) {
+      TextArea({
+        text: this.setupKey,
+        placeholder: '粘贴 crsr_… Key'
+      })
+        .height(56)
+        .width('100%')
+        .fontSize(Tokens.typeCallout)
+        .fontFamily(Tokens.fontMono)
+        .fontColor($r('app.color.text_primary'))
+        .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+        .placeholderColor($r('app.color.text_placeholder'))
+        .backgroundColor($r('app.color.field_bg'))
+        .borderRadius(Tokens.radiusField)
+        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        .caretColor($r('app.color.accent'))
+        .border({ width: 1, color: $r('app.color.border') })
+        .onChange((v: string) => {
+          this.setupKey = v;
+        })
+      Row() {
+        PasteButton({ icon: PasteIconStyle.LINES, text: PasteDescription.PASTE })
+          .height(Tokens.touchMin)
+          .fontSize(Tokens.typeCaption)
+          .fontColor($r('app.color.text_secondary'))
+          .backgroundColor(Color.Transparent)
+          .onClick(async (_e: ClickEvent, result: PasteButtonOnClickResult) => {
+            if (result !== PasteButtonOnClickResult.SUCCESS) {
+              showToast('未授权读取剪贴板');
+              return;
+            }
+            const text = (await readClipboardText()).trim();
+            if (text.length === 0) {
+              showToast('剪贴板是空的');
+              return;
+            }
+            this.setupKey = text;
+          })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.End)
+      if (this.setupError.length > 0) {
+        Text(this.setupError)
+          .fontSize(Tokens.typeCaption)
+          .fontColor($r('app.color.err'))
+          .width('100%')
+      }
+      HuButton({
+        label: this.setupBusy ? '验证中…' : '验证并保存',
+        variant: 'primary',
+        fillWidth: true,
+        isEnabled: !this.setupBusy && this.setupKey.trim().length > 8,
+        onTap: () => {
+          this.saveSetupKey();
+        }
+      })
+    }
+    .width('100%')
+    .padding(16)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor($r('app.color.bg1'))
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: 1, color: $r('app.color.border') })
+  }
+
+  @Builder
+  setupPrivacyCard() {
+    Column({ space: Tokens.space2 }) {
+      Text('安全与隐私')
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+      Text('本应用使用 Cursor 官方开放 API。所有信息都直达 Cursor 服务器，无需担心安全和隐私问题。')
+        .fontSize(Tokens.typeCallout)
+        .fontColor($r('app.color.text_secondary'))
+        .lineHeight(Tokens.lineCaption)
+        .width('100%')
+      Text('Key 用系统加密保存在本机，对话不经过第三方中转。')
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_tertiary'))
+        .lineHeight(Tokens.lineCaption)
+        .width('100%')
+    }
+    .width('100%')
+    .padding(16)
+    .alignItems(HorizontalAlign.Start)
+    .backgroundColor($r('app.color.bg1'))
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: 1, color: $r('app.color.border') })
   }
 
   @Builder
@@ -818,6 +1054,7 @@ struct Index {
             text: '套餐不足，打开 Dashboard 升级',
             tone: 'warn',
             action: '升级',
+            external: true,
             onAction: () => {
               this.openBrowser('https://cursor.com/dashboard', 'Dashboard');
             }
@@ -924,15 +1161,8 @@ struct Index {
           })
         }
 
-        if (this.unreadLine.length > 0) {
-          StatusBanner({
-            text: this.unreadLine,
-            tone: 'info',
-            action: '查看',
-            onAction: () => {
-              this.openUnreadSheet();
-            }
-          })
+        if (this.unreadCount > 0) {
+          this.unreadBanner()
         }
 
         if (this.showPrFilter) {
@@ -1299,14 +1529,134 @@ struct Index {
       this.accountSheet()
     } else if (this.chromeKind === 'unread') {
       this.unreadSheet()
+    } else if (this.chromeKind === 'rename') {
+      this.renameSheet()
     } else {
       this.agentMenuSheet()
     }
   }
 
   @Builder
+  unreadBanner() {
+    Row({ space: 8 }) {
+      Column({ space: 2 }) {
+        Text(this.unreadItems.length > 0 ? this.unreadItems[0].name : this.unreadLine)
+          .fontSize(Tokens.typeCallout)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        if (this.unreadItems.length > 0 && this.unreadItems[0].repo.length > 0) {
+          Text(this.unreadItems[0].repo)
+            .fontSize(Tokens.typeMicro)
+            .fontColor($r('app.color.text_tertiary'))
+            .maxLines(1)
+        }
+      }
+      .layoutWeight(1)
+      .alignItems(HorizontalAlign.Start)
+      .constraintSize({ minHeight: Tokens.touchMin })
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => {
+        const id = UnreadStore.getInstance().firstId();
+        if (id.length > 0) {
+          this.openAgent(id);
+        }
+      })
+      Text(`${this.unreadCount}`)
+        .fontSize(Tokens.typeMicro)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.primary_on'))
+        .textAlign(TextAlign.Center)
+        .constraintSize({ minWidth: 22, minHeight: 22 })
+        .padding({ left: 6, right: 6 })
+        .backgroundColor($r('app.color.accent'))
+        .borderRadius(Tokens.radiusPill)
+        .onClick(() => {
+          const id = UnreadStore.getInstance().firstId();
+          if (id.length > 0) {
+            this.openAgent(id);
+          }
+        })
+      HuTextButton({
+        label: '全部',
+        color: $r('app.color.text_secondary'),
+        onTap: () => {
+          this.openUnreadSheet();
+        }
+      })
+    }
+    .width('100%')
+    .constraintSize({ minHeight: Tokens.touchMin })
+    .padding({ left: this.pagePad, right: Tokens.space2, top: 8, bottom: 8 })
+    .backgroundColor($r('app.color.bg2'))
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
+  renameSheet() {
+    Column({ space: Tokens.sheetGap }) {
+      Text('重命名')
+        .fontSize(Tokens.typeHeadline)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+      TextInput({ text: this.renameDraft, placeholder: '本地别名' })
+        .fontSize(Tokens.typeCallout)
+        .placeholderColor($r('app.color.text_placeholder'))
+        .fontColor($r('app.color.text_primary'))
+        .backgroundColor($r('app.color.bg1'))
+        .border({ width: 1, color: $r('app.color.border') })
+        .borderRadius(Tokens.radiusField)
+        .height(Tokens.touchMin)
+        .width('100%')
+        .onChange((v: string) => {
+          this.renameDraft = v;
+        })
+      Text('只改本机显示，云端名称不变')
+        .fontSize(Tokens.typeMicro)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+      Row({ space: 12 }) {
+        HuTextButton({
+          label: '取消',
+          onTap: () => {
+            this.showChromeSheet = false;
+          }
+        })
+        HuTextButton({
+          label: '保存',
+          color: $r('app.color.accent'),
+          onTap: () => {
+            this.saveAlias(this.menuAgentId, this.renameDraft);
+          }
+        })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.End)
+    }
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
+    })
+    .width('100%')
+  }
+
+  private async saveAlias(id: string, name: string): Promise<void> {
+    await PrefStore.getInstance().setAlias(id, name);
+    this.menuAgentName = PrefStore.getInstance().displayName(id, name);
+    this.showChromeSheet = false;
+    this.recomputeView();
+    Haptics.success();
+    showToast('已保存本地名称');
+  }
+
+  @Builder
   unreadSheet() {
-    Column({ space: 8 }) {
+    Column({ space: Tokens.sheetGap }) {
       Row() {
         Text(this.unreadItems.length > 0 ? `${this.unreadItems.length} 条新结果` : '没有新结果')
           .fontSize(Tokens.typeBody)
@@ -1337,13 +1687,26 @@ struct Index {
           ForEach(this.unreadItems, (it: UnreadItem) => {
             ListItem() {
               Column({ space: 4 }) {
-                Text(`${it.name} · ${it.statusZh}`)
-                  .fontSize(Tokens.typeCallout)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.text_primary'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .width('100%')
+                Row({ space: 6 }) {
+                  Text(`${it.name} · ${it.statusZh}`)
+                    .fontSize(Tokens.typeCallout)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.text_primary'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    .layoutWeight(1)
+                  if (it.repo.length > 0) {
+                    Text(it.repo)
+                      .fontSize(Tokens.typeMicro)
+                      .fontColor($r('app.color.text_tertiary'))
+                      .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                      .backgroundColor($r('app.color.bg2'))
+                      .border({ width: 1, color: $r('app.color.border') })
+                      .borderRadius(Tokens.radiusChip)
+                  }
+                }
+                .width('100%')
+                .alignItems(VerticalAlign.Center)
                 if (it.snippet.length > 0) {
                   Text(it.snippet)
                     .fontSize(Tokens.typeCaption)
@@ -1355,7 +1718,7 @@ struct Index {
               }
               .width('100%')
               .alignItems(HorizontalAlign.Start)
-              .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
               .backgroundColor($r('app.color.bg2'))
               .borderRadius(Tokens.radiusMd)
               .constraintSize({ minHeight: Tokens.touchMin })
@@ -1372,13 +1735,18 @@ struct Index {
         .edgeEffect(EdgeEffect.Spring)
       }
     }
-    .padding(16)
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
+    })
     .width('100%')
   }
 
   @Builder
   accountSheet() {
-    Column({ space: 2 }) {
+    Column({ space: 12 }) {
       Row({ space: 12 }) {
         HuAvatar({
           preset: this.avatarPreset,
@@ -1416,7 +1784,7 @@ struct Index {
         })
       }
       .width('100%')
-      .padding({ bottom: 8 })
+      .padding({ bottom: 4 })
       .alignItems(VerticalAlign.Center)
 
       if (this.cropUri.length > 0) {
@@ -1446,7 +1814,7 @@ struct Index {
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%')
-        .padding({ top: 6, bottom: 2 })
+        .padding({ bottom: 4 })
       Row({ space: 4 }) {
         HuChip({
           label: '仓库',
@@ -1483,7 +1851,7 @@ struct Index {
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%')
-        .padding({ top: 6, bottom: 2 })
+        .padding({ bottom: 4 })
       Row({ space: 4 }) {
         HuChip({
           label: '最近发送',
@@ -1525,7 +1893,7 @@ struct Index {
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%')
-        .padding({ top: 6, bottom: 2 })
+        .padding({ bottom: 4 })
       Row({ space: 4 }) {
         HuChip({
           label: '含归档',
@@ -1549,144 +1917,144 @@ struct Index {
       }
       .width('100%')
     }
-    .padding(16)
-    .width('100%')
-  }
-
-  @Builder
-  pickRow(label: string, on: boolean, action: () => void) {
-    Row() {
-      Text(label)
-        .fontSize(Tokens.typeProse)
-        .fontColor($r('app.color.text_primary'))
-        .layoutWeight(1)
-      if (on) {
-        HuIcon({
-          name: 'check',
-          iconSize: 18,
-          tint: $r('app.color.text_primary')
-        })
-      }
-    }
-    .width('100%')
-    .height(44)
-    .alignItems(VerticalAlign.Center)
-    .opacity(this.pressKey === `pick:${label}` ? 0.7 : 1)
-    .onTouch((e: TouchEvent) => {
-      if (e.type === TouchType.Down) {
-        this.pressKey = `pick:${label}`;
-      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-        this.pressKey = '';
-      }
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
     })
-    .onClick(() => {
-      Haptics.tick();
-      action();
-    })
+    .width('100%')
   }
 
   @Builder
   agentMenuSheet() {
-    Column({ space: 4 }) {
-      Text(this.menuAgentName.length > 0 ? this.menuAgentName : shortAgentId(this.menuAgentId))
-        .fontSize(Tokens.typeBody)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .width('100%')
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-      Text(shortAgentId(this.menuAgentId))
-        .fontSize(Tokens.typeMicro)
-        .fontColor($r('app.color.text_tertiary'))
-        .fontFamily(Tokens.fontMono)
-        .width('100%')
-        .padding({ bottom: 8 })
-      this.menuBtn(this.menuAgentPinned ? '取消置顶' : '置顶', async () => {
-        const wasPinned = this.menuAgentPinned;
-        await this.togglePin(this.menuAgentId);
-        this.showChromeSheet = false;
-        Haptics.success();
-        showToast(wasPinned ? '已取消置顶' : '已置顶');
-      })
-      this.menuBtn('在浏览器打开', () => {
-        this.showChromeSheet = false;
-        this.openBrowser(this.menuAgentUrl, this.menuAgentName);
-      })
-      if (this.menuAgentStatus === 'ARCHIVED') {
-        this.menuBtn('取消归档', async () => {
-          const ok = await this.inbox.unarchive(this.menuAgentId);
-          this.pullInboxUi();
-          this.showChromeSheet = false;
-          if (ok) {
+    Column({ space: Tokens.sheetGap }) {
+      Column({ space: 4 }) {
+        Text(this.menuAgentName.length > 0 ? this.menuAgentName : shortAgentId(this.menuAgentId))
+          .fontSize(Tokens.typeHeadline)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .width('100%')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(shortAgentId(this.menuAgentId))
+          .fontSize(Tokens.typeMicro)
+          .fontColor($r('app.color.text_tertiary'))
+          .fontFamily(Tokens.fontMono)
+          .width('100%')
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({ bottom: 2 })
+
+      Row({ space: 8 }) {
+        SheetActionTile({
+          label: this.menuAgentPinned ? '取消置顶' : '置顶',
+          onTap: async () => {
+            const wasPinned = this.menuAgentPinned;
+            await this.togglePin(this.menuAgentId);
+            this.showChromeSheet = false;
             Haptics.success();
-            showToast('已取消归档');
-          } else {
-            Haptics.fail();
-            this.pullInboxUi();
+            showToast(wasPinned ? '已取消置顶' : '已置顶');
           }
         })
-      } else {
-        this.menuBtn('归档', async () => {
-          const ok = await this.inbox.archive(this.menuAgentId);
-          this.includeArchived = true;
-          PrefStore.getInstance().setIncludeArchived(true);
-          this.pullInboxUi();
-          this.showChromeSheet = false;
-          if (ok) {
-            Haptics.success();
-            showToast('已归档');
-          } else {
-            Haptics.fail();
-            this.pullInboxUi();
+          .layoutWeight(1)
+        SheetActionTile({
+          label: '重命名',
+          hint: '本机别名',
+          onTap: () => {
+            this.renameDraft = this.menuAgentName;
+            this.chromeKind = 'rename';
+          }
+        })
+          .layoutWeight(1)
+      }
+      .width('100%')
+
+      Column() {
+        SheetActionRow({
+          label: '浏览器打开',
+          hint: '系统浏览器',
+          trailing: 'external',
+          last: true,
+          onTap: () => {
+            this.showChromeSheet = false;
+            this.openBrowser(this.menuAgentUrl, this.menuAgentName);
           }
         })
       }
-      this.menuBtn('永久删除', () => {
-        const id = this.menuAgentId;
-        const title = this.menuAgentName.length > 0 ? this.menuAgentName : shortAgentId(id);
-        this.showChromeSheet = false;
-        confirmDanger('永久删除', `删除「${title}」后无法恢复。`, '删除', () => {
-          this.inbox.deleteRemote(id).then((ok: boolean) => {
-            this.pullInboxUi();
-            if (ok) {
-              Haptics.success();
-              showToast('已删除');
-            } else {
-              Haptics.fail();
-            }
-          });
-        });
-      })
-    }
-    .padding(16)
-    .width('100%')
-  }
-
-  @Builder
-  menuBtn(title: string, action: () => void) {
-    Text(title)
       .width('100%')
-      .height(48)
-      .fontSize(Tokens.typeProse)
-      .fontColor(title.indexOf('删除') >= 0 ? $r('app.color.err') : $r('app.color.text_primary'))
-      .textAlign(TextAlign.Start)
-      .padding({ left: 4 })
-      .opacity(this.pressKey === `menu:${title}` ? 0.7 : 1)
-      .onTouch((e: TouchEvent) => {
-        if (e.type === TouchType.Down) {
-          this.pressKey = `menu:${title}`;
-        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-          this.pressKey = '';
-        }
-      })
-      .onClick(() => {
-        if (title.indexOf('删除') >= 0) {
-          Haptics.warn();
-        } else {
-          Haptics.tick();
-        }
-        action();
-      })
+      .backgroundColor($r('app.color.bg2'))
+      .borderRadius(Tokens.radiusCard)
+      .clip(true)
+
+      Column() {
+        SheetActionRow({
+          label: this.menuAgentStatus === 'ARCHIVED' ? '取消归档' : '归档',
+          hint: this.menuAgentStatus === 'ARCHIVED' ? '重新出现在 Inbox' : '从 Inbox 收起',
+          onTap: async () => {
+            if (this.menuAgentStatus === 'ARCHIVED') {
+              const ok = await this.inbox.unarchive(this.menuAgentId);
+              this.pullInboxUi();
+              this.showChromeSheet = false;
+              if (ok) {
+                Haptics.success();
+                showToast('已取消归档');
+              } else {
+                Haptics.fail();
+                this.pullInboxUi();
+              }
+            } else {
+              const ok = await this.inbox.archive(this.menuAgentId);
+              this.includeArchived = true;
+              PrefStore.getInstance().setIncludeArchived(true);
+              this.pullInboxUi();
+              this.showChromeSheet = false;
+              if (ok) {
+                Haptics.success();
+                showToast('已归档');
+              } else {
+                Haptics.fail();
+                this.pullInboxUi();
+              }
+            }
+          }
+        })
+        SheetActionRow({
+          label: '永久删除',
+          hint: '无法恢复',
+          danger: true,
+          last: true,
+          onTap: () => {
+            const id = this.menuAgentId;
+            const title = this.menuAgentName.length > 0 ? this.menuAgentName : shortAgentId(id);
+            this.showChromeSheet = false;
+            confirmDanger('永久删除', `删除「${title}」后无法恢复。`, '删除', () => {
+              this.inbox.deleteRemote(id).then((ok: boolean) => {
+                this.pullInboxUi();
+                if (ok) {
+                  Haptics.success();
+                  showToast('已删除');
+                } else {
+                  Haptics.fail();
+                }
+              });
+            });
+          }
+        })
+      }
+      .width('100%')
+      .backgroundColor($r('app.color.bg2'))
+      .borderRadius(Tokens.radiusCard)
+      .clip(true)
+    }
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
+    })
+    .width('100%')
   }
 }
 

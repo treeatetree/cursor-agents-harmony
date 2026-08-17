@@ -8,6 +8,7 @@ export struct StatusBanner {
   @Prop text: string = '';
   @Prop tone: string = 'info';
   @Prop action: string = '';
+  @Prop external: boolean = false;
   onAction: () => void = () => {
   };
 
@@ -48,6 +49,7 @@ export struct StatusBanner {
           HuTextButton({
             label: this.action,
             color: this.tone === 'danger' ? $r('app.color.err') : $r('app.color.accent'),
+            external: this.external,
             onTap: () => {
               this.onAction();
             }
