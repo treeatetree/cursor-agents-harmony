@@ -19,7 +19,7 @@ import { defaultEnv, envNameLabel, hasTools, serializeTools, toolsChipLabel, use
 import { repoTail } from '../utils/DisplayFmt';
 import { collectRecentRepos, pairRecentRepos, RecentRepo, RecentRepoRow } from '../utils/InboxGrouping';
 import {
-  buildParamRows, formatFollowChip, groupModels, ModelParamRow, ModelVendorGroup, rowsToParams,
+  buildParamRows, formatChipFromRows, formatFollowChip, groupModels, ModelParamRow, ModelVendorGroup, paramRowsStamp, rowsToParams,
   shortModelName, variantLabel, variantSectionTitle
 } from '../utils/ModelGroups';
 import { HuChip } from '../components/HuChip';
@@ -77,6 +77,8 @@ export struct NewAgentPage {
   @State variantOptions: string[] = [];
   @State variantTitle: string = '模式';
   @State paramRows: ModelParamRow[] = [];
+  @State paramStamp: string = '';
+  @State modelChipLabel: string = '自动';
   @State windowW: number = 360;
   @State topInset: number = 0;
   @State bottomInset: number = 0;
@@ -362,6 +364,7 @@ export struct NewAgentPage {
     if (this.selectedModel.length === 0) {
       this.modelDisplayName = '默认（自动）';
       this.vm.selectedParams = [];
+      this.refreshModelChip();
       return;
     }
     for (let i = 0; i < this.models.length; i++) {
@@ -372,6 +375,7 @@ export struct NewAgentPage {
         if (rows.length > 0) {
           this.paramRows = rows;
           this.vm.selectedParams = rowsToParams(rows);
+          this.refreshModelChip();
           return;
         }
         this.vm.selectedParams = [];
@@ -394,11 +398,13 @@ export struct NewAgentPage {
             this.vm.selectedVariantIndex = def;
           }
         }
+        this.refreshModelChip();
         return;
       }
     }
     this.modelDisplayName = this.selectedModel;
     this.vm.selectedParams = [];
+    this.refreshModelChip();
   }
 
   private pickParam(rowId: string, valueIdx: number): void {
@@ -415,7 +421,26 @@ export struct NewAgentPage {
     }
     this.paramRows = next;
     this.vm.selectedParams = rowsToParams(next);
+    this.refreshModelChip();
     this.refreshCanSubmit();
+  }
+
+  private refreshModelChip(): void {
+    this.paramStamp = paramRowsStamp(this.paramRows);
+    if (this.selectedModel.length === 0) {
+      this.modelChipLabel = '自动';
+      return;
+    }
+    const name = this.modelDisplayName.length > 0 ? this.modelDisplayName : this.selectedModel;
+    if (this.paramRows.length > 0) {
+      const chip = formatChipFromRows(name, this.paramRows);
+      this.modelChipLabel = chip.length > 0 ? chip : '自动';
+      return;
+    }
+    const payload = this.vm.modelPayload();
+    const params = payload && payload['params'] ? payload['params'] as Object[] : [];
+    const chip = formatFollowChip(name, params);
+    this.modelChipLabel = chip.length > 0 ? chip : '自动';
   }
 
   private repoChipLabel(): string {
@@ -462,17 +487,6 @@ export struct NewAgentPage {
       return `${parts[parts.length - 2]}/${parts[parts.length - 1]}`;
     }
     return url;
-  }
-
-  private modelLabel(): string {
-    if (this.selectedModel.length === 0) {
-      return '自动';
-    }
-    const name = this.modelDisplayName.length > 0 ? this.modelDisplayName : this.selectedModel;
-    const payload = this.vm.modelPayload();
-    const params = payload && payload['params'] ? payload['params'] as Object[] : [];
-    const chip = formatFollowChip(name, params);
-    return chip.length > 0 ? chip : '自动';
   }
 
   private setRepoMode(mode: string): void {
@@ -610,7 +624,7 @@ export struct NewAgentPage {
           busy: this.busy,
           status: '',
           repo: this.repoChipLabel(),
-          modelLabel: this.modelLabel(),
+          modelLabel: this.modelChipLabel,
           autoPr: this.autoCreatePR,
           imageCount: this.imageNames.length,
           imageUris: $imageUris,
@@ -1145,6 +1159,7 @@ export struct NewAgentPage {
           variantOptions: this.variantOptions,
           variantTitle: this.variantTitle,
           paramRows: this.paramRows,
+          paramStamp: this.paramStamp,
           onPick: (id: string) => {
             this.pickModel(id);
             this.refreshCanSubmit();
@@ -1159,6 +1174,7 @@ export struct NewAgentPage {
               this.selectedVariant = this.variantOptions[idx];
               this.vm.selectedVariant = this.selectedVariant;
             }
+            this.refreshModelChip();
             this.refreshCanSubmit();
           }
         })

@@ -13,6 +13,7 @@ export struct ModelPicker {
   @Prop variantOptions: string[] = [];
   @Prop variantTitle: string = '模式';
   @Prop paramRows: ModelParamRow[] = [];
+  @Prop paramStamp: string = '';
   @Prop allowAuto: boolean = true;
   @Prop autoLabel: string = '自动';
   onPick: (id: string) => void = (_id: string) => {
@@ -79,14 +80,15 @@ export struct ModelPicker {
                     }
                   })
                     .margin({ right: 6, bottom: 4 })
-                }, (lab: string, valueIdx: number) => `${row.id}-${valueIdx}-${lab}-${row.selected}`)
+                }, (lab: string, valueIdx: number) => `${this.paramStamp}-${row.id}-${valueIdx}-${lab}`)
               }
               .width('100%')
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)
-          }, (row: ModelParamRow) => `${row.id}:${row.selected}`)
+          }, (row: ModelParamRow) => `${this.paramStamp}-${row.id}`)
         }
+        .id(`mp-params-${this.paramStamp}`)
         .width('100%')
         .padding({ top: 6 })
         .border({ width: { top: 1 }, color: $r('app.color.border') })

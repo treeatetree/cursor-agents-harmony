@@ -9,8 +9,8 @@ import { NewAgentVM } from '../viewmodels/NewAgentVM';
 import { ModelPicker } from '../components/ModelPicker';
 import { StatusBanner } from '../components/StatusBanner';
 import {
-  buildParamRows, formatFollowChip, groupModels, isAutoModel, ModelParamRow,
-  ModelVendorGroup, rowsToParams, variantLabel, variantSectionTitle
+  buildParamRows, formatChipFromRows, formatFollowChip, groupModels, isAutoModel, ModelParamRow,
+  ModelVendorGroup, paramRowsStamp, rowsToParams, variantLabel, variantSectionTitle
 } from '../utils/ModelGroups';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
@@ -105,6 +105,8 @@ struct AgentDetailPage {
   @State followVariantOptions: string[] = [];
   @State followVariantTitle: string = '模式';
   @State followParamRows: ModelParamRow[] = [];
+  @State followParamStamp: string = '';
+  @State followChipLabel: string = '';
   @State failedFollow: boolean = false;
   @State compareUrl: string = '';
   @State pinned: boolean = false;
@@ -604,9 +606,20 @@ struct AgentDetailPage {
     });
   }
 
-  private followModelLabelText(): string {
+  private refreshFollowChip(): void {
+    this.followParamStamp = paramRowsStamp(this.followParamRows);
+    if (this.followUpModel.length === 0) {
+      this.followChipLabel = '自动';
+      return;
+    }
     const name = this.followModelLabel.length > 0 ? this.followModelLabel : this.followUpModel;
-    return formatFollowChip(name, this.vm.followUpParams);
+    if (this.followParamRows.length > 0) {
+      const chip = formatChipFromRows(name, this.followParamRows);
+      this.followChipLabel = chip.length > 0 ? chip : name;
+      return;
+    }
+    const chip = formatFollowChip(name, this.vm.followUpParams);
+    this.followChipLabel = chip.length > 0 ? chip : name;
   }
 
   private ensureFollowModel(): void {
@@ -640,6 +653,7 @@ struct AgentDetailPage {
     this.vm.followUpModel = id;
     const payload = this.modelVm.modelPayload();
     this.vm.followUpParams = payload && payload['params'] ? payload['params'] as Object[] : [];
+    this.refreshFollowChip();
   }
 
   private refreshFollowModelMeta(): void {
@@ -648,6 +662,7 @@ struct AgentDetailPage {
     this.followParamRows = [];
     this.followModelLabel = '';
     if (this.followUpModel.length === 0) {
+      this.refreshFollowChip();
       return;
     }
     const models = this.modelVm.models;
@@ -661,6 +676,7 @@ struct AgentDetailPage {
       if (rows.length > 0) {
         this.followParamRows = rows;
         this.modelVm.selectedParams = rowsToParams(rows);
+        this.refreshFollowChip();
         return;
       }
       if (m.variants && m.variants.length > 0) {
@@ -682,9 +698,11 @@ struct AgentDetailPage {
           this.modelVm.selectedVariantIndex = def;
         }
       }
+      this.refreshFollowChip();
       return;
     }
     this.followModelLabel = this.followUpModel;
+    this.refreshFollowChip();
   }
 
   private pickFollowParam(rowId: string, valueIdx: number): void {
@@ -703,6 +721,7 @@ struct AgentDetailPage {
     this.modelVm.selectedParams = rowsToParams(next);
     const payload = this.modelVm.modelPayload();
     this.vm.followUpParams = payload && payload['params'] ? payload['params'] as Object[] : [];
+    this.refreshFollowChip();
   }
 
   private async runRetry(): Promise<void> {
@@ -1431,7 +1450,7 @@ struct AgentDetailPage {
       toolsOn: countMcp(this.followUpMcp) > 0,
       toolsLabel: this.followToolsLabel,
       followUpMode: this.followUpMode,
-      modelLabel: this.followModelLabelText(),
+      modelLabel: this.followChipLabel.length > 0 ? this.followChipLabel : '自动',
       failedFollow: this.failedFollow,
       queued: this.queuedFollowUp,
       queueNote: this.queueImagesLost ? '图片未保存' : '',
@@ -1625,6 +1644,7 @@ struct AgentDetailPage {
           variantOptions: this.followVariantOptions,
           variantTitle: this.followVariantTitle,
           paramRows: this.followParamRows,
+          paramStamp: this.followParamStamp,
           allowAuto: true,
           onPick: (id: string) => {
             this.pickFollowModel(id);
@@ -1641,6 +1661,7 @@ struct AgentDetailPage {
             }
             const payload = this.modelVm.modelPayload();
             this.vm.followUpParams = payload && payload['params'] ? payload['params'] as Object[] : [];
+            this.refreshFollowChip();
           }
         })
       }

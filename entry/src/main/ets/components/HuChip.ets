@@ -3,8 +3,8 @@ import { Haptics } from '../utils/Haptics';
 import { motionMs, pressMs, pressScaleOf } from '../utils/Motion';
 
 /**
- * Chip: visual 32 / hit 44, vertically centered in composer rows.
- * flexShrink(0) so Flex wrap cannot stretch width and steal neighbor taps.
+ * Chip: visual 32. Composer toolbar is 44 and centers this; do not wrap to 44
+ * or Scroll/alignStart will park the pill at the top of the field.
  */
 @Component
 export struct HuChip {
@@ -16,48 +16,40 @@ export struct HuChip {
   };
 
   build() {
-    Row() {
-      Text(this.label)
-        .fontSize(Tokens.typeMicro)
-        .fontWeight(this.on ? FontWeight.Medium : FontWeight.Regular)
-        .fontColor(this.on ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .height(32)
-        .padding({ left: 10, right: 10 })
-        .textAlign(TextAlign.Center)
-        .backgroundColor(this.on ? $r('app.color.bg2') : Color.Transparent)
-        .borderRadius(Tokens.radiusChip)
-        .border({
-          width: 1,
-          color: this.on ? $r('app.color.border_strong') : $r('app.color.border')
-        })
-        .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
-    }
-    .constraintSize({
-      minHeight: Tokens.touchMin,
-      maxWidth: this.maxVp > 0 ? this.maxVp : 280
-    })
-    .justifyContent(FlexAlign.Center)
-    .alignItems(VerticalAlign.Center)
-    .flexShrink(0)
-    .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
-    .opacity(this.pressed ? 0.82 : 1)
-    .animation({ duration: pressMs(), curve: Curve.EaseOut })
-    .onTouch((e: TouchEvent) => {
-      if (e.type === TouchType.Down) {
-        this.pressed = true;
-        Haptics.tick();
-      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-        this.pressed = false;
-      }
-    })
-    .gesture(
-      TapGesture()
-        .onAction(() => {
-          this.onTap();
-        })
-    )
+    Text(this.label)
+      .fontSize(Tokens.typeMicro)
+      .fontWeight(this.on ? FontWeight.Medium : FontWeight.Regular)
+      .fontColor(this.on ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .height(32)
+      .padding({ left: 10, right: 10 })
+      .textAlign(TextAlign.Center)
+      .backgroundColor(this.on ? $r('app.color.bg2') : Color.Transparent)
+      .borderRadius(Tokens.radiusChip)
+      .border({
+        width: 1,
+        color: this.on ? $r('app.color.border_strong') : $r('app.color.border')
+      })
+      .constraintSize({ maxWidth: this.maxVp > 0 ? this.maxVp : 280 })
+      .flexShrink(0)
+      .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
+      .opacity(this.pressed ? 0.82 : 1)
+      .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
+      .onTouch((e: TouchEvent) => {
+        if (e.type === TouchType.Down) {
+          this.pressed = true;
+          Haptics.tick();
+        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          this.pressed = false;
+        }
+      })
+      .gesture(
+        TapGesture()
+          .onAction(() => {
+            this.onTap();
+          })
+      )
   }
 }
 

@@ -306,11 +306,11 @@ export struct PromptShell {
             .align(Alignment.Start)
             .layoutWeight(1)
             .constraintSize({ minWidth: 0 })
-            .height(Tokens.touchMin)
+            .height(32)
             this.actionSwap()
           }
           .width('100%')
-          .height(Tokens.touchMin)
+          .height(32)
           .alignItems(VerticalAlign.Center)
           .justifyContent(FlexAlign.Start)
           .transition(fadeTransition())
@@ -532,7 +532,8 @@ export struct PromptShell {
         }
       }
     }
-    .constraintSize({ minHeight: Tokens.touchMin })
+    .height(32)
+    .alignItems(VerticalAlign.Center)
     .justifyContent(FlexAlign.Start)
   }
 }

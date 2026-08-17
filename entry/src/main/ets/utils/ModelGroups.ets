@@ -26,6 +26,38 @@ export function shortModelName(name: string): string {
     .trim();
 }
 
+/** Composer chip from the picker rows so tapping a param always changes the label. */
+export function formatChipFromRows(name: string, rows: ModelParamRow[]): string {
+  const bits: string[] = [];
+  const short = shortModelName(name);
+  if (short.length > 0) {
+    bits.push(short);
+  }
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (r.selected < 0 || r.selected >= r.labels.length) {
+      continue;
+    }
+    const val = r.selected < r.values.length ? r.values[r.selected].toLowerCase() : '';
+    if (val === 'false' || val === '0' || val === 'off' || val === 'none') {
+      continue;
+    }
+    const lab = r.labels[r.selected];
+    if (lab.length > 0) {
+      bits.push(lab);
+    }
+  }
+  return bits.join(' · ');
+}
+
+export function paramRowsStamp(rows: ModelParamRow[]): string {
+  let s = '';
+  for (let i = 0; i < rows.length; i++) {
+    s += `${rows[i].id}:${rows[i].selected};`;
+  }
+  return s;
+}
+
 /** Chip: model name + English effort depth + fast when on. */
 export function formatFollowChip(name: string, params: Object[]): string {
   const bits: string[] = [];
