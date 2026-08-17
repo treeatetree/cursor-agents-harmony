@@ -3,7 +3,8 @@ import { Haptics } from '../utils/Haptics';
 import { motionMs, pressMs, pressScaleOf } from '../utils/Motion';
 
 /**
- * Chip: visual 32. Wrap to label width so Flex rows cannot steal neighbor taps.
+ * Chip: visual 32. Composer toolbar is 44 and centers this; do not wrap to 44
+ * or Scroll/alignStart will park the pill at the top of the field.
  */
 @Component
 export struct HuChip {
@@ -32,7 +33,6 @@ export struct HuChip {
       })
       .constraintSize({ maxWidth: this.maxVp > 0 ? this.maxVp : 280 })
       .flexShrink(0)
-      .alignSelf(ItemAlign.Start)
       .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
       .opacity(this.pressed ? 0.82 : 1)
       .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
