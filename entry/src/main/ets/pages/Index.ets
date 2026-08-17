@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { LengthMetrics } from '@kit.ArkUI';
 import { SessionVM } from '../viewmodels/SessionVM';
 import { InboxVM } from '../viewmodels/InboxVM';
 import { DetailVM } from '../viewmodels/DetailVM';
@@ -23,15 +24,18 @@ import { HuAvatar, HuAvatarPicker } from '../components/HuAvatar';
 import { HuButton } from '../components/HuButton';
 import { HuIcon } from '../components/HuIcon';
 import { HuIconButton } from '../components/HuIconButton';
+import { HuChip } from '../components/HuChip';
 import { HuTextButton } from '../components/HuTextButton';
 import { normalizeAvatarId } from '../utils/AvatarPresets';
 import { confirmDanger } from '../utils/AppDialog';
-import { showToast } from '../utils/AppToast';
+import { notifyResult, showToast } from '../utils/AppToast';
 import { SettingsPageBuilder } from './SettingsPage';
 import { NewAgentPage, NewAgentPageBuilder } from './NewAgentPage';
 import { AgentDetailPageBuilder } from './AgentDetailPage';
 import { InAppBrowserPageBuilder, shouldUseInAppBrowser } from './InAppBrowserPage';
 import { shortAgentId } from '../utils/DisplayFmt';
+import { materializeForCrop, pickOneImageUri, resolveAvatarPhoto, toFileUri } from '../utils/ImagePicker';
+import { AvatarCrop } from '../components/AvatarCrop';
 import { pushInAppBrowser } from '../utils/WebLinks';
 import {
   FilterMode,
@@ -93,6 +97,9 @@ struct Index {
   @State chromeKind: string = '';
   @State pressKey: string = '';
   @State avatarPreset: string = 'iridescent';
+  @State avatarPhoto: string = '';
+  @State showAvatarEdit: boolean = false;
+  @State cropUri: string = '';
   private pollTimer: number = -1;
 
   // Inbox toolbar state
@@ -196,9 +203,7 @@ struct Index {
     this.consumePendingUnread();
     this.refreshSession();
     this.pullInboxUi();
-    PrefStore.getInstance().getAvatarPreset().then((id: string) => {
-      this.avatarPreset = normalizeAvatarId(id);
-    });
+    this.reloadAvatar();
     PrefStore.getInstance().getPinnedIds().then((ids: string[]) => {
       this.pinnedIds = ids;
       this.recomputeView();
@@ -289,6 +294,17 @@ struct Index {
     this.recomputeView();
   }
 
+  private async runInboxRefresh(okText: string = ''): Promise<void> {
+    const ok = await this.inbox.refresh(false);
+    this.pullInboxUi();
+    if (ok) {
+      notifyResult(true, okText.length > 0 ? okText : `已更新 · ${this.agentCount} 条`);
+      return;
+    }
+    const err = this.inboxError.length > 0 ? this.inboxError : '刷新失败';
+    notifyResult(false, '', err);
+  }
+
   /** Recompute flat / grouped view models from the inbox source + current toolbar state. */
   private recomputeView(): void {
     const all = this.inbox.source.snapshot();
@@ -328,12 +344,63 @@ struct Index {
     this.inbox.setIncludeArchived(showArchived);
     this.expandedKey = await prefs.getInboxExpanded();
     this.pinnedIds = await prefs.getPinnedIds();
-    this.avatarPreset = normalizeAvatarId(await prefs.getAvatarPreset());
+    await this.applyAvatarPrefs(await prefs.getAvatarPreset(), await prefs.getAvatarPhoto());
+  }
+
+  private reloadAvatar(): void {
+    const prefs = PrefStore.getInstance();
+    Promise.all([prefs.getAvatarPreset(), prefs.getAvatarPhoto()]).then((pair: string[]) => {
+      this.applyAvatarPrefs(pair[0], pair[1]);
+    });
+  }
+
+  private async applyAvatarPrefs(preset: string, photo: string): Promise<void> {
+    const id = normalizeAvatarId(preset);
+    const uri = await resolveAvatarPhoto(photo);
+    if (id === 'custom' && uri.length === 0) {
+      this.avatarPreset = 'iridescent';
+      this.avatarPhoto = '';
+      const prefs = PrefStore.getInstance();
+      prefs.setAvatarPreset('iridescent');
+      prefs.setAvatarPhoto('');
+      return;
+    }
+    this.avatarPreset = id;
+    this.avatarPhoto = id === 'custom' ? uri : '';
+  }
+
+  private avatarSrc(): string {
+    if (this.avatarPreset !== 'custom' || this.avatarPhoto.length === 0) {
+      return '';
+    }
+    return this.avatarPhoto;
   }
 
   private pickAvatar(id: string): void {
     this.avatarPreset = normalizeAvatarId(id);
     PrefStore.getInstance().setAvatarPreset(this.avatarPreset);
+  }
+
+  private async pickAvatarPhoto(): Promise<void> {
+    const uri = await pickOneImageUri();
+    if (uri.length === 0) {
+      return;
+    }
+    const ctx = getContext(this) as common.UIAbilityContext;
+    const local = await materializeForCrop(uri, ctx.cacheDir);
+    if (local.length === 0) {
+      showToast('这张图读不了');
+      return;
+    }
+    this.cropUri = toFileUri(local);
+  }
+
+  private applyCroppedAvatar(path: string): void {
+    this.avatarPhoto = toFileUri(path);
+    this.avatarPreset = 'custom';
+    this.cropUri = '';
+    PrefStore.getInstance().setAvatarPreset('custom');
+    PrefStore.getInstance().setAvatarPhoto(toFileUri(path));
   }
 
   private persistInboxChrome(): void {
@@ -584,9 +651,7 @@ struct Index {
           NetworkBanner({
             online: this.online,
             onRetry: () => {
-              this.inbox.refresh(false).then(() => {
-                this.pullInboxUi();
-              });
+              this.runInboxRefresh();
             }
           })
         }
@@ -613,6 +678,7 @@ struct Index {
         detents: [SheetSize.LARGE],
         dragBar: true,
         showClose: false,
+        radius: LengthMetrics.vp(Tokens.radiusSheet),
         backgroundColor: $r('app.color.overlay')
       })
     }
@@ -689,9 +755,12 @@ struct Index {
       })
       HuAvatar({
         preset: this.avatarPreset,
+        photoUri: this.avatarSrc(),
         box: Tokens.touchMin,
         onTap: () => {
           this.chromeKind = 'account';
+          this.showAvatarEdit = false;
+          this.cropUri = '';
           this.showChromeSheet = true;
         }
       })
@@ -761,9 +830,7 @@ struct Index {
             tone: 'warn',
             action: '重试',
             onAction: () => {
-              this.inbox.refresh(false).then(() => {
-                this.pullInboxUi();
-              });
+              this.runInboxRefresh();
             }
           })
         }
@@ -795,6 +862,7 @@ struct Index {
           compact: this.useSplit,
           hideSearch: this.bpStore.bp === 'sm',
           avatarPreset: this.avatarPreset,
+          avatarPhoto: this.avatarSrc(),
           onQuery: (s: string) => {
             this.query = s;
             this.recomputeView();
@@ -820,22 +888,22 @@ struct Index {
             this.inbox.setIncludeArchived(next);
             this.includeArchived = next;
             PrefStore.getInstance().setIncludeArchived(next);
-            await this.inbox.refresh(false);
-            this.pullInboxUi();
+            await this.runInboxRefresh(next ? '已显示归档' : '已隐藏归档');
           },
           onTogglePr: () => {
             this.prUrlInput = this.prUrlFilter;
             this.showPrFilter = !this.showPrFilter;
           },
           onRefresh: async () => {
-            await this.inbox.refresh(false);
-            this.pullInboxUi();
+            await this.runInboxRefresh();
           },
           onSettings: () => {
             this.navStack.pushPath({ name: 'Settings' });
           },
           onAvatar: () => {
             this.chromeKind = 'account';
+            this.showAvatarEdit = false;
+            this.cropUri = '';
             this.showChromeSheet = true;
           },
           onNew: () => {
@@ -851,9 +919,7 @@ struct Index {
             tone: 'warn',
             action: '重试',
             onAction: () => {
-              this.inbox.refresh(false).then(() => {
-                this.pullInboxUi();
-              });
+              this.runInboxRefresh();
             }
           })
         }
@@ -873,6 +939,8 @@ struct Index {
           Row({ space: 8 }) {
             TextInput({ text: this.prUrlInput, placeholder: '粘贴 PR URL 按此筛选' })
               .fontSize(Tokens.typeCaption)
+              .placeholderFont({ size: Tokens.typeCaption, weight: FontWeight.Regular })
+              .placeholderColor($r('app.color.text_placeholder'))
               .fontColor($r('app.color.text_primary'))
               .backgroundColor($r('app.color.bg1'))
               .border({ width: 1, color: $r('app.color.border') })
@@ -888,8 +956,7 @@ struct Index {
               onTap: async () => {
                 this.inbox.setPrUrlFilter(this.prUrlInput.trim());
                 this.showPrFilter = false;
-                await this.inbox.refresh(false);
-                this.pullInboxUi();
+                await this.runInboxRefresh('已按 PR 筛选');
               }
             })
             if (this.prUrlFilter.length > 0) {
@@ -899,8 +966,7 @@ struct Index {
                   this.prUrlInput = '';
                   this.inbox.setPrUrlFilter('');
                   this.showPrFilter = false;
-                  await this.inbox.refresh(false);
-                  this.pullInboxUi();
+                  await this.runInboxRefresh('已清除筛选');
                 }
               })
             }
@@ -956,6 +1022,7 @@ struct Index {
       height: this.chromeKind === 'unread' ? SheetSize.MEDIUM : SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: false,
+      radius: LengthMetrics.vp(Tokens.radiusSheet),
       backgroundColor: $r('app.color.overlay')
     })
     }
@@ -1001,8 +1068,12 @@ struct Index {
       .cachedCount(8)
       .sticky(StickyStyle.Header)
       .onReachEnd(() => {
-        this.inbox.loadMore().then(() => {
+        this.inbox.loadMore().then((ok: boolean) => {
           this.pullInboxUi();
+          if (!ok) {
+            const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '加载更多失败';
+            notifyResult(false, '', err);
+          }
         });
       })
     }
@@ -1010,8 +1081,7 @@ struct Index {
     .onRefreshing(async () => {
       Haptics.tick();
       this.isRefreshing = true;
-      await this.inbox.refresh(false);
-      this.pullInboxUi();
+      await this.runInboxRefresh();
       this.isRefreshing = false;
     })
   }
@@ -1079,8 +1149,12 @@ struct Index {
       .cachedCount(6)
       .sticky(StickyStyle.Header)
       .onReachEnd(() => {
-        this.inbox.loadMore().then(() => {
+        this.inbox.loadMore().then((ok: boolean) => {
           this.pullInboxUi();
+          if (!ok) {
+            const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '加载更多失败';
+            notifyResult(false, '', err);
+          }
         });
       })
     }
@@ -1088,8 +1162,7 @@ struct Index {
     .onRefreshing(async () => {
       Haptics.tick();
       this.isRefreshing = true;
-      await this.inbox.refresh(false);
-      this.pullInboxUi();
+      await this.runInboxRefresh();
       this.isRefreshing = false;
     })
   }
@@ -1309,7 +1382,11 @@ struct Index {
       Row({ space: 12 }) {
         HuAvatar({
           preset: this.avatarPreset,
-          box: Tokens.touchMin
+          photoUri: this.avatarSrc(),
+          box: Tokens.touchMin,
+          onTap: () => {
+            this.showAvatarEdit = !this.showAvatarEdit;
+          }
         })
         Column({ space: 2 }) {
           Text(this.userName.length > 0 ? this.userName : (this.email.length > 0 ? this.email : '账号'))
@@ -1330,85 +1407,147 @@ struct Index {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
+        HuChip({
+          label: '设置',
+          onTap: () => {
+            this.showChromeSheet = false;
+            this.navStack.pushPath({ name: 'Settings' });
+          }
+        })
       }
       .width('100%')
       .padding({ bottom: 8 })
       .alignItems(VerticalAlign.Center)
 
-      Text('头像')
-        .fontSize(Tokens.typeCaption)
-        .fontColor($r('app.color.text_tertiary'))
-        .width('100%')
-        .padding({ top: 4, bottom: 2 })
-      HuAvatarPicker({
-        selected: this.avatarPreset,
-        onPick: (id: string) => {
-          this.pickAvatar(id);
-        }
-      })
-
-      this.menuBtn('设置', () => {
-        this.showChromeSheet = false;
-        this.navStack.pushPath({ name: 'Settings' });
-      })
-      this.menuBtn('刷新 Inbox', async () => {
-        this.showChromeSheet = false;
-        await this.inbox.refresh(false);
-        this.pullInboxUi();
-      })
+      if (this.cropUri.length > 0) {
+        AvatarCrop({
+          src: this.cropUri,
+          onCancel: () => {
+            this.cropUri = '';
+          },
+          onDone: (path: string) => {
+            this.applyCroppedAvatar(path);
+          }
+        })
+      } else if (this.showAvatarEdit) {
+        HuAvatarPicker({
+          selected: this.avatarPreset,
+          photoUri: this.avatarSrc(),
+          onPick: (id: string) => {
+            this.pickAvatar(id);
+          },
+          onPhoto: () => {
+            this.pickAvatarPhoto();
+          }
+        })
+      }
 
       Text('分组')
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%')
-        .padding({ top: 10, bottom: 2 })
-      this.pickRow('仓库', this.groupMode === 'repo', () => {
-        this.setGroupMode('repo');
-      })
-      this.pickRow('时间', this.groupMode === 'time', () => {
-        this.setGroupMode('time');
-      })
-      this.pickRow('状态', this.groupMode === 'status', () => {
-        this.setGroupMode('status');
-      })
-      this.pickRow('无分组', this.groupMode === 'none', () => {
-        this.setGroupMode('none');
-      })
+        .padding({ top: 6, bottom: 2 })
+      Row({ space: 4 }) {
+        HuChip({
+          label: '仓库',
+          on: this.groupMode === 'repo',
+          onTap: () => {
+            this.setGroupMode('repo');
+          }
+        })
+        HuChip({
+          label: '时间',
+          on: this.groupMode === 'time',
+          onTap: () => {
+            this.setGroupMode('time');
+          }
+        })
+        HuChip({
+          label: '状态',
+          on: this.groupMode === 'status',
+          onTap: () => {
+            this.setGroupMode('status');
+          }
+        })
+        HuChip({
+          label: '无分组',
+          on: this.groupMode === 'none',
+          onTap: () => {
+            this.setGroupMode('none');
+          }
+        })
+      }
+      .width('100%')
 
       Text('排序')
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_tertiary'))
         .width('100%')
-        .padding({ top: 10, bottom: 2 })
-      this.pickRow('最近发送', this.sortMode === 'updated', () => {
-        this.sortMode = 'updated';
-        this.persistInboxChrome();
-        this.recomputeView();
-      })
-      this.pickRow('创建', this.sortMode === 'created', () => {
-        this.sortMode = 'created';
-        this.persistInboxChrome();
-        this.recomputeView();
-      })
-      this.pickRow('名称', this.sortMode === 'name', () => {
-        this.sortMode = 'name';
-        this.persistInboxChrome();
-        this.recomputeView();
-      })
-
-      this.pickRow(this.prUrlFilter.length > 0 || this.showPrFilter ? '按 PR 筛选 · 开' : '按 PR 筛选',
-        this.prUrlFilter.length > 0 || this.showPrFilter, () => {
-          this.prUrlInput = this.prUrlFilter;
-          this.showPrFilter = !this.showPrFilter;
+        .padding({ top: 6, bottom: 2 })
+      Row({ space: 4 }) {
+        HuChip({
+          label: '最近发送',
+          on: this.sortMode === 'updated',
+          onTap: () => {
+            runLayout(() => {
+              this.sortMode = 'updated';
+              this.recomputeView();
+            });
+            this.persistInboxChrome();
+          }
         })
-      this.pickRow(this.includeArchived ? '含归档 · 开' : '含归档', this.includeArchived, async () => {
-        const next = !this.includeArchived;
-        PrefStore.getInstance().setIncludeArchived(next);
-        this.inbox.setIncludeArchived(next);
-        this.includeArchived = next;
-        await this.inbox.refresh(false);
-        this.pullInboxUi();
-      })
+        HuChip({
+          label: '创建',
+          on: this.sortMode === 'created',
+          onTap: () => {
+            runLayout(() => {
+              this.sortMode = 'created';
+              this.recomputeView();
+            });
+            this.persistInboxChrome();
+          }
+        })
+        HuChip({
+          label: '名称',
+          on: this.sortMode === 'name',
+          onTap: () => {
+            runLayout(() => {
+              this.sortMode = 'name';
+              this.recomputeView();
+            });
+            this.persistInboxChrome();
+          }
+        })
+      }
+      .width('100%')
+
+      Text('筛选')
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+        .padding({ top: 6, bottom: 2 })
+      Row({ space: 4 }) {
+        HuChip({
+          label: '含归档',
+          on: this.includeArchived,
+          onTap: async () => {
+            const next = !this.includeArchived;
+            PrefStore.getInstance().setIncludeArchived(next);
+            this.inbox.setIncludeArchived(next);
+            this.includeArchived = next;
+            await this.runInboxRefresh(next ? '已显示归档' : '已隐藏归档');
+          }
+        })
+        HuChip({
+          label: this.prUrlFilter.length > 0 ? '按 PR · 开' : '按 PR',
+          on: this.prUrlFilter.length > 0 || this.showPrFilter,
+          onTap: () => {
+            this.prUrlInput = this.prUrlFilter;
+            this.showPrFilter = !this.showPrFilter;
+          }
+        })
+      }
+      .width('100%')
     }
     .padding(16)
     .width('100%')

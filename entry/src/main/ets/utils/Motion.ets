@@ -1,5 +1,5 @@
 /**
- * Two speeds only: press 110ms EaseOut, layout 240ms FastOutSlowIn.
+ * Two speeds only: press 130ms EaseOut, layout 280ms FastOutSlowIn.
  * No spring, no stagger. prefers-reduced-motion → 0 / IDENTITY.
  */
 import { mediaquery } from '@kit.ArkUI';
@@ -20,7 +20,7 @@ export function motionMs(): number {
 
 /** Finger-down feedback — shorter than layout motion. */
 export function pressMs(): number {
-  return prefersReducedMotion() ? 0 : 110;
+  return prefersReducedMotion() ? 0 : 130;
 }
 
 export function pressScaleOf(pressed: boolean, strong: boolean = false): number {
@@ -56,7 +56,7 @@ export function chromeTransition(): TransitionEffect {
     return TransitionEffect.IDENTITY;
   }
   return TransitionEffect.OPACITY
-    .combine(TransitionEffect.translate({ y: -10 }))
+    .combine(TransitionEffect.translate({ y: -14 }))
     .animation({ duration: ms, curve: Curve.EaseOut });
 }
 
@@ -67,7 +67,7 @@ export function fadeTransition(): TransitionEffect {
     return TransitionEffect.IDENTITY;
   }
   return TransitionEffect.OPACITY
-    .combine(TransitionEffect.translate({ y: 4 }))
+    .combine(TransitionEffect.translate({ y: 6 }))
     .animation({ duration: ms, curve: Curve.EaseOut });
 }
 
@@ -78,7 +78,7 @@ export function expandTransition(): TransitionEffect {
     return TransitionEffect.IDENTITY;
   }
   return TransitionEffect.OPACITY
-    .combine(TransitionEffect.translate({ y: 10 }))
+    .combine(TransitionEffect.translate({ y: 14 }))
     .animation({ duration: ms, curve: Curve.FastOutSlowIn });
 }
 

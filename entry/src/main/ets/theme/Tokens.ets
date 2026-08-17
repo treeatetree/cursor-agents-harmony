@@ -32,7 +32,8 @@ export class Tokens {
   static readonly radiusField: number = 10;
   static readonly radiusChip: number = 12;
   static readonly radiusCard: number = 16;
-  static readonly radiusSheet: number = 16;
+  /** HarmonyOS half-sheet default. All bindSheets share this; do not shrink to field/card. */
+  static readonly radiusSheet: number = 32;
   static readonly radiusPill: number = 999;
 
   static readonly touchMin: number = 44;
@@ -40,9 +41,9 @@ export class Tokens {
   static readonly controlH: number = 44;
   static readonly controlHLg: number = 44;
   static readonly iconMd: number = 22;
-  static readonly pressScale: number = 0.94;
-  static readonly pressScaleStrong: number = 0.91;
-  static readonly motionMs: number = 240;
+  static readonly pressScale: number = 0.92;
+  static readonly pressScaleStrong: number = 0.88;
+  static readonly motionMs: number = 280;
 
   /** UI stays on HarmonyOS Sans. Geist Latin + CJK mix looked wrong. */
   static readonly fontUi: string = 'HarmonyOS Sans';

@@ -72,7 +72,7 @@ export struct ComposerBar {
           }
         })
         HuTextButton({
-          label: this.toolsOn ? '能力·' : '能力',
+          label: this.toolsOn ? 'MCP·' : 'MCP',
           compact: true,
           active: this.toolsOn,
           color: $r('app.color.text_secondary'),
@@ -96,7 +96,8 @@ export struct ComposerBar {
           .constraintSize({ minWidth: 0, minHeight: Tokens.touchMin, maxHeight: 100 })
           .fontSize(Tokens.typeBody)
           .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_tertiary'))
+          .placeholderFont({ size: Tokens.typeBody, weight: FontWeight.Regular })
+          .placeholderColor($r('app.color.text_placeholder'))
           .backgroundColor($r('app.color.field_bg'))
           .borderRadius(Tokens.radiusField)
           .border({ width: 1, color: $r('app.color.border') })

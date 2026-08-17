@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { LengthMetrics } from '@kit.ArkUI';
 import { NewAgentVM } from '../viewmodels/NewAgentVM';
 import { InboxVM } from '../viewmodels/InboxVM';
 import { CreateDraftStore } from '../store/CreateDraftStore';
@@ -16,6 +17,7 @@ import { PromptShell } from '../components/PromptShell';
 import { EnvVarListEditor, McpListEditor, SubagentListEditor } from '../components/CapabilityEditors';
 import { defaultEnv, envNameLabel, hasTools, serializeTools, toolsChipLabel, usesNamedEnv } from '../utils/AgentCapabilities';
 import { repoTail } from '../utils/DisplayFmt';
+import { collectRecentRepos, pairRecentRepos, RecentRepo, RecentRepoRow } from '../utils/InboxGrouping';
 import {
   buildParamRows, groupModels, ModelParamRow, ModelVendorGroup, rowsToParams,
   shortModelName, variantLabel, variantSectionTitle
@@ -24,6 +26,7 @@ import { HuChip } from '../components/HuChip';
 import { HuTextButton } from '../components/HuTextButton';
 import { ModelPicker } from '../components/ModelPicker';
 import { StatusBanner } from '../components/StatusBanner';
+import { notifyResult } from '../utils/AppToast';
 
 @Builder
 export function NewAgentPageBuilder() {
@@ -80,9 +83,10 @@ export struct NewAgentPage {
   @State imageUris: string[] = [];
   @State hideBranch: boolean = false;
   @State toolsOn: boolean = false;
-  @State toolsLabel: string = '能力';
+  @State toolsLabel: string = 'MCP';
   @State moreLabel: string = '更多';
   @State showAdvanced: boolean = false;
+  @State recentRepos: RecentRepo[] = [];
   private attachedImages: PromptImage[] = [];
   private draftTimer: number = -1;
 
@@ -97,6 +101,7 @@ export struct NewAgentPage {
     });
     this.vm.hydrateFromCache();
     this.syncFromVm();
+    this.refreshRecentRepos();
     PrefStore.getInstance().getDraft().then((d: string) => {
       if (d.length > 0 && this.prompt.length === 0) {
         this.prompt = d;
@@ -230,6 +235,73 @@ export struct NewAgentPage {
     this.models = this.vm.models;
     this.updateModelMeta();
     this.refreshCanSubmit();
+    this.refreshRecentRepos();
+  }
+
+  private refreshRecentRepos(): void {
+    const seen: string[] = [];
+    const out: RecentRepo[] = [];
+    const recent = collectRecentRepos(InboxVM.getInstance().source.snapshot(), 40);
+    for (let i = 0; i < recent.length; i++) {
+      const url = recent[i].url;
+      if (url.length === 0 || seen.indexOf(url) >= 0) {
+        continue;
+      }
+      seen.push(url);
+      out.push(recent[i]);
+    }
+    const list = this.vm.repos;
+    for (let i = 0; i < list.length; i++) {
+      const url = list[i].repository;
+      if (url.length === 0 || seen.indexOf(url) >= 0) {
+        continue;
+      }
+      seen.push(url);
+      const name = list[i].name.length > 0 ? list[i].name : repoTail(url);
+      const item: RecentRepo = { url: url, ref: 'main', title: name };
+      out.push(item);
+    }
+    this.recentRepos = out;
+  }
+
+  private repoGridItems(): RecentRepo[] {
+    const items: RecentRepo[] = [];
+    const n = Math.min(5, this.recentRepos.length);
+    for (let i = 0; i < n; i++) {
+      items.push(this.recentRepos[i]);
+    }
+    const more: RecentRepo = { url: '__more__', ref: '', title: '全部' };
+    items.push(more);
+    return items;
+  }
+
+  private repoRows(): RecentRepoRow[] {
+    return pairRecentRepos(this.repoGridItems());
+  }
+
+  private repoSheetName(r: RepoInfo): string {
+    if (r.name.length > 0) {
+      return r.name;
+    }
+    return repoTail(r.repository);
+  }
+
+  private openRepoSheet(): void {
+    this.repoQuery = '';
+    this.vm.repoQuery = '';
+    this.repos = this.vm.filteredRepos();
+    this.openSheet('repo');
+  }
+
+  private pickRecentRepo(item: RecentRepo): void {
+    Haptics.tick();
+    this.repoMode = 'repo';
+    this.vm.repoMode = 'repo';
+    this.selectedRepo = item.url;
+    this.vm.selectedRepo = item.url;
+    this.selectedBranch = item.ref.length > 0 ? item.ref : 'main';
+    this.vm.selectedBranch = this.selectedBranch;
+    this.refreshCanSubmit();
   }
 
   private updateModelMeta(): void {
@@ -311,7 +383,12 @@ export struct NewAgentPage {
       return '选择仓库';
     }
     const tail = repoTail(this.selectedRepo);
-    return tail.length > 0 ? tail : this.shortRepo(this.selectedRepo);
+    const name = tail.length > 0 ? tail : this.shortRepo(this.selectedRepo);
+    if (this.hideBranch) {
+      return name;
+    }
+    const br = this.selectedBranch.length > 0 ? this.selectedBranch : 'main';
+    return `${name} · ${br}`;
   }
 
   private prChipLabel(): string {
@@ -440,15 +517,7 @@ export struct NewAgentPage {
   @Builder
   formColumn() {
     Column() {
-      if (this.embedded) {
-        Text('新任务')
-          .fontSize(Tokens.typeCaption)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_tertiary'))
-          .width('100%')
-          .textAlign(TextAlign.Center)
-          .padding({ top: 2, bottom: 4 })
-      } else {
+      if (!this.embedded) {
         Row() {
           HuIconButton({
             name: 'back',
@@ -484,7 +553,7 @@ export struct NewAgentPage {
 
       Column() {
         PromptShell({
-          placeholder: '要做什么？目标和约束',
+          placeholder: this.embedded ? '新任务：目标和约束' : '要做什么？目标和约束',
           text: $prompt,
           busy: this.busy,
           status: '',
@@ -501,10 +570,7 @@ export struct NewAgentPage {
             this.submitAgent();
           },
           onRepo: () => {
-            this.repoQuery = '';
-            this.vm.repoQuery = '';
-            this.repos = this.vm.filteredRepos();
-            this.openSheet('repo');
+            this.openRepoSheet();
           },
           onImage: () => {
             this.attachImages();
@@ -527,11 +593,12 @@ export struct NewAgentPage {
             this.refreshCanSubmit();
           }
         })
+        this.recentRepoBlock()
       }
       .width('100%')
       .layoutWeight(1)
       .justifyContent(FlexAlign.Start)
-      .padding({ top: 8, bottom: this.bottomInset })
+      .padding({ top: this.embedded ? 20 : 12, bottom: this.bottomInset })
       .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
     }
     .width('100%')
@@ -542,8 +609,91 @@ export struct NewAgentPage {
         SheetSize.LARGE,
       dragBar: true,
       showClose: false,
+      radius: LengthMetrics.vp(Tokens.radiusSheet),
       backgroundColor: $r('app.color.overlay')
     })
+  }
+
+  @Builder
+  recentRepoBlock() {
+    Column({ space: 8 }) {
+      Text('仓库')
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
+        .padding({ top: 4, bottom: 2 })
+      ForEach(this.repoRows(), (row: RecentRepoRow) => {
+        Row({ space: 8 }) {
+          Column() {
+            this.repoMiniCard(row.left)
+          }
+          .layoutWeight(1)
+          if (row.hasRight) {
+            Column() {
+              this.repoMiniCard(row.right)
+            }
+            .layoutWeight(1)
+          } else {
+            Column()
+              .layoutWeight(1)
+          }
+        }
+        .width('100%')
+      }, (row: RecentRepoRow) => row.key)
+    }
+    .width('100%')
+    .padding({ left: Tokens.pagePad, right: Tokens.pagePad, top: 4 })
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  repoMiniCard(item: RecentRepo) {
+    if (item.url === '__more__') {
+      Column() {
+        Text('全部')
+          .fontSize(Tokens.typeBody)
+          .fontColor($r('app.color.text_secondary'))
+      }
+      .width('100%')
+      .height(64)
+      .justifyContent(FlexAlign.Center)
+      .backgroundColor($r('app.color.bg1'))
+      .border({ width: 1, color: $r('app.color.border') })
+      .borderRadius(Tokens.radiusCard)
+      .onClick(() => {
+        Haptics.tick();
+        this.openRepoSheet();
+      })
+    } else {
+      Column({ space: 2 }) {
+        Text(item.title)
+          .fontSize(Tokens.typeBody)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .width('100%')
+        Text(item.ref.length > 0 ? item.ref : 'main')
+          .fontSize(Tokens.typeMicro)
+          .fontColor($r('app.color.text_tertiary'))
+          .maxLines(1)
+          .width('100%')
+      }
+      .width('100%')
+      .height(64)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Start)
+      .padding({ left: 12, right: 12 })
+      .backgroundColor(this.selectedRepo === item.url ? $r('app.color.bg2') : $r('app.color.bg1'))
+      .border({
+        width: 1,
+        color: this.selectedRepo === item.url ? $r('app.color.border_strong') : $r('app.color.border')
+      })
+      .borderRadius(Tokens.radiusCard)
+      .onClick(() => {
+        this.pickRecentRepo(item);
+      })
+    }
   }
 
   @Builder
@@ -607,6 +757,11 @@ export struct NewAgentPage {
             this.loadingMeta = true;
             await this.vm.loadMeta(true);
             this.syncFromVm();
+            if (this.vm.errorMsg.length > 0) {
+              notifyResult(false, '', this.vm.errorMsg);
+            } else {
+              notifyResult(true, `已刷新 · ${this.vm.repos.length} 个仓库`);
+            }
           }
         })
         HuTextButton({
@@ -632,6 +787,16 @@ export struct NewAgentPage {
         this.modeSeg('仓库', 'repo')
         this.modeSeg('PR', 'pr')
         this.modeSeg('无仓库', 'none')
+        if (!this.hideBranch && this.repoMode === 'repo') {
+          HuChip({
+            label: this.selectedBranch.length > 0 ? this.selectedBranch : 'main',
+            on: false,
+            maxVp: 140,
+            onTap: () => {
+              this.openSheet('branch');
+            }
+          })
+        }
       }
       .width('100%')
 
@@ -647,6 +812,8 @@ export struct NewAgentPage {
             .height(Tokens.touchMin)
             .width('100%')
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((v: string) => {
@@ -659,6 +826,8 @@ export struct NewAgentPage {
           .height(Tokens.touchMin)
           .width('100%')
           .fontSize(Tokens.typeCallout)
+          .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+          .placeholderColor($r('app.color.text_placeholder'))
           .backgroundColor($r('app.color.field_bg'))
           .borderRadius(Tokens.radiusField)
           .onChange((v: string) => {
@@ -670,7 +839,7 @@ export struct NewAgentPage {
         List({ space: 6 }) {
           ForEach(this.repos, (r: RepoInfo) => {
             ListItem() {
-              Text(r.repository)
+              Text(this.repoSheetName(r))
                 .fontSize(14)
                 .fontColor($r('app.color.text_primary'))
                 .width('100%')
@@ -695,6 +864,8 @@ export struct NewAgentPage {
             .layoutWeight(1)
             .height(Tokens.touchMin)
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .fontColor($r('app.color.text_primary'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
@@ -789,6 +960,8 @@ export struct NewAgentPage {
           .height(Tokens.touchMin)
           .width('100%')
           .fontSize(Tokens.typeCallout)
+          .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+          .placeholderColor($r('app.color.text_placeholder'))
           .maxLength(100)
           .backgroundColor($r('app.color.field_bg'))
           .borderRadius(Tokens.radiusField)
@@ -1004,10 +1177,6 @@ export struct NewAgentPage {
   @Builder
   capabilityBlock() {
     Column({ space: 10 }) {
-      Text('能力')
-        .fontSize(Tokens.typeCaption)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%')
       Text('执行环境')
         .fontSize(Tokens.typeMicro)
         .fontColor($r('app.color.text_tertiary'))
@@ -1041,6 +1210,8 @@ export struct NewAgentPage {
           .height(Tokens.touchMin)
           .width('100%')
           .fontSize(Tokens.typeCallout)
+          .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+          .placeholderColor($r('app.color.text_placeholder'))
           .backgroundColor($r('app.color.field_bg'))
           .borderRadius(Tokens.radiusField)
           .onChange((v: string) => {
@@ -1096,6 +1267,8 @@ export struct NewAgentPage {
         .height(Tokens.touchMin)
         .width('100%')
         .fontSize(Tokens.typeCallout)
+        .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+        .placeholderColor($r('app.color.text_placeholder'))
         .fontColor($r('app.color.text_primary'))
         .backgroundColor($r('app.color.field_bg'))
         .borderRadius(Tokens.radiusField)

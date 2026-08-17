@@ -16,6 +16,9 @@ export const AVATAR_IDS: string[] = [
 ];
 
 export function normalizeAvatarId(id: string): string {
+  if (id === 'custom') {
+    return 'custom';
+  }
   for (let i = 0; i < AVATAR_IDS.length; i++) {
     if (AVATAR_IDS[i] === id) {
       return id;
@@ -58,6 +61,9 @@ export function avatarLabel(id: string): string {
   }
   if (k === 'rose') {
     return '玫瑰金';
+  }
+  if (k === 'custom') {
+    return '相册';
   }
   return '虹云';
 }

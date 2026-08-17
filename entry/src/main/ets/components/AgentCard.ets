@@ -99,17 +99,19 @@ export struct AgentCard {
   }
 
   private titleText(): string {
-    return this.agent.name.length > 0 ? this.agent.name : shortAgentId(this.agent.id);
+    const name = `${this.agent.name ?? ''}`;
+    return name.length > 0 ? name : shortAgentId(`${this.agent.id ?? ''}`);
   }
 
   private lineText(): string {
     if (this.list) {
       return '';
     }
-    if (this.preview.length > 0) {
-      return this.preview;
+    const preview = `${this.preview ?? ''}`;
+    if (preview.length > 0) {
+      return preview;
     }
-    const result = this.agent.latestResult ?? '';
+    const result = `${this.agent.latestResult ?? ''}`;
     if (result.length > 0) {
       return result;
     }

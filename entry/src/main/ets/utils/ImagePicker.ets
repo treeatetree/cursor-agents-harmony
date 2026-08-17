@@ -72,8 +72,340 @@ export function toFileUri(path: string): string {
   return path;
 }
 
+/** Strip ?v= cache stamps — Image() treats the query as part of the path and can abort. */
+export function cleanImageUri(raw: string): string {
+  if (raw.length === 0) {
+    return '';
+  }
+  const q = raw.indexOf('?');
+  return q >= 0 ? raw.substring(0, q) : raw;
+}
+
+export function isSafeImageUri(raw: string): boolean {
+  const uri = cleanImageUri(raw);
+  if (uri.length === 0) {
+    return false;
+  }
+  return uri.indexOf('file://') === 0 || uri.indexOf('http://') === 0 ||
+    uri.indexOf('https://') === 0;
+}
+
+export async function imageFileExists(raw: string): Promise<boolean> {
+  const uri = cleanImageUri(raw);
+  if (uri.length === 0) {
+    return false;
+  }
+  if (uri.indexOf('http://') === 0 || uri.indexOf('https://') === 0) {
+    return true;
+  }
+  let path = uri;
+  if (path.indexOf('file://') === 0) {
+    path = path.substring(7);
+  }
+  if (path.length === 0 || path.charAt(0) !== '/') {
+    return false;
+  }
+  try {
+    await fs.access(path);
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
+export async function resolveAvatarPhoto(raw: string): Promise<string> {
+  const uri = cleanImageUri(raw);
+  if (uri.length === 0) {
+    return '';
+  }
+  if (await imageFileExists(uri)) {
+    return uri;
+  }
+  return '';
+}
+
 export function maxPromptImages(): number {
   return MAX_IMAGES;
+}
+
+export interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ImageSize {
+  width: number;
+  height: number;
+}
+
+/** Album only — no system crop/editor. */
+export async function pickOneImageUri(): Promise<string> {
+  const options = new photoAccessHelper.PhotoSelectOptions();
+  options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
+  options.maxSelectNumber = 1;
+  options.isEditSupported = false;
+  options.isPreviewForSingleSelectionSupported = false;
+  const photoPicker = new photoAccessHelper.PhotoViewPicker();
+  const result = await photoPicker.select(options);
+  const uris = result.photoUris ?? [];
+  return uris.length > 0 ? uris[0] : '';
+}
+
+export async function readImageSize(uri: string): Promise<ImageSize | undefined> {
+  let file: fs.File | undefined = undefined;
+  let src: image.ImageSource | undefined = undefined;
+  try {
+    file = await fs.open(uri, fs.OpenMode.READ_ONLY);
+    const stat = await fs.stat(file.fd);
+    if (stat.size <= 0 || stat.size > MAX_BYTES) {
+      return undefined;
+    }
+    const buf = new ArrayBuffer(stat.size);
+    await fs.read(file.fd, buf);
+    src = image.createImageSource(buf);
+    const info = await src.getImageInfo();
+    const size: ImageSize = { width: info.size.width, height: info.size.height };
+    return size;
+  } catch (e) {
+    Log.warn(TAG, `image size ${JSON.stringify(e)}`);
+    return undefined;
+  } finally {
+    if (src) {
+      try {
+        await src.release();
+      } catch (_e) {
+      }
+    }
+    if (file) {
+      try {
+        await fs.close(file);
+      } catch (_e) {
+      }
+    }
+  }
+}
+
+/** Copy album URI into cache as JPEG so crop does not depend on HEIF / media grants. */
+export async function materializeForCrop(uri: string, cacheDir: string): Promise<string> {
+  let file: fs.File | undefined = undefined;
+  let src: image.ImageSource | undefined = undefined;
+  try {
+    file = await fs.open(uri, fs.OpenMode.READ_ONLY);
+    const stat = await fs.stat(file.fd);
+    if (stat.size <= 0 || stat.size > MAX_BYTES) {
+      Log.warn(TAG, `crop materialize size=${stat.size}`);
+      return '';
+    }
+    const buf = new ArrayBuffer(stat.size);
+    await fs.read(file.fd, buf);
+    src = image.createImageSource(buf);
+    let width = 0;
+    let height = 0;
+    try {
+      const info = await src.getImageInfo();
+      width = info.size.width;
+      height = info.size.height;
+    } catch (e) {
+      Log.warn(TAG, `crop materialize info ${JSON.stringify(e)}`);
+    }
+    const packed = await packJpeg(src, width, height);
+    if (!packed || packed.byteLength <= 0) {
+      Log.warn(TAG, `crop materialize pack failed ${width}x${height}`);
+      return '';
+    }
+    return await writePreview(cacheDir, 'image/jpeg', packed);
+  } catch (e) {
+    Log.warn(TAG, `crop materialize failed ${JSON.stringify(e)}`);
+    return '';
+  } finally {
+    if (src) {
+      try {
+        await src.release();
+      } catch (_e) {
+      }
+    }
+    if (file) {
+      try {
+        await fs.close(file);
+      } catch (_e) {
+      }
+    }
+  }
+}
+
+function clampSquareRegion(rect: CropRect, w: number, h: number): image.Region {
+  let side = Math.max(1, Math.min(Math.floor(rect.width), Math.floor(rect.height), w, h));
+  let x = Math.floor(rect.x);
+  let y = Math.floor(rect.y);
+  if (x < 0) {
+    x = 0;
+  }
+  if (y < 0) {
+    y = 0;
+  }
+  if (x + side > w) {
+    x = Math.max(0, w - side);
+  }
+  if (y + side > h) {
+    y = Math.max(0, h - side);
+  }
+  if (x + side > w) {
+    side = Math.max(1, w - x);
+  }
+  if (y + side > h) {
+    side = Math.max(1, h - y);
+  }
+  const region: image.Region = {
+    x: x,
+    y: y,
+    size: { width: side, height: side }
+  };
+  return region;
+}
+
+function mapCropRect(rect: CropRect, srcW: number, srcH: number, dstW: number, dstH: number): CropRect {
+  if (srcW <= 0 || srcH <= 0) {
+    return rect;
+  }
+  const mapped: CropRect = {
+    x: rect.x * dstW / srcW,
+    y: rect.y * dstH / srcH,
+    width: rect.width * dstW / srcW,
+    height: rect.height * dstH / srcH
+  };
+  return mapped;
+}
+
+async function decodeEditable(
+  src: image.ImageSource,
+  size?: image.Size
+): Promise<image.PixelMap | undefined> {
+  const attempts: image.DecodingOptions[] = [];
+  if (size) {
+    const sizedSdr: image.DecodingOptions = {
+      editable: true,
+      desiredSize: size,
+      desiredDynamicRange: image.DecodingDynamicRange.SDR
+    };
+    attempts.push(sizedSdr);
+    const sized: image.DecodingOptions = { editable: true, desiredSize: size };
+    attempts.push(sized);
+  }
+  const sdr: image.DecodingOptions = {
+    editable: true,
+    desiredDynamicRange: image.DecodingDynamicRange.SDR
+  };
+  attempts.push(sdr);
+  const plain: image.DecodingOptions = { editable: true };
+  attempts.push(plain);
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      return await src.createPixelMap(attempts[i]);
+    } catch (e) {
+      Log.warn(TAG, `crop decode ${i} ${JSON.stringify(e)}`);
+    }
+  }
+  return undefined;
+}
+
+/** Crop user-chosen square → 256 JPEG. */
+export async function writeSquareCrop(
+  srcUri: string,
+  destPath: string,
+  rect: CropRect
+): Promise<string> {
+  let file: fs.File | undefined = undefined;
+  let src: image.ImageSource | undefined = undefined;
+  let pm: image.PixelMap | undefined = undefined;
+  let packer: image.ImagePacker | undefined = undefined;
+  let out: fs.File | undefined = undefined;
+  try {
+    file = await fs.open(srcUri, fs.OpenMode.READ_ONLY);
+    const stat = await fs.stat(file.fd);
+    if (stat.size <= 0 || stat.size > MAX_BYTES) {
+      return '';
+    }
+    const buf = new ArrayBuffer(stat.size);
+    await fs.read(file.fd, buf);
+    src = image.createImageSource(buf);
+    const info = await src.getImageInfo();
+    const w = info.size.width;
+    const h = info.size.height;
+    const region = clampSquareRegion(rect, w, h);
+    Log.info(TAG, `avatar crop ${w}x${h} mime=${info.mimeType ?? ''} r=${region.x},${region.y},${region.size.width}`);
+    const direct: image.DecodingOptions = {
+      desiredRegion: region,
+      desiredSize: { width: 256, height: 256 },
+      cropAndScaleStrategy: image.CropAndScaleStrategy.CROP_FIRST,
+      editable: true,
+      desiredDynamicRange: image.DecodingDynamicRange.SDR
+    };
+    try {
+      pm = await src.createPixelMap(direct);
+    } catch (e) {
+      Log.warn(TAG, `crop region+size ${JSON.stringify(e)}`);
+      pm = undefined;
+    }
+    if (!pm) {
+      pm = await decodeEditable(src, scaledSize(w, h, MAX_EDGE));
+      if (!pm) {
+        return '';
+      }
+      const pmInfo = await pm.getImageInfo();
+      const mapped = mapCropRect(rect, w, h, pmInfo.size.width, pmInfo.size.height);
+      const cropped = clampSquareRegion(mapped, pmInfo.size.width, pmInfo.size.height);
+      await pm.crop(cropped);
+      const side = cropped.size.width;
+      if (side !== 256) {
+        await pm.scale(256 / side, 256 / side);
+      }
+    }
+    packer = image.createImagePacker();
+    const packed = await packer.packToData(pm, { format: 'image/jpeg', quality: 88 });
+    if (!packed || packed.byteLength <= 0) {
+      return '';
+    }
+    out = await fs.open(destPath, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
+    await fs.write(out.fd, packed);
+    Log.info(TAG, `avatar crop wrote ${destPath} bytes=${packed.byteLength}`);
+    return destPath;
+  } catch (e) {
+    Log.warn(TAG, `avatar crop failed ${JSON.stringify(e)}`);
+    return '';
+  } finally {
+    if (packer) {
+      try {
+        await packer.release();
+      } catch (_e) {
+      }
+    }
+    if (pm) {
+      try {
+        pm.release();
+      } catch (_e) {
+      }
+    }
+    if (src) {
+      try {
+        await src.release();
+      } catch (_e) {
+      }
+    }
+    if (file) {
+      try {
+        await fs.close(file);
+      } catch (_e) {
+      }
+    }
+    if (out) {
+      try {
+        await fs.close(out);
+      } catch (_e) {
+      }
+    }
+  }
 }
 
 export async function pickPromptImages(

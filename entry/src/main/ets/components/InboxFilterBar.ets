@@ -28,6 +28,7 @@ export struct InboxFilterBar {
   /** Cover: no search icon (plan: 外屏不要搜索). */
   @Prop hideSearch: boolean = false;
   @Prop avatarPreset: string = 'iridescent';
+  @Prop avatarPhoto: string = '';
   @State private showSearch: boolean = false;
   onQuery: (s: string) => void = () => {
   };
@@ -56,11 +57,6 @@ export struct InboxFilterBar {
     return this.showSearch || this.query.length > 0;
   }
 
-  private filterActive(): boolean {
-    return this.prActive || this.includeArchived || this.filter !== 'all' ||
-      this.group !== 'repo' || this.sort !== 'updated';
-  }
-
   private tabLabel(mode: FilterMode): string {
     if (mode === 'all') {
       return '全部';
@@ -85,7 +81,8 @@ export struct InboxFilterBar {
             .height(Tokens.touchMin)
             .fontSize(Tokens.typeCallout)
             .fontColor($r('app.color.text_primary'))
-            .placeholderColor($r('app.color.text_tertiary'))
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.bg1'))
             .borderRadius(Tokens.radiusField)
             .border({ width: 1, color: $r('app.color.border') })
@@ -192,8 +189,8 @@ export struct InboxFilterBar {
   avatarBtn() {
     HuAvatar({
       preset: this.avatarPreset,
+      photoUri: this.avatarPhoto,
       box: Tokens.touchMin,
-      ring: this.filterActive(),
       onTap: () => {
         this.onAvatar();
       }

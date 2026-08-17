@@ -17,22 +17,22 @@ export class Haptics {
 
   /** Finger-down, synced with press scale. */
   static down(): void {
-    Haptics.fire('haptic.effect.sharp', 70, 'touch');
+    Haptics.fire('haptic.effect.hard', 88, 'physicalFeedback');
   }
 
   /** Chip / filter / light selection. */
   static tick(): void {
-    Haptics.fire('haptic.effect.sharp', 78, 'touch');
+    Haptics.fire('haptic.effect.sharp', 92, 'physicalFeedback');
   }
 
   /** Toolbar icon, secondary control. Sound stays off — too frequent. */
   static click(): void {
-    Haptics.fire('haptic.effect.hard', 92, 'touch');
+    Haptics.fire('haptic.effect.hard', 100, 'physicalFeedback');
   }
 
   /** Open a card or push a page. */
   static soft(): void {
-    Haptics.fire('haptic.effect.soft', 92, 'physicalFeedback');
+    Haptics.fire('haptic.effect.soft', 100, 'physicalFeedback');
   }
 
   /** Send / create / confirm a primary action. */
@@ -48,7 +48,7 @@ export class Haptics {
 
   /** Switch / theme / mode change. */
   static toggle(): void {
-    Haptics.fire('haptic.effect.sharp', 88, 'physicalFeedback');
+    Haptics.fire('haptic.effect.sharp', 96, 'physicalFeedback');
   }
 
   static success(): void {
@@ -90,7 +90,7 @@ export class Haptics {
     try {
       vibrator.startVibration({
         type: 'time',
-        duration: 18
+        duration: 28
       }, {
         usage: usage
       }).catch(() => {

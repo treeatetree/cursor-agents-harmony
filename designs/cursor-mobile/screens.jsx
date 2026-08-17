@@ -608,7 +608,7 @@ function DetailScreen({ onBack, hideBack, phase, sys, agent, onFixKey }) {
         />
       ) : (
         <div className="composer">
-          <button className="chip">能力</button>
+          <button className="chip">MCP</button>
           <div className="field">追问…</div>
           <button className="send on" aria-label="发送"><Icon name="send" /></button>
         </div>

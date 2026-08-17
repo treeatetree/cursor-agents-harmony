@@ -1,7 +1,7 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
 import { hasPreviewMap, requirePreviewMap } from '../utils/ImagePicker';
-import { chromeTransition, motionMs, prefersReducedMotion, shakeSeq } from '../utils/Motion';
+import { chromeTransition, fadeTransition, motionMs, prefersReducedMotion, runLayout, shakeSeq } from '../utils/Motion';
 import { HuChip } from './HuChip';
 import { HuTextButton } from './HuTextButton';
 
@@ -18,12 +18,13 @@ export struct PromptShell {
   @Prop cancelling: boolean = false;
   @Prop busy: boolean = false;
   @Prop repo: string = '';
+  @Prop branch: string = '';
   @Prop modelLabel: string = '';
   @Prop autoPr: boolean = true;
   @Prop imageCount: number = 0;
   @Link imageUris: string[];
   @Prop toolsOn: boolean = false;
-  @Prop toolsLabel: string = '能力';
+  @Prop toolsLabel: string = 'MCP';
   @Prop moreLabel: string = '更多';
   @Prop followUpMode: string = 'agent';
   @Prop failedFollow: boolean = false;
@@ -45,6 +46,8 @@ export struct PromptShell {
   onEditQueue: () => void = () => {
   };
   onRepo: () => void = () => {
+  };
+  onBranch: () => void = () => {
   };
   onModel: () => void = () => {
   };
@@ -121,13 +124,33 @@ export struct PromptShell {
     }, prefersReducedMotion() ? 0 : 280);
   }
 
-  private focusComposer(): void {
-    this.focused = true;
-    this.wantFocus = true;
-    this.onFocusChange(true);
-    setTimeout(() => {
-      focusControl.requestFocus('promptArea');
-    }, 30);
+  private fieldH(): number {
+    if (!this.follow) {
+      return 144;
+    }
+    return this.expanded() ? 72 : 36;
+  }
+
+  private fieldMin(): number {
+    if (!this.follow) {
+      return 132;
+    }
+    return this.expanded() ? 56 : 36;
+  }
+
+  private fieldMax(): number {
+    if (!this.follow) {
+      return 180;
+    }
+    return this.expanded() ? 96 : 36;
+  }
+
+  private cardPadH(): number {
+    return 14;
+  }
+
+  private cardPadV(): number {
+    return this.follow && !this.expanded() ? 10 : 14;
   }
 
   build() {
@@ -174,78 +197,91 @@ export struct PromptShell {
       }
 
       Column({ space: 4 }) {
-        if (this.follow && !this.expanded()) {
+        if (this.imageUris.length > 0 && this.expanded()) {
           Row({ space: 8 }) {
-            Text(this.placeholder)
-              .fontSize(Tokens.typeCallout)
-              .fontColor($r('app.color.text_tertiary'))
-              .maxLines(1)
-              .layoutWeight(1)
-            if (this.live) {
-              HuChip({
-                label: this.cancelling ? '停止中' : '停止',
-                on: true,
-                onTap: () => {
-                  if (!this.cancelling) {
-                    this.onCancel();
-                  }
-                }
-              })
-            }
+            ForEach(this.imageUris, (uri: string, idx: number) => {
+              this.thumb(uri, idx)
+            }, (uri: string, idx: number) => `pv-${idx}`)
           }
           .width('100%')
-          .height(Tokens.touchMin)
-          .padding({ left: 12, right: this.live ? 6 : 12 })
-          .alignItems(VerticalAlign.Center)
-          .onClick(() => {
-            this.focusComposer();
-          })
-        } else {
-          if (this.imageUris.length > 0) {
-            Row({ space: 8 }) {
-              ForEach(this.imageUris, (uri: string, idx: number) => {
-                this.thumb(uri, idx)
-              }, (uri: string, idx: number) => `pv-${idx}`)
+          .height(64)
+          .justifyContent(FlexAlign.Start)
+          .alignItems(VerticalAlign.Top)
+        }
+
+        Row({ space: 6 }) {
+          Stack({ alignContent: this.follow && !this.expanded() ? Alignment.Start : Alignment.TopStart }) {
+            TextArea({
+              text: this.text,
+              placeholder: this.follow && !this.expanded() ? ' ' : this.placeholder
+            })
+              .width('100%')
+              .height(this.fieldH())
+              .constraintSize({
+                minHeight: this.fieldMin(),
+                maxHeight: this.fieldMax()
+              })
+              .fontSize(this.follow ? Tokens.typeCallout : Tokens.typeProse)
+              .fontColor($r('app.color.text_primary'))
+              .placeholderFont({
+                size: this.follow ? Tokens.typeCallout : Tokens.typeProse,
+                weight: FontWeight.Regular
+              })
+              .placeholderColor($r('app.color.text_placeholder'))
+              .backgroundColor(Color.Transparent)
+              .padding({
+                left: 4,
+                right: 4,
+                top: this.follow && !this.expanded() ? 0 : 6,
+                bottom: this.follow && !this.expanded() ? 0 : 2
+              })
+              .caretColor($r('app.color.accent'))
+              .enabled(!this.busy)
+              .id('promptArea')
+              .defaultFocus(this.wantFocus)
+              .onChange((v: string) => {
+                this.text = v;
+                this.onText(v);
+              })
+              .onFocus(() => {
+                runLayout(() => {
+                  this.focused = true;
+                });
+                this.wantFocus = false;
+                this.onFocusChange(true);
+              })
+              .onBlur(() => {
+                runLayout(() => {
+                  this.focused = false;
+                });
+                this.onFocusChange(false);
+              })
+              .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
+            if (this.follow && !this.expanded() && this.text.trim().length === 0) {
+              Row() {
+                Text(this.placeholder)
+                  .fontSize(Tokens.typeCallout)
+                  .fontColor($r('app.color.text_placeholder'))
+                  .maxLines(1)
+              }
+              .width('100%')
+              .height(36)
+              .padding({ left: 4, right: 4 })
+              .alignItems(VerticalAlign.Center)
+              .hitTestBehavior(HitTestMode.Transparent)
             }
-            .width('100%')
-            .height(64)
-            .justifyContent(FlexAlign.Start)
-            .alignItems(VerticalAlign.Top)
           }
+          .layoutWeight(1)
+          .constraintSize({ minWidth: 0 })
+          .height(this.fieldH())
+          if (this.follow && !this.expanded()) {
+            this.actionSwap()
+          }
+        }
+        .width('100%')
+        .alignItems(this.follow && !this.expanded() ? VerticalAlign.Center : VerticalAlign.Top)
 
-          TextArea({
-            text: this.text,
-            placeholder: this.placeholder
-          })
-            .width('100%')
-            .height(this.follow ? 64 : 144)
-            .constraintSize({
-              minHeight: this.follow ? 52 : 132,
-              maxHeight: this.follow ? 96 : 180
-            })
-            .fontSize(this.follow ? Tokens.typeCallout : Tokens.typeProse)
-            .fontColor($r('app.color.text_primary'))
-            .placeholderColor($r('app.color.text_tertiary'))
-            .backgroundColor(Color.Transparent)
-            .padding({ left: 2, right: 2, top: 6, bottom: 2 })
-            .caretColor($r('app.color.accent'))
-            .enabled(!this.busy)
-            .id('promptArea')
-            .defaultFocus(this.wantFocus)
-            .onChange((v: string) => {
-              this.text = v;
-              this.onText(v);
-            })
-            .onFocus(() => {
-              this.focused = true;
-              this.wantFocus = false;
-              this.onFocusChange(true);
-            })
-            .onBlur(() => {
-              this.focused = false;
-              this.onFocusChange(false);
-            })
-
+        if (!this.follow || this.expanded()) {
           Row({ space: 4 }) {
             Scroll() {
               this.moreChipsRow()
@@ -263,17 +299,24 @@ export struct PromptShell {
           .height(Tokens.touchMin)
           .alignItems(VerticalAlign.Center)
           .justifyContent(FlexAlign.Start)
+          .transition(fadeTransition())
         }
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding(this.follow && !this.expanded() ? 0 : 10)
+      .padding({
+        left: this.cardPadH(),
+        right: this.cardPadH(),
+        top: this.cardPadV(),
+        bottom: this.cardPadV()
+      })
       .backgroundColor($r('app.color.bg1'))
       .border({
         width: 1,
         color: this.focused ? $r('app.color.border_strong') : $r('app.color.border')
       })
-      .borderRadius(16)
+      .borderRadius(Tokens.radiusSheet)
+      .clip(true)
       .translate({ x: this.shake })
       .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
     }
@@ -283,6 +326,7 @@ export struct PromptShell {
       right: Tokens.pagePad,
       bottom: this.bottomPad
     })
+    .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
   }
 
   @Builder
@@ -303,7 +347,7 @@ export struct PromptShell {
     }
     .width(64)
     .height(64)
-    .borderRadius(10)
+    .borderRadius(Tokens.radiusMd)
     .clip(true)
     .backgroundColor($r('app.color.bg2'))
     .flexShrink(0)
@@ -367,7 +411,7 @@ export struct PromptShell {
       if (!this.follow) {
         HuChip({
           label: this.imageCount > 0 ? `图片 ${this.imageCount}` : '图片',
-          on: this.imageCount > 0,
+          on: false,
           maxVp: 88,
           onTap: () => {
             this.onImage();
@@ -375,23 +419,23 @@ export struct PromptShell {
         })
         HuChip({
           label: this.repo.length > 0 ? this.repo : '仓库',
-          on: this.repo.length > 0,
-          maxVp: 140,
+          on: false,
+          maxVp: 168,
           onTap: () => {
             this.onRepo();
           }
         })
         HuChip({
           label: this.modelLabel.length > 0 ? this.modelLabel : '自动',
-          on: this.modelLabel.length > 0 && this.modelLabel !== '自动',
+          on: false,
           maxVp: 120,
           onTap: () => {
             this.onModel();
           }
         })
         HuChip({
-          label: '更多',
-          on: this.moreLabel !== '更多',
+          label: this.moreLabel,
+          on: false,
           maxVp: 80,
           onTap: () => {
             this.onMoreExtra();
@@ -406,7 +450,7 @@ export struct PromptShell {
           }
         })
         HuChip({
-          label: this.modelLabel.length > 0 ? this.modelLabel : 'model',
+          label: this.modelLabel.length > 0 ? this.modelLabel : '自动',
           on: this.modelLabel.length > 0,
           maxVp: 168,
           onTap: () => {

@@ -158,7 +158,7 @@ function DetailNow() {
     <DetailChrome
       composer={(
         <div className="now-row">
-          <button className="chip">能力</button>
+          <button className="chip">MCP</button>
           <div className="now-field">追问…</div>
           <button className="now-send on" aria-label="发送"><Ico name="send" /></button>
         </div>
@@ -177,7 +177,7 @@ function DetailHero() {
         <div className="hero-shell">
           <textarea className="hero-ta" style={{ minHeight: 56 }} placeholder="追问…" value={text} onChange={(e) => setText(e.target.value)} />
           <div className="hero-tools">
-            <button className="chip">能力</button>
+            <button className="chip">MCP</button>
             <button className="chip">图片</button>
             {run ? (
               <button className="hero-send stop" aria-label="停止" onClick={() => setRun(false)}><Ico name="stop" /></button>

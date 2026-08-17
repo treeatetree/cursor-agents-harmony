@@ -141,10 +141,18 @@ export class BreakpointStore {
     return Math.max(this.bottomInsetVp, 28);
   }
 
-  /** Composer / input: RESIZE already shrinks the page; only lift off the home indicator. */
+  /** New-task sheet: RESIZE already shrinks the page; only lift off the home indicator. */
   composerBottom(): number {
     if (this.keyboardInsetVp > 16) {
       return 8;
+    }
+    return this.safeBottom();
+  }
+
+  /** Follow-up: we avoid the IME ourselves (NONE), so pad by keyboard height. */
+  followComposerBottom(): number {
+    if (this.keyboardInsetVp > 16) {
+      return this.keyboardInsetVp + 8;
     }
     return this.safeBottom();
   }

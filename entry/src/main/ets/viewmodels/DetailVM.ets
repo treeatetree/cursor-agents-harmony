@@ -46,6 +46,7 @@ export class DetailVM {
   branches: GitBranch[] = [];
   durationMs: number = 0;
   repoLabel: string = '';
+  envLabel: string = '';
   metaLine: string = '';
   usageLabel: string = '';
   artifacts: ArtifactInfo[] = [];
@@ -370,11 +371,16 @@ export class DetailVM {
       this.startingRef = detail.repos[0].startingRef ?? '';
     }
     this.recomputeCompareUrl();
-    const bits: string[] = [];
     if (detail.env?.name && detail.env.name.length > 0) {
-      bits.push(detail.env.name);
+      this.envLabel = detail.env.name;
     } else if (detail.env?.type) {
-      bits.push(`env:${detail.env.type}`);
+      this.envLabel = detail.env.type;
+    } else {
+      this.envLabel = '';
+    }
+    const bits: string[] = [];
+    if (this.envLabel.length > 0) {
+      bits.push(this.envLabel);
     }
     if (detail.autoCreatePR === true) {
       bits.push('AutoPR');

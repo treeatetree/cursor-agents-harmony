@@ -24,6 +24,8 @@ export struct McpListEditor {
               .layoutWeight(1)
               .height(Tokens.touchMin)
               .fontSize(Tokens.typeCallout)
+              .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+              .placeholderColor($r('app.color.text_placeholder'))
               .backgroundColor($r('app.color.field_bg'))
               .borderRadius(Tokens.radiusField)
               .onChange((v: string) => {
@@ -45,6 +47,8 @@ export struct McpListEditor {
               .height(Tokens.touchMin)
               .width('100%')
               .fontSize(Tokens.typeCallout)
+              .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+              .placeholderColor($r('app.color.text_placeholder'))
               .backgroundColor($r('app.color.field_bg'))
               .borderRadius(Tokens.radiusField)
               .onChange((v: string) => {
@@ -55,6 +59,8 @@ export struct McpListEditor {
               .height(Tokens.touchMin)
               .width('100%')
               .fontSize(Tokens.typeCallout)
+              .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+              .placeholderColor($r('app.color.text_placeholder'))
               .backgroundColor($r('app.color.field_bg'))
               .borderRadius(Tokens.radiusField)
               .onChange((v: string) => {
@@ -103,6 +109,8 @@ export struct McpListEditor {
                 .height(Tokens.touchMin)
                 .width('100%')
                 .fontSize(Tokens.typeCallout)
+                .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+                .placeholderColor($r('app.color.text_placeholder'))
                 .backgroundColor($r('app.color.field_bg'))
                 .borderRadius(Tokens.radiusField)
                 .onChange((v: string) => {
@@ -112,6 +120,8 @@ export struct McpListEditor {
                 .height(Tokens.touchMin)
                 .width('100%')
                 .fontSize(Tokens.typeCallout)
+                .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+                .placeholderColor($r('app.color.text_placeholder'))
                 .backgroundColor($r('app.color.field_bg'))
                 .borderRadius(Tokens.radiusField)
                 .onChange((v: string) => {
@@ -122,6 +132,8 @@ export struct McpListEditor {
                 .height(Tokens.touchMin)
                 .width('100%')
                 .fontSize(Tokens.typeCallout)
+                .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+                .placeholderColor($r('app.color.text_placeholder'))
                 .backgroundColor($r('app.color.field_bg'))
                 .borderRadius(Tokens.radiusField)
                 .onChange((v: string) => {
@@ -209,6 +221,8 @@ export struct SubagentListEditor {
             .height(Tokens.touchMin)
             .width('100%')
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((v: string) => {
@@ -218,6 +232,8 @@ export struct SubagentListEditor {
             .height(Tokens.touchMin)
             .width('100%')
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((v: string) => {
@@ -227,6 +243,8 @@ export struct SubagentListEditor {
             .height(72)
             .width('100%')
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((v: string) => {
@@ -236,6 +254,8 @@ export struct SubagentListEditor {
             .height(Tokens.touchMin)
             .width('100%')
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((v: string) => {
@@ -306,6 +326,8 @@ export struct EnvVarListEditor {
             .layoutWeight(1)
             .height(Tokens.touchMin)
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((val: string) => {
@@ -315,6 +337,8 @@ export struct EnvVarListEditor {
             .layoutWeight(1)
             .height(Tokens.touchMin)
             .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((val: string) => {

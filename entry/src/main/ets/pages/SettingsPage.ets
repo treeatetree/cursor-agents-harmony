@@ -6,14 +6,16 @@ import { Haptics } from '../utils/Haptics';
 import { motionMs, pressMs } from '../utils/Motion';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { common } from '@kit.AbilityKit';
-import { HuAvatarPicker } from '../components/HuAvatar';
+import { HuAvatar, HuAvatarPicker } from '../components/HuAvatar';
+import { materializeForCrop, pickOneImageUri, resolveAvatarPhoto, toFileUri } from '../utils/ImagePicker';
+import { AvatarCrop } from '../components/AvatarCrop';
 import { HuButton } from '../components/HuButton';
 import { HuIconButton } from '../components/HuIconButton';
 import { HuSwitch } from '../components/HuSwitch';
 import { normalizeAvatarId } from '../utils/AvatarPresets';
 import { SessionVM } from '../viewmodels/SessionVM';
 import { confirmDanger } from '../utils/AppDialog';
-import { showToast } from '../utils/AppToast';
+import { notifyResult, showToast } from '../utils/AppToast';
 import { readClipboardText } from '../utils/Clipboard';
 
 @Builder
@@ -47,6 +49,9 @@ struct SettingsPage {
   @State densityCompact: boolean = false;
   @State pressKey: string = '';
   @State avatarPreset: string = 'iridescent';
+  @State avatarPhoto: string = '';
+  @State showAvatarEdit: boolean = false;
+  @State cropUri: string = '';
 
   aboutToAppear(): void {
     const bp = BreakpointStore.getInstance();
@@ -69,7 +74,17 @@ struct SettingsPage {
     this.soundsEnabled = await prefs.getSoundsEnabled();
     this.notifyEnabled = await prefs.getNotifyEnabled();
     this.defaultModel = await prefs.getDefaultModel();
-    this.avatarPreset = normalizeAvatarId(await prefs.getAvatarPreset());
+    const preset = normalizeAvatarId(await prefs.getAvatarPreset());
+    const photo = await resolveAvatarPhoto(await prefs.getAvatarPhoto());
+    if (preset === 'custom' && photo.length === 0) {
+      this.avatarPreset = 'iridescent';
+      this.avatarPhoto = '';
+      prefs.setAvatarPreset('iridescent');
+      prefs.setAvatarPhoto('');
+    } else {
+      this.avatarPreset = preset;
+      this.avatarPhoto = preset === 'custom' ? photo : '';
+    }
     const read = ReadPrefStore.getInstance();
     this.typePref = read.typePref;
     this.densityCompact = read.densityPref === 'compact';
@@ -129,18 +144,60 @@ struct SettingsPage {
           Column({ space: Tokens.sec }) {
             this.sectionLabel('账号')
             Column() {
-              Text('头像')
-                .fontSize(Tokens.typeCaption)
-                .fontColor($r('app.color.text_tertiary'))
-                .width('100%')
-                .padding({ top: 12, bottom: 4 })
-              HuAvatarPicker({
-                selected: this.avatarPreset,
-                onPick: async (id: string) => {
-                  this.avatarPreset = normalizeAvatarId(id);
-                  await PrefStore.getInstance().setAvatarPreset(this.avatarPreset);
-                }
-              })
+              Row({ space: 12 }) {
+                HuAvatar({
+                  preset: this.avatarPreset,
+                  photoUri: this.avatarPreset === 'custom' ? this.avatarPhoto : '',
+                  box: Tokens.touchMin,
+                  onTap: () => {
+                    this.showAvatarEdit = !this.showAvatarEdit;
+                  }
+                })
+                Text(this.showAvatarEdit ? '从相册选一张' : '点头像更换')
+                  .fontSize(Tokens.typeCaption)
+                  .fontColor($r('app.color.text_tertiary'))
+                  .layoutWeight(1)
+              }
+              .width('100%')
+              .padding({ top: 12, bottom: 8 })
+              .alignItems(VerticalAlign.Center)
+              if (this.cropUri.length > 0) {
+                AvatarCrop({
+                  src: this.cropUri,
+                  onCancel: () => {
+                    this.cropUri = '';
+                  },
+                  onDone: async (path: string) => {
+                    this.avatarPhoto = toFileUri(path);
+                    this.avatarPreset = 'custom';
+                    this.cropUri = '';
+                    await PrefStore.getInstance().setAvatarPreset('custom');
+                    await PrefStore.getInstance().setAvatarPhoto(toFileUri(path));
+                  }
+                })
+              } else if (this.showAvatarEdit) {
+                HuAvatarPicker({
+                  selected: this.avatarPreset,
+                  photoUri: this.avatarPreset === 'custom' ? this.avatarPhoto : '',
+                  onPick: async (id: string) => {
+                    this.avatarPreset = normalizeAvatarId(id);
+                    await PrefStore.getInstance().setAvatarPreset(this.avatarPreset);
+                  },
+                  onPhoto: async () => {
+                    const uri = await pickOneImageUri();
+                    if (uri.length === 0) {
+                      return;
+                    }
+                    const ctx = getContext(this) as common.UIAbilityContext;
+                    const local = await materializeForCrop(uri, ctx.cacheDir);
+                    if (local.length === 0) {
+                      showToast('这张图读不了');
+                      return;
+                    }
+                    this.cropUri = toFileUri(local);
+                  }
+                })
+              }
               this.hair()
               if (this.hasKey) {
                 if (this.userName.length > 0) {
@@ -163,8 +220,10 @@ struct SettingsPage {
                 }
                 this.actionRow('重新验证', $r('app.color.text_primary'), this.busy, async () => {
                   this.busy = true;
-                  await this.session.validateExisting();
+                  const ok = await this.session.validateExisting();
                   this.pull();
+                  notifyResult(ok, '验证通过', this.session.errorMsg.length > 0 ?
+                    this.session.errorMsg : '验证失败');
                 })
                 this.actionRow('清除 Key', $r('app.color.err'), false, () => {
                   confirmDanger('清除 API Key', '清除后需要重新粘贴才能同步任务。', '清除', () => {
@@ -414,7 +473,8 @@ struct SettingsPage {
         .fontSize(Tokens.typeCallout)
         .fontFamily(Tokens.fontMono)
         .fontColor($r('app.color.text_primary'))
-        .placeholderColor($r('app.color.text_tertiary'))
+        .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+        .placeholderColor($r('app.color.text_placeholder'))
         .backgroundColor($r('app.color.field_bg'))
         .borderRadius(Tokens.radiusField)
         .padding(12)
@@ -463,7 +523,11 @@ struct SettingsPage {
           if (ok) {
             this.inputKey = '';
             this.showReplace = false;
+            showToast('已保存');
             this.navStack.pop();
+          } else {
+            notifyResult(false, '', this.session.errorMsg.length > 0 ?
+              this.session.errorMsg : '验证失败');
           }
         }
       })

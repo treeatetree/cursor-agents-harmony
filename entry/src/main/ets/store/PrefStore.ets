@@ -27,6 +27,7 @@ const KEY_LAST_TOOLS = 'last_agent_tools';
 const KEY_TYPE = 'type_pref';
 const KEY_DENSITY = 'density_pref';
 const KEY_AVATAR = 'avatar_preset';
+const KEY_AVATAR_PHOTO = 'avatar_photo';
 const KEY_UNREAD = 'unread_items';
 const KEY_QUEUED = 'queued_followup';
 const KEY_QUEUED_IMGS = 'queued_followup_imgs';
@@ -350,6 +351,21 @@ export class PrefStore {
       return;
     }
     await this.pref.put(KEY_AVATAR, value);
+    await this.pref.flush();
+  }
+
+  async getAvatarPhoto(): Promise<string> {
+    if (!this.pref) {
+      return '';
+    }
+    return (await this.pref.get(KEY_AVATAR_PHOTO, '')) as string;
+  }
+
+  async setAvatarPhoto(value: string): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    await this.pref.put(KEY_AVATAR_PHOTO, value);
     await this.pref.flush();
   }
 

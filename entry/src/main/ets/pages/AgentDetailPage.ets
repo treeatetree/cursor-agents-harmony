@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { KeyboardAvoidMode } from '@kit.ArkUI';
+import { KeyboardAvoidMode, LengthMetrics } from '@kit.ArkUI';
 import { DetailVM } from '../viewmodels/DetailVM';
 import { TimelineItem } from '../models/Timeline';
 import { ArtifactInfo, CustomSubagentDef, EnvVarDef, McpServerDef, RunUsage } from '../models/Api';
@@ -20,7 +20,7 @@ import { shouldUseInAppBrowser } from './InAppBrowserPage';
 import { shareAgentLinks } from '../utils/Share';
 import { elapsedLabel, repoTail, shortAgentId } from '../utils/DisplayFmt';
 import { shortPathForTool } from '../utils/StreamText';
-import { chromeTransition, shimmerMs, shimmerOpacity } from '../utils/Motion';
+import { chromeTransition, runLayout, shimmerMs, shimmerOpacity } from '../utils/Motion';
 import { WebLinks, pushInAppBrowser } from '../utils/WebLinks';
 import { ArtifactRow } from '../components/ArtifactRow';
 import { McpListEditor } from '../components/CapabilityEditors';
@@ -106,7 +106,7 @@ struct AgentDetailPage {
   @State attachedImages: PromptImage[] = [];
   @State imageUris: string[] = [];
   @State followUpMcp: McpServerDef[] = [];
-  @State followToolsLabel: string = '能力';
+  @State followToolsLabel: string = 'MCP';
   @State mdSettled: boolean = true;
   @State syncing: boolean = false;
   @State isHover: boolean = false;
@@ -119,6 +119,10 @@ struct AgentDetailPage {
   private followSig: string = '';
 
   aboutToDisappear(): void {
+    try {
+      this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    } catch (_e) {
+    }
     this.clearTick();
     if (this.mdTimer >= 0) {
       clearTimeout(this.mdTimer);
@@ -946,24 +950,27 @@ struct AgentDetailPage {
         SheetSize.FIT_CONTENT,
       dragBar: true,
       showClose: false,
+      radius: LengthMetrics.vp(Tokens.radiusSheet),
       backgroundColor: $r('app.color.overlay')
     })
     .backgroundColor($r('app.color.bg0'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
     .onReady((ctx: NavDestinationContext) => {
       try {
-        this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+        this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
       } catch (_e) {
       }
       this.pagePad = this.bp.pagePad();
       this.topInset = this.bp.safeTop();
-      this.bottomInset = this.bp.composerBottom();
+      this.bottomInset = this.bp.followComposerBottom();
       this.isHover = this.bp.isHover;
       this.bp.onChange(() => {
-        this.pagePad = this.bp.pagePad();
-        this.topInset = this.bp.safeTop();
-        this.bottomInset = this.bp.composerBottom();
-        this.isHover = this.bp.isHover;
+        runLayout(() => {
+          this.pagePad = this.bp.pagePad();
+          this.topInset = this.bp.safeTop();
+          this.bottomInset = this.bp.followComposerBottom();
+          this.isHover = this.bp.isHover;
+        });
         this.onKeyboardChrome();
       });
       const p = ctx.pathInfo.param as Record<string, Object>;
@@ -1381,49 +1388,32 @@ struct AgentDetailPage {
   @Builder
   detailMenu() {
     Column({ space: 4 }) {
-      Column({ space: 4 }) {
-        Text(this.menuStatusLine())
-          .width('100%')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.text_secondary'))
+      Column({ space: 2 }) {
+        this.menuFact('状态', this.menuStatusLine())
         if (this.shortRepo().length > 0) {
-          Text(this.shortRepo())
-            .width('100%')
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.text_tertiary'))
-            .fontFamily(Tokens.fontMono)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          this.menuFact('仓库', this.shortRepo())
         }
-        if (this.metaLine.length > 0) {
-          Text(this.metaLine)
-            .width('100%')
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.text_tertiary'))
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        if (this.vm.envLabel.length > 0) {
+          this.menuFact('环境', this.vm.envLabel)
+        }
+        if (this.firstBranch().length > 0) {
+          this.menuFact('分支', this.firstBranch())
         }
         if (this.currentFile().length > 0) {
-          Text(this.currentFile())
-            .width('100%')
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          this.menuFact('文件', this.currentFile())
         }
         if (this.usageLabel.length > 0) {
-          Text(this.usageLabel)
-            .width('100%')
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.text_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          this.menuFact('用量', this.usageLabel)
         }
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
-      .padding({ bottom: 8 })
-      Text(countMcp(this.followUpMcp) > 0 ? `能力 · ${this.followToolsLabel}` : '能力')
+      .padding({ bottom: 10 })
+      Divider()
+        .color($r('app.color.separator'))
+        .width('100%')
+        .padding({ bottom: 4 })
+      Text(countMcp(this.followUpMcp) > 0 ? `MCP · ${this.followToolsLabel}` : 'MCP')
         .width('100%')
         .height(48)
         .fontSize(Tokens.typeProse)
@@ -1584,6 +1574,26 @@ struct AgentDetailPage {
     }
     .padding(16)
     .width('100%')
+  }
+
+  @Builder
+  menuFact(label: string, value: string) {
+    Row({ space: 10 }) {
+      Text(label)
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_tertiary'))
+        .width(36)
+      Text(value)
+        .fontSize(Tokens.typeCaption)
+        .fontColor($r('app.color.text_secondary'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ minWidth: 0 })
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 28 })
+    .alignItems(VerticalAlign.Center)
   }
 
   private activityTitle(item: TimelineItem): string {

@@ -1,16 +1,28 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
+import { cleanImageUri, isSafeImageUri } from '../utils/ImagePicker';
 import { pressMs, pressScaleOf } from '../utils/Motion';
 import { AVATAR_IDS, avatarLabel, normalizeAvatarId } from '../utils/AvatarPresets';
 
 @Component
 export struct HuAvatar {
   @Prop preset: string = 'iridescent';
+  @Prop @Watch('onPhotoUri') photoUri: string = '';
   @Prop box: number = Tokens.touchMin;
   @Prop ring: boolean = false;
+  @Prop haptic: boolean = true;
   @State private pressed: boolean = false;
+  @State private photoFailed: boolean = false;
   onTap: () => void = () => {
   };
+
+  onPhotoUri(_name: string): void {
+    this.photoFailed = false;
+  }
+
+  private canShowPhoto(): boolean {
+    return !this.photoFailed && this.preset === 'custom' && isSafeImageUri(this.photoUri);
+  }
 
   build() {
     Column() {
@@ -21,10 +33,6 @@ export struct HuAvatar {
     .justifyContent(FlexAlign.Center)
     .borderRadius(this.box / 2)
     .clip(true)
-    .border({
-      width: this.ring ? 2 : 0,
-      color: $r('app.color.accent')
-    })
     .scale({
       x: pressScaleOf(this.pressed, true),
       y: pressScaleOf(this.pressed, true)
@@ -35,7 +43,9 @@ export struct HuAvatar {
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressed = true;
-        Haptics.click();
+        if (this.haptic) {
+          Haptics.click();
+        }
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressed = false;
       }
@@ -47,7 +57,16 @@ export struct HuAvatar {
 
   @Builder
   face() {
-    if (normalizeAvatarId(this.preset) === 'opal') {
+    if (this.canShowPhoto()) {
+      Image(cleanImageUri(this.photoUri))
+        .width(this.box)
+        .height(this.box)
+        .objectFit(ImageFit.Cover)
+        .borderRadius(this.box / 2)
+        .onError(() => {
+          this.photoFailed = true;
+        })
+    } else if (normalizeAvatarId(this.preset) === 'opal') {
       Image($r('app.media.av_opal'))
         .width(this.box)
         .height(this.box)
@@ -126,27 +145,62 @@ export struct HuAvatar {
 @Component
 export struct HuAvatarPicker {
   @Prop selected: string = 'iridescent';
+  @Prop photoUri: string = '';
   onPick: (id: string) => void = (_id: string) => {
+  };
+  onPhoto: () => void = () => {
   };
 
   build() {
-    Flex({ wrap: FlexWrap.Wrap }) {
-      ForEach(AVATAR_IDS, (id: string) => {
+    Column({ space: 8 }) {
+      Flex({ wrap: FlexWrap.Wrap }) {
         Column() {
-          HuAvatar({
-            preset: id,
-            box: Tokens.touchMin,
-            ring: this.selected === id,
-            onTap: () => {
-              this.onPick(id);
-            }
-          })
+          if (isSafeImageUri(this.photoUri)) {
+            Image(cleanImageUri(this.photoUri))
+              .width(Tokens.touchMin)
+              .height(Tokens.touchMin)
+              .objectFit(ImageFit.Cover)
+              .borderRadius(Tokens.touchMin / 2)
+          } else {
+            Text('+')
+              .fontSize(20)
+              .fontColor($r('app.color.text_secondary'))
+          }
         }
         .width(52)
         .height(52)
         .justifyContent(FlexAlign.Center)
-      }, (id: string) => id)
+        .backgroundColor(this.selected === 'custom' ? $r('app.color.bg2') : $r('app.color.bg1'))
+        .borderRadius(26)
+        .border({ width: 1, color: $r('app.color.border') })
+        .onClick(() => {
+          this.onPhoto();
+        })
+        ForEach(AVATAR_IDS, (id: string) => {
+          Column() {
+            HuAvatar({
+              preset: id,
+              box: Tokens.touchMin,
+              haptic: false,
+              onTap: () => {
+                this.onPick(id);
+              }
+            })
+          }
+          .width(52)
+          .height(52)
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(this.selected === id ? $r('app.color.bg2') : Color.Transparent)
+          .borderRadius(26)
+        }, (id: string) => id)
+      }
+      .width('100%')
+      Text('选完后可拖动、捏合')
+        .fontSize(Tokens.typeMicro)
+        .fontColor($r('app.color.text_tertiary'))
+        .width('100%')
     }
     .width('100%')
+    .alignItems(HorizontalAlign.Start)
   }
 }

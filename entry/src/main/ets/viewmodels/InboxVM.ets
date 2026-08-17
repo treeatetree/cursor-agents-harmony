@@ -81,13 +81,13 @@ export class InboxVM {
     return (Date.now() - this.lastRefreshAt) > minIntervalMs;
   }
 
-  async refresh(silent: boolean = false): Promise<void> {
+  async refresh(silent: boolean = false): Promise<boolean> {
     if (!ApiKeyStore.getInstance().isUnlocked()) {
-      return;
+      return false;
     }
     if (this.loading || CursorApiClient.getInstance().isMutating()) {
       this.refreshQueued = true;
-      return;
+      return true;
     }
     this.loading = true;
     if (!silent) {
@@ -138,8 +138,10 @@ export class InboxVM {
       UnreadStore.getInstance().syncBadge();
       this.pushWidget();
       this.emitChange();
+      return true;
     } catch (e) {
       this.applyError(e, '刷新失败');
+      return false;
     } finally {
       this.loading = false;
       this.refreshing = false;
@@ -292,9 +294,9 @@ export class InboxVM {
     }
   }
 
-  async loadMore(): Promise<void> {
+  async loadMore(): Promise<boolean> {
     if (this.loadingMore || this.loading || this.nextCursor.length === 0) {
-      return;
+      return true;
     }
     this.loadingMore = true;
     try {
@@ -311,8 +313,10 @@ export class InboxVM {
       const filtered = this.includeArchived || this.prUrlFilter.length > 0;
       AgentCache.getInstance().saveInbox(merged, filtered ? 'merge' : 'full');
       this.emitChange();
+      return true;
     } catch (e) {
       this.applyError(e, '加载更多失败');
+      return false;
     } finally {
       this.loadingMore = false;
     }
@@ -626,12 +630,12 @@ function runStatusLabel(status: string): string {
 
 function copyAgent(a: AgentSummary): AgentSummary {
   const next: AgentSummary = {
-    id: a.id,
-    name: a.name,
-    status: a.status,
-    url: a.url,
-    createdAt: a.createdAt,
-    updatedAt: a.updatedAt
+    id: a.id ?? '',
+    name: a.name ?? '',
+    status: a.status ?? 'ACTIVE',
+    url: a.url ?? '',
+    createdAt: a.createdAt ?? '',
+    updatedAt: a.updatedAt ?? ''
   };
   if (a.lastUserAt && a.lastUserAt.length > 0) {
     next.lastUserAt = a.lastUserAt;

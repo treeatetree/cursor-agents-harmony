@@ -47,7 +47,7 @@ export function toolsChipLabel(env: EnvTarget, mcp: McpServerDef[], subs: Custom
     bits.push(`变量 ${v}`);
   }
   if (bits.length === 0) {
-    return '能力';
+    return 'MCP';
   }
   const joined = bits.join(' · ');
   return joined.length > 18 ? `${joined.substring(0, 16)}…` : joined;

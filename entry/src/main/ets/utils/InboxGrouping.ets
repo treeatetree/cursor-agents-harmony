@@ -19,6 +19,34 @@ export interface CardPair {
   hasRight: boolean;
 }
 
+export interface RecentRepo {
+  url: string;
+  ref: string;
+  title: string;
+}
+
+export interface RecentRepoRow {
+  key: string;
+  left: RecentRepo;
+  right: RecentRepo;
+  hasRight: boolean;
+}
+
+export function pairRecentRepos(items: RecentRepo[]): RecentRepoRow[] {
+  const out: RecentRepoRow[] = [];
+  for (let i = 0; i < items.length; i += 2) {
+    const left = items[i];
+    const hasRight = i + 1 < items.length;
+    out.push({
+      key: hasRight ? `${left.url}|${items[i + 1].url}` : left.url,
+      left: left,
+      right: hasRight ? items[i + 1] : left,
+      hasRight: hasRight
+    });
+  }
+  return out;
+}
+
 export function pairAgents(items: AgentSummary[]): CardPair[] {
   const out: CardPair[] = [];
   for (let i = 0; i < items.length; i += 2) {
@@ -451,6 +479,43 @@ function groupByKey(
     const b = map.get(order[i]);
     if (b) {
       out.push(b);
+    }
+  }
+  return out;
+}
+
+/** Newest-first unique repos from inbox cards, for the new-task sheet. */
+export function collectRecentRepos(agents: AgentSummary[], maxN: number): RecentRepo[] {
+  const out: RecentRepo[] = [];
+  for (let i = 0; i < agents.length; i++) {
+    const repos = agents[i].repos;
+    if (!repos || repos.length === 0) {
+      continue;
+    }
+    const url = `${repos[0].url ?? ''}`.trim();
+    if (url.length === 0) {
+      continue;
+    }
+    let seen = false;
+    for (let j = 0; j < out.length; j++) {
+      if (out[j].url === url) {
+        seen = true;
+        break;
+      }
+    }
+    if (seen) {
+      continue;
+    }
+    const ref = `${repos[0].startingRef ?? ''}`.trim();
+    const title = repoTail(url);
+    const item: RecentRepo = {
+      url: url,
+      ref: ref.length > 0 ? ref : 'main',
+      title: title.length > 0 ? title : url
+    };
+    out.push(item);
+    if (out.length >= maxN) {
+      break;
     }
   }
   return out;
