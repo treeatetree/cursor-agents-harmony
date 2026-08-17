@@ -147,7 +147,8 @@ export struct AgentCard {
   }
 
   build() {
-    Column({ space: this.list ? 4 : 6 }) {
+    Stack() {
+      Column({ space: this.list ? 4 : 6 }) {
       Text(this.titleText())
         .fontSize(Tokens.typeBody)
         .fontFamily(Tokens.fontUi)
@@ -180,13 +181,6 @@ export struct AgentCard {
       Blank().layoutWeight(1)
 
       Row({ space: 8 }) {
-        if (this.unread) {
-          Column()
-            .width(6)
-            .height(6)
-            .borderRadius(3)
-            .backgroundColor($r('app.color.text_primary'))
-        }
         if (this.pinned) {
           Text('置顶')
             .fontSize(Tokens.typeMicro)
@@ -270,5 +264,22 @@ export struct AgentCard {
           this.onLong(this.agent);
         })
     )
+      if (this.unread) {
+        Row() {
+          Blank()
+            .layoutWeight(1)
+            .hitTestBehavior(HitTestMode.Transparent)
+          Column()
+            .width(8)
+            .height(8)
+            .borderRadius(4)
+            .backgroundColor($r('app.color.unread_dot'))
+        }
+        .width('100%')
+        .padding({ top: 8, right: 8 })
+        .hitTestBehavior(HitTestMode.Transparent)
+      }
+    }
+    .width('100%')
   }
 }

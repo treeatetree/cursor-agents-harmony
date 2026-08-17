@@ -21,6 +21,7 @@
     { "name": "accent_on", "value": "#FAFAFA" },
     { "name": "ok", "value": "#52525B" },
     { "name": "err", "value": "#C0392B" },
+    { "name": "unread_dot", "value": "#FA2A2D" },
     { "name": "warn", "value": "#B7791F" },
     { "name": "chip_running_bg", "value": "#F4F4F5" },
     { "name": "chip_ok_bg", "value": "#F4F4F5" },
