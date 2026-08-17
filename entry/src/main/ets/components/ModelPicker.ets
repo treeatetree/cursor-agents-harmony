@@ -17,7 +17,7 @@ export struct ModelPicker {
   @Prop autoLabel: string = '自动';
   onPick: (id: string) => void = (_id: string) => {
   };
-  onPickParam: (rowIdx: number, valueIdx: number) => void = (_r: number, _v: number) => {
+  onPickParam: (rowId: string, valueIdx: number) => void = (_id: string, _v: number) => {
   };
   onPickVariant: (idx: number) => void = (_idx: number) => {
   };
@@ -25,7 +25,7 @@ export struct ModelPicker {
   build() {
     Column({ space: 8 }) {
       if (this.allowAuto) {
-        Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
+        Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start, justifyContent: FlexAlign.Start }) {
           HuChip({
             label: this.autoLabel,
             on: this.selectedModel.length === 0,
@@ -43,7 +43,7 @@ export struct ModelPicker {
             .fontSize(Tokens.typeMicro)
             .fontColor($r('app.color.text_tertiary'))
             .width('100%')
-          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
+          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start, justifyContent: FlexAlign.Start }) {
             ForEach(g.items, (m: ModelInfo) => {
               HuChip({
                 label: shortModelName(m.displayName ?? m.id),
@@ -63,29 +63,29 @@ export struct ModelPicker {
       }, (g: ModelVendorGroup) => g.vendor)
       if (this.paramRows.length > 0) {
         Column({ space: 8 }) {
-          ForEach(this.paramRows, (row: ModelParamRow, rowIdx: number) => {
+          ForEach(this.paramRows, (row: ModelParamRow) => {
             Column({ space: 2 }) {
               Text(row.title)
                 .fontSize(Tokens.typeMicro)
                 .fontColor($r('app.color.text_tertiary'))
                 .width('100%')
-              Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
+              Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start, justifyContent: FlexAlign.Start }) {
                 ForEach(row.labels, (lab: string, valueIdx: number) => {
                   HuChip({
                     label: lab,
                     on: row.selected === valueIdx,
                     onTap: () => {
-                      this.onPickParam(rowIdx, valueIdx);
+                      this.onPickParam(row.id, valueIdx);
                     }
                   })
                     .margin({ right: 6, bottom: 4 })
-                }, (lab: string, valueIdx: number) => `${row.id}-${valueIdx}-${lab}`)
+                }, (lab: string, valueIdx: number) => `${row.id}-${valueIdx}-${lab}-${row.selected}`)
               }
               .width('100%')
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)
-          }, (row: ModelParamRow) => row.id)
+          }, (row: ModelParamRow) => `${row.id}:${row.selected}`)
         }
         .width('100%')
         .padding({ top: 6 })
@@ -97,7 +97,7 @@ export struct ModelPicker {
             .fontSize(Tokens.typeMicro)
             .fontColor($r('app.color.text_tertiary'))
             .width('100%')
-          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
+          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start, justifyContent: FlexAlign.Start }) {
             ForEach(this.variantOptions, (v: string, idx: number) => {
               HuChip({
                 label: v,
@@ -107,7 +107,7 @@ export struct ModelPicker {
                 }
               })
                 .margin({ right: 6, bottom: 4 })
-            }, (v: string, idx: number) => `var-${idx}-${v}`)
+            }, (v: string, idx: number) => `var-${idx}-${v}-${this.selectedVariantIndex}`)
           }
           .width('100%')
         }

@@ -50,6 +50,8 @@ export class StreamCoordinator {
 
   release(): void {
     this.active = false;
+    this.frameHandler = undefined;
+    this.statusHandler = undefined;
     if (this.reconnectTimer >= 0) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = -1;
@@ -59,8 +61,6 @@ export class StreamCoordinator {
       this.client.stop();
       this.client = undefined;
     }
-    this.frameHandler = undefined;
-    this.statusHandler = undefined;
     Log.info(TAG, 'released');
   }
 
@@ -78,14 +78,13 @@ export class StreamCoordinator {
         this.frameHandler(frame);
       }
     }, (kind: string, detail: string) => {
+      if (kind === 'expired' || kind === 'done') {
+        this.active = false;
+      }
       if (this.statusHandler) {
         this.statusHandler(kind, detail);
       }
       if (!this.active) {
-        return;
-      }
-      if (kind === 'expired' || kind === 'done') {
-        this.active = false;
         return;
       }
       if (kind === 'error' || kind === 'ended' || kind === 'stale') {

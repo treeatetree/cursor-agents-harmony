@@ -3,6 +3,7 @@ import { LengthMetrics } from '@kit.ArkUI';
 import { SessionVM } from '../viewmodels/SessionVM';
 import { InboxVM } from '../viewmodels/InboxVM';
 import { DetailVM } from '../viewmodels/DetailVM';
+import { warmCreateMeta } from '../viewmodels/NewAgentVM';
 import { Tokens } from '../theme/Tokens';
 import { applyAppFont, registerAppFonts } from '../theme/AppFonts';
 import { AgentCard } from '../components/AgentCard';
@@ -103,6 +104,9 @@ struct Index {
   @State showAvatarEdit: boolean = false;
   @State cropUri: string = '';
   private pollTimer: number = -1;
+  private openingAgentId: string = '';
+  private openingAt: number = 0;
+  private inboxHidden: boolean = false;
 
   // Inbox toolbar state
   @State query: string = '';
@@ -128,6 +132,7 @@ struct Index {
   @State deltaIds: string[] = [];
   @State renameDraft: string = '';
   @StorageLink('aliasRev') @Watch('onAliasRev') aliasRev: number = 0;
+  @StorageLink('pinRev') @Watch('onPinRev') pinRev: number = 0;
   @State setupKey: string = '';
   @State setupBusy: boolean = false;
   @State setupError: string = '';
@@ -169,8 +174,11 @@ struct Index {
         this.inbox.startWatch();
         this.inbox.refresh(true).then(() => {
           this.pullInboxUi();
+          this.inbox.prefetchOnShow();
         });
         this.startPoll();
+        warmCreateMeta().catch(() => {
+        });
       } else if (!this.hasKey) {
         this.inbox.stopWatch();
         this.stopPoll();
@@ -192,8 +200,11 @@ struct Index {
           this.inbox.startWatch();
           this.inbox.refresh(true).then(() => {
             this.pullInboxUi();
+            this.inbox.prefetchOnShow();
           });
           this.startPoll();
+          warmCreateMeta().catch(() => {
+          });
         }
         this.consumePendingAgent();
         this.consumePendingUnread();
@@ -218,6 +229,9 @@ struct Index {
       this.recomputeView();
     });
     if (this.hasKey && this.session.keyReady) {
+      this.inbox.prefetchOnShow();
+      warmCreateMeta().catch(() => {
+      });
       this.inbox.refresh(true).then(() => {
         this.pullInboxUi();
       });
@@ -360,10 +374,46 @@ struct Index {
     return this.unreadIds.indexOf(id) >= 0 || this.deltaIds.indexOf(id) >= 0;
   }
 
+  private cardFreshSig(item: AgentSummary): string {
+    return `${item.id}:${this.isFresh(item.id) ? 1 : 0}:${isPinnedId(item.id, this.pinnedIds) ? 1 : 0}`;
+  }
+
+  private pairFreshSig(pair: CardPair): string {
+    let s = this.cardFreshSig(pair.left);
+    if (pair.hasRight) {
+      s = `${s}|${this.cardFreshSig(pair.right)}`;
+    }
+    return s;
+  }
+
+  private bucketStamp(bucket: GroupBucket): string {
+    let s = `${bucket.key}:${bucket.items.length}`;
+    for (let i = 0; i < bucket.items.length; i++) {
+      const a = bucket.items[i];
+      s = `${s}|${a.id}:${a.status}:${isPinnedId(a.id, this.pinnedIds) ? 1 : 0}`;
+    }
+    return s;
+  }
+
+  private resyncInboxChrome(): void {
+    this.pullInboxUi();
+    PrefStore.getInstance().getPinnedIds().then((ids: string[]) => {
+      this.pinnedIds = ids;
+      this.recomputeView();
+    });
+  }
+
   /** Recompute flat / grouped view models from the inbox source + current toolbar state. */
   private recomputeView(): void {
     const all = this.inbox.source.snapshot();
-    const filtered = applyQueryInternal(all, this.query, this.filterMode, this.sortMode, this.pinnedIds);
+    const source: AgentSummary[] = [];
+    for (let i = 0; i < all.length; i++) {
+      if (!this.includeArchived && all[i].status === 'ARCHIVED') {
+        continue;
+      }
+      source.push(all[i]);
+    }
+    const filtered = applyQueryInternal(source, this.query, this.filterMode, this.sortMode, this.pinnedIds);
     const grouped = groupAgents(filtered, this.groupMode, this.pinnedIds);
     let hasNamed = false;
     let n = 0;
@@ -487,6 +537,9 @@ struct Index {
   }
 
   private groupCollapsed(key: string): boolean {
+    if (key === 'pinned') {
+      return this.expandedKey === GROUP_ALL_COLLAPSED;
+    }
     const open = this.openGroupKey();
     return open.length === 0 || key !== open;
   }
@@ -583,8 +636,8 @@ struct Index {
     }
     this.pinnedIds = next;
     this.menuAgentPinned = !found;
-    await PrefStore.getInstance().setPinnedIds(next);
     this.recomputeView();
+    await PrefStore.getInstance().setPinnedIds(next);
   }
 
   onPendingRev(): void {
@@ -597,6 +650,13 @@ struct Index {
 
   onAliasRev(): void {
     this.recomputeView();
+  }
+
+  onPinRev(): void {
+    PrefStore.getInstance().getPinnedIds().then((ids: string[]) => {
+      this.pinnedIds = ids;
+      this.recomputeView();
+    });
   }
 
   private consumePendingUnread(): void {
@@ -660,28 +720,51 @@ struct Index {
     if (id.length === 0) {
       return;
     }
-    const next: string[] = [];
-    for (let i = 0; i < this.deltaIds.length; i++) {
-      if (this.deltaIds[i] !== id) {
-        next.push(this.deltaIds[i]);
+    const now = Date.now();
+    if (id === this.openingAgentId && now - this.openingAt < 800) {
+      return;
+    }
+    this.openingAgentId = id;
+    this.openingAt = now;
+    try {
+      if (this.isFresh(id)) {
+        AppStorage.setOrCreate('pendingFreshOpen', id);
       }
+    } catch (_e) {
     }
-    if (next.length !== this.deltaIds.length) {
-      this.deltaIds = next;
-    }
+    this.markOpened(id);
     Haptics.click();
     this.selectedId = id;
     const active = DetailVM.getActive();
     if (active && active.agentId === id) {
+      active.resumeIfNeeded();
       return;
     }
     const param: Record<string, Object> = {};
     param['agentId'] = id;
-    try {
-      this.navStack.clear();
-    } catch (_e) {
-    }
     this.navStack.pushPath({ name: 'AgentDetail', param: param });
+  }
+
+  private markOpened(id: string): void {
+    const nextDelta: string[] = [];
+    for (let i = 0; i < this.deltaIds.length; i++) {
+      if (this.deltaIds[i] !== id) {
+        nextDelta.push(this.deltaIds[i]);
+      }
+    }
+    this.deltaIds = nextDelta;
+    const nextUnread: string[] = [];
+    for (let i = 0; i < this.unreadIds.length; i++) {
+      if (this.unreadIds[i] !== id) {
+        nextUnread.push(this.unreadIds[i]);
+      }
+    }
+    this.unreadIds = nextUnread;
+    UnreadStore.getInstance().markSeen(id).then(() => {
+      this.pullInboxUi();
+    }).catch(() => {
+    });
+    this.recomputeView();
   }
 
   private listFooterH(): number {
@@ -1281,6 +1364,13 @@ struct Index {
     }
     .width('100%')
     .layoutWeight(1)
+    .onVisibleAreaChange([0.0, 1.0], (_isExpanding: boolean, ratio: number) => {
+      const hidden = ratio < 0.15;
+      if (this.inboxHidden && !hidden) {
+        this.resyncInboxChrome();
+      }
+      this.inboxHidden = hidden;
+    })
     .bindSheet($$this.showChromeSheet, this.chromeSheet(), {
       height: this.chromeKind === 'unread' ? SheetSize.MEDIUM : SheetSize.FIT_CONTENT,
       dragBar: true,
@@ -1316,7 +1406,7 @@ struct Index {
             if (!this.groupCollapsed(bucket.key)) {
               this.listItems(bucket.items)
             }
-          }, (bucket: GroupBucket) => bucket.key)
+          }, (bucket: GroupBucket) => this.bucketStamp(bucket))
         }
         ListItem() {
           Column()
@@ -1378,7 +1468,7 @@ struct Index {
           })
       }
       .transition(expandTransition())
-    }, (item: AgentSummary) => item.id)
+    }, (item: AgentSummary) => this.cardFreshSig(item))
   }
 
   @Builder
@@ -1397,7 +1487,7 @@ struct Index {
             if (!this.groupCollapsed(bucket.key)) {
               this.cardItems(bucket.items)
             }
-          }, (bucket: GroupBucket) => bucket.key)
+          }, (bucket: GroupBucket) => this.bucketStamp(bucket))
         }
         ListItem() {
           Column()
@@ -1482,7 +1572,7 @@ struct Index {
         this.cardPairRow(pair)
       }
       .transition(expandTransition())
-    }, (pair: CardPair) => pair.key)
+    }, (pair: CardPair) => this.pairFreshSig(pair))
   }
 
   @Builder
@@ -2028,27 +2118,31 @@ struct Index {
           onTap: async () => {
             if (this.menuAgentStatus === 'ARCHIVED') {
               const ok = await this.inbox.unarchive(this.menuAgentId);
-              this.pullInboxUi();
               this.showChromeSheet = false;
+              this.pullInboxUi();
               if (ok) {
                 Haptics.success();
                 showToast('已取消归档');
               } else {
                 Haptics.fail();
-                this.pullInboxUi();
+                const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '取消归档失败';
+                showToast(err);
               }
             } else {
               const ok = await this.inbox.archive(this.menuAgentId);
-              this.includeArchived = true;
-              PrefStore.getInstance().setIncludeArchived(true);
-              this.pullInboxUi();
               this.showChromeSheet = false;
               if (ok) {
+                if (this.includeArchived) {
+                  this.expandedKey = 'archived';
+                }
+                this.pullInboxUi();
                 Haptics.success();
                 showToast('已归档');
               } else {
-                Haptics.fail();
                 this.pullInboxUi();
+                Haptics.fail();
+                const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '归档失败';
+                showToast(err);
               }
             }
           }

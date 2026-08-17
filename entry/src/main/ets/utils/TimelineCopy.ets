@@ -79,6 +79,18 @@ export function processLiveTitle(connecting: boolean, runningSlug: string, hasTo
   return head;
 }
 
+/** Gray waiting line: 思考中. / 思考中.. / 思考中… */
+export function waitingThinkLabel(tick: number): string {
+  const n = (Math.abs(tick) % 3) + 1;
+  if (n === 1) {
+    return '思考中.';
+  }
+  if (n === 2) {
+    return '思考中..';
+  }
+  return '思考中…';
+}
+
 export function processDoneTitle(hadTools: boolean, elapsed: string): string {
   if (elapsed.length > 0) {
     return hadTools ? `用了 ${elapsed}` : `思考了 ${elapsed}`;

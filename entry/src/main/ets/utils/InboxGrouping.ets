@@ -422,6 +422,19 @@ export function mergeInboxLists(
       if (sameRun && (!a.latestResult || a.latestResult.length === 0) && prev.latestResult) {
         a.latestResult = prev.latestResult;
       }
+      if (prev.status !== a.status && stamp(prev.updatedAt) >= stamp(a.updatedAt)) {
+        a.status = prev.status;
+      }
+      if (isRunInFlight(`${prev.latestRunStatus ?? ''}`) &&
+        !isRunInFlight(`${a.latestRunStatus ?? ''}`)) {
+        const prevRun = `${prev.latestRunId ?? ''}`;
+        const nextRun = `${a.latestRunId ?? ''}`;
+        if (prevRun.length > 0 && prevRun !== nextRun &&
+          stamp(prev.lastUserAt ?? '') >= stamp(a.lastUserAt ?? '')) {
+          a.latestRunStatus = prev.latestRunStatus;
+          a.latestRunId = prev.latestRunId;
+        }
+      }
     }
     out.push(a);
     seen[a.id] = true;

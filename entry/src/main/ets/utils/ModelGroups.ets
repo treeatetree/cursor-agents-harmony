@@ -62,8 +62,7 @@ function isEffortOn(val: string): boolean {
   return val.length > 0 && val !== 'false' && val !== '0' && val !== 'off' && val !== 'none';
 }
 
-/** Chip tags under a user bubble: model id + effort + fast, English as sent. */
-export function modelSentTags(model: Record<string, Object> | undefined): string[] {
+function modelSentBits(model: Record<string, Object> | undefined): string[] {
   if (!model) {
     return ['Auto'];
   }
@@ -71,9 +70,9 @@ export function modelSentTags(model: Record<string, Object> | undefined): string
   if (id.length === 0) {
     return ['Auto'];
   }
-  const tags: string[] = [];
+  const bits: string[] = [];
   const short = shortModelName(id);
-  tags.push(short.length > 0 ? short : id);
+  bits.push(short.length > 0 ? short : id);
   const raw = model['params'];
   if (raw) {
     const rows = raw as Object[];
@@ -83,21 +82,26 @@ export function modelSentTags(model: Record<string, Object> | undefined): string
       const val = `${row['value'] ?? ''}`.toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ').trim();
       if (pid === 'effort' || pid === 'reasoning') {
         if (isEffortOn(val)) {
-          tags.push(val);
+          bits.push(val);
         }
       } else if (pid === 'fast' || pid === 'speed') {
         if (val === 'true' || val === '1' || val === 'fast') {
-          tags.push('fast');
+          bits.push('fast');
         }
       }
     }
   }
-  return tags;
+  return bits.length > 0 ? bits : ['Auto'];
+}
+
+/** One chip under a user bubble: model · effort · fast. */
+export function modelSentTags(model: Record<string, Object> | undefined): string[] {
+  return [modelSentBits(model).join(' · ')];
 }
 
 /** What we actually POST as `model` — for logs. */
 export function formatModelSent(model: Record<string, Object> | undefined): string {
-  return modelSentTags(model).join(' · ');
+  return modelSentBits(model).join(' · ');
 }
 
 export function modelSentJson(model: Record<string, Object> | undefined): string {

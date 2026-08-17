@@ -3,6 +3,7 @@ import { ApiException, AgentSummary, Run } from '../models/Api';
 import { unwrapAgentsList } from '../api/ApiUnwrap';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { AgentCache } from '../store/AgentCache';
+import { AgentPrefetch } from '../store/AgentPrefetch';
 import { AgentListSource } from '../datasource/AgentListSource';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Log } from '../utils/Log';
@@ -88,6 +89,25 @@ export class InboxVM {
     return (Date.now() - this.lastRefreshAt) > minIntervalMs;
   }
 
+  prefetchOnShow(): void {
+    if (this.includeArchived) {
+      SessionDiag.emit({ tag: TAG, event: 'prefetch_skip', extra: 'archived' });
+      return;
+    }
+    const snap = this.source.snapshot();
+    const ids: string[] = [];
+    for (let i = 0; i < snap.length && ids.length < 2; i++) {
+      const id = snap[i].id;
+      if (id.indexOf('local-') === 0) {
+        continue;
+      }
+      ids.push(id);
+    }
+    if (ids.length > 0) {
+      AgentPrefetch.getInstance().enqueueVisible(ids, 'show');
+    }
+  }
+
   async refresh(silent: boolean = false): Promise<boolean> {
     if (!ApiKeyStore.getInstance().isUnlocked()) {
       return false;
@@ -155,6 +175,10 @@ export class InboxVM {
       UnreadStore.getInstance().syncBadge();
       this.pushWidget();
       this.emitChange();
+      if (!this.includeArchived && !silent && this.lastDelta.ids.length > 0) {
+        const deltaIds = this.lastDelta.ids.slice(0, 3);
+        AgentPrefetch.getInstance().enqueue(deltaIds, 'delta');
+      }
       return true;
     } catch (e) {
       this.applyError(e, '刷新失败');
@@ -381,6 +405,7 @@ export class InboxVM {
       }
       const item = copyAgent(snap[i]);
       item.lastUserAt = pickNewerIso(item.lastUserAt ?? '', iso);
+      item.updatedAt = pickNewerIso(item.updatedAt, iso);
       this.source.updateAt(i, item);
       AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
       this.dirty = true;
@@ -390,7 +415,8 @@ export class InboxVM {
   }
 
   /** Update name / run status only. Does not rewrite lastUserAt. */
-  touch(agentId: string, name?: string, status?: string, runUpdatedAt?: string): void {
+  touch(agentId: string, name?: string, status?: string, runUpdatedAt?: string,
+    latestRunId?: string): void {
     if (!agentId || agentId.length === 0) {
       return;
     }
@@ -414,6 +440,9 @@ export class InboxVM {
     }
     if (runUpdatedAt && runUpdatedAt.length > 0) {
       item.updatedAt = pickNewerIso(item.updatedAt, runUpdatedAt);
+    }
+    if (latestRunId && latestRunId.length > 0) {
+      item.latestRunId = latestRunId;
     }
     this.source.updateAt(found, item);
     AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
@@ -485,6 +514,9 @@ export class InboxVM {
     });
     UnreadStore.getInstance().markFinished(a.id, shown, zh, snippet, repo).catch(() => {
     });
+    if (!this.includeArchived) {
+      AgentPrefetch.getInstance().enqueue([a.id], 'terminal');
+    }
   }
 
   removeLocal(agentId: string): void {
@@ -534,16 +566,29 @@ export class InboxVM {
     const prev = copyAgent(this.source.snapshot()[idx]);
     const next = copyAgent(prev);
     next.status = 'ARCHIVED';
-    this.includeArchived = true;
+    next.updatedAt = new Date().toISOString();
     this.source.updateAt(idx, next);
     this.dirty = true;
+    AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
     this.emitChange();
     try {
       await CursorApiClient.getInstance().archiveAgent(agentId);
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'archive',
+        agentId: agentId,
+        extra: 'ok'
+      });
       this.refresh(true).catch(() => {
       });
       return true;
     } catch (e) {
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'archive',
+        agentId: agentId,
+        extra: 'fail'
+      });
       const cur = this.findIndex(agentId);
       if (cur >= 0) {
         this.source.updateAt(cur, prev);
@@ -563,8 +608,10 @@ export class InboxVM {
       prev = copyAgent(this.source.snapshot()[idx]);
       const next = copyAgent(prev);
       next.status = 'ACTIVE';
+      next.updatedAt = new Date().toISOString();
       this.source.updateAt(idx, next);
       this.dirty = true;
+      AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
       this.emitChange();
     }
     try {

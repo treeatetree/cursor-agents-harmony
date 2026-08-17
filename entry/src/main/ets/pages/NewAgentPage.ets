@@ -385,7 +385,7 @@ export struct NewAgentPage {
     this.vm.selectedParams = [];
   }
 
-  private pickParam(rowIdx: number, valueIdx: number): void {
+  private pickParam(rowId: string, valueIdx: number): void {
     const next: ModelParamRow[] = [];
     for (let i = 0; i < this.paramRows.length; i++) {
       const r = this.paramRows[i];
@@ -394,7 +394,7 @@ export struct NewAgentPage {
         title: r.title,
         labels: r.labels,
         values: r.values,
-        selected: i === rowIdx ? valueIdx : r.selected
+        selected: r.id === rowId ? valueIdx : r.selected
       });
     }
     this.paramRows = next;
@@ -1128,8 +1128,8 @@ export struct NewAgentPage {
             this.pickModel(id);
             this.refreshCanSubmit();
           },
-          onPickParam: (rowIdx: number, valueIdx: number) => {
-            this.pickParam(rowIdx, valueIdx);
+          onPickParam: (rowId: string, valueIdx: number) => {
+            this.pickParam(rowId, valueIdx);
           },
           onPickVariant: (idx: number) => {
             this.selectedVariantIndex = idx;
@@ -1220,11 +1220,11 @@ export struct NewAgentPage {
                 label: lab,
                 on: row.selected === valueIdx,
                 onTap: () => {
-                  this.pickParam(rowIdx, valueIdx);
+                  this.pickParam(row.id, valueIdx);
                 }
               })
                 .margin({ right: 6, bottom: 4 })
-            }, (lab: string, valueIdx: number) => `${row.id}-${valueIdx}-${lab}`)
+            }, (lab: string, valueIdx: number) => `${row.id}-${valueIdx}-${lab}-${row.selected}`)
           }
           .width('100%')
         }

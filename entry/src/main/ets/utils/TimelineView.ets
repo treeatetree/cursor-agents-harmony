@@ -7,6 +7,20 @@ function activityHasBody(it: TimelineItem, hasTool: boolean): boolean {
   return hasTool;
 }
 
+/** Empty streaming think with no tools yet — paint "思考中…" instead of a hollow card. */
+export function isWaitingThink(item: TimelineItem, hasTool: boolean): boolean {
+  if (item.kind !== 'thinking') {
+    return false;
+  }
+  if (item.streaming !== true) {
+    return false;
+  }
+  if ((item.text ?? '').trim().length > 0) {
+    return false;
+  }
+  return hasTool !== true;
+}
+
 /** Finished headers were painting "运行 · 已完成" on top of another 已完成. */
 function isSettledHeader(it: TimelineItem): boolean {
   const st = `${it.statusLabel ?? ''}`;
@@ -167,4 +181,57 @@ export function countNewContent(items: TimelineItem[], lastSeenKey: string): num
     }
   }
   return n;
+}
+
+/**
+ * Next user-prompt index in `keys` for up/down jump.
+ * First tap (empty lastKey) starts from the nearest user card at or above the
+ * visible bottom — never wraps to the oldest prompt.
+ * Returns -1 when the move is past either end.
+ */
+export function nextUserJumpAt(
+  keys: string[],
+  idxs: number[],
+  lastKey: string,
+  dir: number,
+  viewStart: number,
+  viewEnd: number
+): number {
+  if (keys.length === 0 || keys.length !== idxs.length) {
+    return -1;
+  }
+  let at = -1;
+  if (lastKey.length > 0) {
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i] === lastKey) {
+        at = i;
+        break;
+      }
+    }
+  }
+  if (at < 0) {
+    const bottom = viewEnd >= viewStart ? viewEnd : viewStart;
+    for (let i = keys.length - 1; i >= 0; i--) {
+      if (idxs[i] <= bottom) {
+        at = i;
+        break;
+      }
+    }
+    if (at < 0) {
+      for (let i = 0; i < keys.length; i++) {
+        if (idxs[i] >= viewStart) {
+          at = i;
+          break;
+        }
+      }
+    }
+    if (at < 0) {
+      at = dir < 0 ? keys.length - 1 : 0;
+    }
+  }
+  const next = at + dir;
+  if (next < 0 || next >= keys.length) {
+    return -1;
+  }
+  return next;
 }

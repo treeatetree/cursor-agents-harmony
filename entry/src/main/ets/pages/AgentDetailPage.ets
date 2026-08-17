@@ -36,8 +36,9 @@ import { copyToClipboard } from '../utils/Clipboard';
 import { confirmDanger } from '../utils/AppDialog';
 import { showToast } from '../utils/AppToast';
 import { Haptics } from '../utils/Haptics';
-import { visibleTimeline } from '../utils/TimelineView';
-import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug } from '../utils/TimelineCopy';
+import { isWaitingThink, nextUserJumpAt, visibleTimeline } from '../utils/TimelineView';
+import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, waitingThinkLabel } from '../utils/TimelineCopy';
+import { makeQuoteEditMenu } from '../utils/TextSelectMenu';
 
 function fmtTk(n: number | undefined): string {
   const v = n ?? 0;
@@ -123,9 +124,7 @@ struct AgentDetailPage {
   @State jumpTotal: number = 0;
   @State showJumpHint: boolean = false;
   @State quoteText: string = '';
-  @State selSrc: string = '';
-  @State selStart: number = 0;
-  @State selEnd: number = 0;
+  @State bubbleMax: number = 280;
   private tickTimer: number = -1;
   private mdTimer: number = -1;
   private runStartMs: number = 0;
@@ -137,6 +136,8 @@ struct AgentDetailPage {
   private jumpHintTimer: number = -1;
   private lastUserKey: string = '';
   private lastJumpedKey: string = '';
+  private feedViewStart: number = 0;
+  private feedViewEnd: number = -1;
 
   aboutToDisappear(): void {
     try {
@@ -185,6 +186,8 @@ struct AgentDetailPage {
   private sync(): void {
     if (this.vm.agentId.length > 0 && this.vm.agentId !== this.agentId) {
       this.agentId = this.vm.agentId;
+      this.lastUserKey = '';
+      this.feedViewEnd = -1;
     }
     this.name = this.vm.name;
     this.status = this.vm.status;
@@ -280,19 +283,10 @@ struct AgentDetailPage {
     if (keys.length === 0) {
       return;
     }
-    let at = -1;
-    for (let i = 0; i < keys.length; i++) {
-      if (keys[i] === this.lastUserKey) {
-        at = i;
-        break;
-      }
-    }
+    const viewEnd = this.feedViewEnd >= 0 ? this.feedViewEnd :
+      (this.vm.stickToBottom ? Math.max(this.feed.length - 1, 0) : this.feedViewStart);
+    const at = nextUserJumpAt(keys, idxs, this.lastUserKey, dir, this.feedViewStart, viewEnd);
     if (at < 0) {
-      at = dir < 0 ? keys.length - 1 : 0;
-    } else {
-      at = at + dir;
-    }
-    if (at < 0 || at >= keys.length) {
       return;
     }
     this.lastUserKey = keys[at];
@@ -319,8 +313,11 @@ struct AgentDetailPage {
       return;
     }
     this.quoteText = t.length > 600 ? `${t.substring(0, 600)}…` : t;
-    Haptics.click();
-    showToast('已引用');
+    this.pinFeedToComposer(16, true);
+    try {
+      Haptics.click();
+    } catch (_e) {
+    }
   }
 
   private wrapQuote(body: string): string {
@@ -498,8 +495,8 @@ struct AgentDetailPage {
   }
 
   private armTick(): void {
-    if (this.runActive) {
-      if (this.runStartMs === 0) {
+    if (this.runActive || this.sending) {
+      if (this.runActive && this.runStartMs === 0) {
         this.runStartMs = Date.now();
       }
       if (this.tickTimer < 0) {
@@ -690,7 +687,7 @@ struct AgentDetailPage {
     this.followModelLabel = this.followUpModel;
   }
 
-  private pickFollowParam(rowIdx: number, valueIdx: number): void {
+  private pickFollowParam(rowId: string, valueIdx: number): void {
     const next: ModelParamRow[] = [];
     for (let i = 0; i < this.followParamRows.length; i++) {
       const r = this.followParamRows[i];
@@ -699,7 +696,7 @@ struct AgentDetailPage {
         title: r.title,
         labels: r.labels,
         values: r.values,
-        selected: i === rowIdx ? valueIdx : r.selected
+        selected: r.id === rowId ? valueIdx : r.selected
       });
     }
     this.followParamRows = next;
@@ -823,7 +820,7 @@ struct AgentDetailPage {
   }
 
   private cardProcessTitle(item: TimelineItem): string {
-    const live = item.streaming === true && this.runActive;
+    const live = item.streaming === true && (this.runActive || this.sending);
     const tools = this.toolsForRun(item.runId);
     const elapsed = this.elapsedForCard(item.runId, live);
     if (!live) {
@@ -1247,13 +1244,16 @@ struct AgentDetailPage {
           }
           .width('100%')
           .height('100%')
-          .padding({ left: this.pagePad, right: this.pagePad })
+          .padding({ left: this.pagePad, right: this.pagePad, bottom: Tokens.sec + 8 })
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
           .cachedCount(18)
+          .focusable(true)
+          .defaultFocus(false)
           .onScrollIndex((start: number, end: number) => {
-            const total = this.vm.source.totalCount();
-            const nearBottom = end >= total - 2;
+            this.feedViewStart = start;
+            this.feedViewEnd = end;
+            const nearBottom = this.feed.length === 0 || end >= this.feed.length - 2;
             this.vm.stickToBottom = nearBottom;
             this.showJump = !nearBottom && this.runActive;
           })
@@ -1315,27 +1315,18 @@ struct AgentDetailPage {
           if (h > 0) {
             this.lastListH = h;
           }
+          const rawW = now.width;
+          const w = typeof rawW === 'number' ? rawW : 0;
+          if (w > 80) {
+            const next = Math.floor(w * 0.78);
+            if (next !== this.bubbleMax) {
+              this.bubbleMax = next;
+            }
+          }
         })
       }
       .layoutWeight(1)
       .width('100%')
-    }
-  }
-
-  @Builder
-  quoteMenu() {
-    Menu() {
-      MenuItem({ content: '引用' })
-        .onClick(() => {
-          let t = '';
-          if (this.selEnd > this.selStart && this.selSrc.length > 0) {
-            t = this.selSrc.substring(this.selStart, this.selEnd);
-          }
-          if (t.trim().length === 0) {
-            t = this.selSrc;
-          }
-          this.applyQuote(t);
-        })
     }
   }
 
@@ -1427,39 +1418,6 @@ struct AgentDetailPage {
       .padding({ bottom: 6 })
     }
 
-    if (this.quoteText.length > 0) {
-      Row({ space: 8 }) {
-        Column({ space: 2 }) {
-          Text('引用')
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_tertiary'))
-            .width('100%')
-          Text(this.quoteText)
-            .fontSize(Tokens.typeCaption)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(2)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .width('100%')
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-        Text('取消')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.text_secondary'))
-          .constraintSize({ minHeight: 32 })
-          .onClick(() => {
-            this.quoteText = '';
-          })
-      }
-      .width('100%')
-      .padding({
-        left: Tokens.pagePad,
-        right: Tokens.pagePad,
-        bottom: 8
-      })
-      .alignItems(VerticalAlign.Center)
-    }
-
     PromptShell({
       follow: true,
       placeholder: '追问…',
@@ -1477,11 +1435,15 @@ struct AgentDetailPage {
       failedFollow: this.failedFollow,
       queued: this.queuedFollowUp,
       queueNote: this.queueImagesLost ? '图片未保存' : '',
+      quoteText: this.quoteText,
       bottomPad: this.bottomInset,
       onFocusChange: (on: boolean) => {
         if (on) {
           this.pinFeedToComposer(40, true);
         }
+      },
+      onClearQuote: () => {
+        this.quoteText = '';
       },
       onSend: async () => {
         const body = this.draft;
@@ -1667,8 +1629,8 @@ struct AgentDetailPage {
           onPick: (id: string) => {
             this.pickFollowModel(id);
           },
-          onPickParam: (rowIdx: number, valueIdx: number) => {
-            this.pickFollowParam(rowIdx, valueIdx);
+          onPickParam: (rowId: string, valueIdx: number) => {
+            this.pickFollowParam(rowId, valueIdx);
           },
           onPickVariant: (idx: number) => {
             this.followVariantIndex = idx;
@@ -2032,12 +1994,13 @@ struct AgentDetailPage {
                 if (ok) {
                   Haptics.success();
                   showToast('已归档');
-                  PrefStore.getInstance().setIncludeArchived(true);
                   this.vm.close();
                   this.navStack.pop();
                 } else {
                   Haptics.fail();
                   this.sync();
+                  const err = this.vm.errorMsg.length > 0 ? this.vm.errorMsg : '归档失败';
+                  showToast(err);
                 }
               }
             })
@@ -2141,6 +2104,18 @@ struct AgentDetailPage {
     return true;
   }
 
+  private isWaitingRow(item: TimelineItem): boolean {
+    if (!isWaitingThink(item, this.toolsForRun(item.runId).length > 0)) {
+      return false;
+    }
+    return this.processBodyForRun(item.runId).trim().length === 0;
+  }
+
+  private waitingLine(): string {
+    const _t = this.tick;
+    return waitingThinkLabel(this.tick);
+  }
+
   private processBodyForRun(runId: string): string {
     const bits: string[] = [];
     const total = this.vm.source.totalCount();
@@ -2177,14 +2152,27 @@ struct AgentDetailPage {
   }
 
   private modelTagsOf(item: TimelineItem): string[] {
+    const tags: string[] = [];
     if (item.sentTags && item.sentTags.length > 0) {
-      return item.sentTags;
+      for (let i = 0; i < item.sentTags.length; i++) {
+        tags.push(item.sentTags[i]);
+      }
+    } else {
+      const s = (item.usageShort ?? '').trim();
+      if (s.length === 0 || this.isTokenShort(s)) {
+        return [];
+      }
+      const bits = s.split(' · ');
+      for (let i = 0; i < bits.length; i++) {
+        if (bits[i].trim().length > 0) {
+          tags.push(bits[i].trim());
+        }
+      }
     }
-    const s = (item.usageShort ?? '').trim();
-    if (s.length === 0 || this.isTokenShort(s)) {
-      return [];
+    if (tags.length <= 1) {
+      return tags;
     }
-    return s.split(' · ');
+    return [tags.join(' · ')];
   }
 
   private isTokenShort(s: string): boolean {
@@ -2219,6 +2207,10 @@ struct AgentDetailPage {
     return s;
   }
 
+  private bubbleInner(): number {
+    return this.bubbleMax > 48 ? this.bubbleMax - 24 : this.bubbleMax;
+  }
+
   @Builder
   tagRow(tags: string[]) {
     Row({ space: 4 }) {
@@ -2232,8 +2224,8 @@ struct AgentDetailPage {
           .borderRadius(Tokens.radiusChip)
       }, (t: string) => t)
     }
-    .width('100%')
-    .padding({ top: 6 })
+    .constraintSize({ maxWidth: this.bubbleMax })
+    .padding({ top: 2 })
   }
 
   @Builder
@@ -2257,58 +2249,68 @@ struct AgentDetailPage {
           .alignItems(VerticalAlign.Center)
           .transition(chromeTransition())
         }
-        Column() {
-          if (this.isPlainUser(item.text ?? '')) {
-            Text(item.text ?? '')
-              .fontSize(Tokens.typeBody)
-              .fontFamily(Tokens.fontUi)
-              .fontColor($r('app.color.text_primary'))
-              .lineHeight(Tokens.lineBody)
-              .maxLines(6)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .copyOption(CopyOptions.InApp)
-              .onTextSelectionChange((start: number, end: number) => {
-                this.selSrc = item.text ?? '';
-                this.selStart = start;
-                this.selEnd = end;
-              })
-              .bindSelectionMenu(TextSpanType.TEXT, this.quoteMenu, TextResponseType.SELECT)
-              .width('100%')
-          } else {
-            MarkdownLite({
-              content: item.text ?? '',
-              compact: true,
-              onQuote: (t: string) => {
-                this.applyQuote(t);
+        Row() {
+          Blank()
+            .layoutWeight(1)
+          Column({ space: 4 }) {
+            Column() {
+              if (this.isPlainUser(item.text ?? '')) {
+                Text(item.text ?? '')
+                  .fontSize(Tokens.typeProse)
+                  .fontFamily(Tokens.fontUi)
+                  .fontColor($r('app.color.text_primary'))
+                  .lineHeight(Tokens.lineProse)
+                  .maxLines(6)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .wordBreak(WordBreak.BREAK_WORD)
+                  .focusable(true)
+                  .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
+                  .constraintSize({ maxWidth: this.bubbleInner() })
+                  .copyOption(CopyOptions.LocalDevice)
+                  .editMenuOptions(makeQuoteEditMenu(item.text ?? '', (t: string) => {
+                    this.applyQuote(t);
+                  }))
+              } else {
+                MarkdownLite({
+                  content: item.text ?? '',
+                  compact: false,
+                  inBubble: true,
+                  capWidth: this.bubbleInner(),
+                  onQuote: (t: string) => {
+                    this.applyQuote(t);
+                  }
+                })
               }
+            }
+            .constraintSize({ maxWidth: this.bubbleMax, minHeight: 44 })
+            .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+            .backgroundColor(item.failed ? $r('app.color.banner_error_bg') : $r('app.color.user_bubble'))
+            .border({
+              width: item.failed ? 0 : 1,
+              color: $r('app.color.border')
             })
+            .borderRadius(Tokens.radiusMd)
+            if (this.modelTagsOf(item).length > 0) {
+              this.tagRow(this.modelTagsOf(item))
+            }
+            if (this.tokenLineOf(item).length > 0) {
+              Text(this.tokenLineOf(item))
+                .fontSize(Tokens.typeMicro)
+                .fontFamily(Tokens.fontUi)
+                .fontColor($r('app.color.text_tertiary'))
+            }
           }
-          if (this.modelTagsOf(item).length > 0) {
-            this.tagRow(this.modelTagsOf(item))
-          }
-          if (this.tokenLineOf(item).length > 0) {
-            Text(this.tokenLineOf(item))
-              .fontSize(Tokens.typeMicro)
-              .fontFamily(Tokens.fontUi)
-              .fontColor($r('app.color.text_tertiary'))
-              .width('100%')
-              .padding({ top: 6 })
-          }
+          .constraintSize({ maxWidth: this.bubbleMax })
+          .alignItems(HorizontalAlign.Start)
+          .alignSelf(ItemAlign.End)
         }
         .width('100%')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Start)
-        .constraintSize({ minHeight: 44 })
-        .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-        .backgroundColor(item.failed ? $r('app.color.banner_error_bg') : $r('app.color.user_bubble'))
-        .border({
-          width: item.failed ? 0 : 1,
-          color: $r('app.color.border')
-        })
-        .borderRadius(Tokens.radiusMd)
+        .justifyContent(FlexAlign.End)
+        .focusable(true)
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Start)
+      .alignItems(HorizontalAlign.End)
+      .focusable(true)
     } else if (item.kind === 'runHeader') {
       Row({ space: 8 }) {
         Text(runHeaderVerb(item.statusLabel ?? '', this.elapsedForCard(item.runId, false)))
@@ -2320,7 +2322,14 @@ struct AgentDetailPage {
       .alignItems(VerticalAlign.Center)
       .transition(chromeTransition())
     } else if (item.kind === 'thinking' || item.kind === 'progress' || item.kind === 'step') {
-      if (this.isLeadProcess(item)) {
+      if (this.isWaitingRow(item)) {
+        Text(this.waitingLine())
+          .fontSize(Tokens.typeCaption)
+          .fontFamily(Tokens.fontUi)
+          .fontColor($r('app.color.text_tertiary'))
+          .opacity(shimmerOpacity(this.shimmerOn))
+          .padding({ top: 8, bottom: 4 })
+      } else if (this.isLeadProcess(item)) {
         ActivityCard({
           item: item,
           runActive: this.runActive,
@@ -2349,14 +2358,13 @@ struct AgentDetailPage {
             .fontColor($r('app.color.text_primary'))
             .lineHeight(Tokens.lineProse)
             .textAlign(TextAlign.Start)
-            .wordBreak(WordBreak.BREAK_ALL)
-            .copyOption(CopyOptions.InApp)
-            .onTextSelectionChange((start: number, end: number) => {
-              this.selSrc = item.text ?? '';
-              this.selStart = start;
-              this.selEnd = end;
-            })
-            .bindSelectionMenu(TextSpanType.TEXT, this.quoteMenu, TextResponseType.SELECT)
+            .wordBreak(WordBreak.BREAK_WORD)
+            .focusable(true)
+            .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
+            .copyOption(CopyOptions.LocalDevice)
+            .editMenuOptions(makeQuoteEditMenu(item.text ?? '', (t: string) => {
+              this.applyQuote(t);
+            }))
             .width('100%')
         } else {
           MarkdownLite({
@@ -2371,6 +2379,7 @@ struct AgentDetailPage {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       .padding({ top: 2, bottom: 6 })
+      .focusable(true)
     } else if (item.kind === 'tool') {
       Column().width('100%').height(0)
     } else if (item.kind === 'runOutcome') {

@@ -42,10 +42,10 @@ function copyItem(src: TimelineItem): TimelineItem {
     text: src.text,
     tool: src.tool,
     statusLabel: src.statusLabel,
-    collapsed: src.pinnedOpen === true ? false : true,
+    collapsed: src.pinnedOpen === true ? false : (src.streaming === true ? false : true),
     pinnedOpen: src.pinnedOpen,
     failed: src.failed,
-    streaming: false,
+    streaming: src.streaming === true,
     stepCount: src.stepCount,
     usageShort: src.usageShort,
     sentTags: src.sentTags
@@ -104,7 +104,8 @@ export function mergeCachedActivity(conv: TimelineItem[], cached: TimelineItem[]
       }
       continue;
     }
-    if (c.kind !== 'runHeader' && c.kind !== 'runOutcome' && !hasBody(c)) {
+    if (c.kind !== 'runHeader' && c.kind !== 'runOutcome' && !hasBody(c) &&
+      c.streaming !== true) {
       continue;
     }
     extras.push(copyItem(c));
@@ -211,6 +212,58 @@ export function mergeCachedActivity(conv: TimelineItem[], cached: TimelineItem[]
     merged.push(tail[i]);
   }
   return merged;
+}
+
+function userPromptCount(items: TimelineItem[]): number {
+  let n = 0;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].kind === 'userPrompt') {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+/**
+ * Conversation GET lags the local follow-up. Keep extra user turns (and the
+ * waiting-think / tools that follow them) so a rebuild does not eat the bubble.
+ */
+export function keepPendingTurns(conv: TimelineItem[], live: TimelineItem[]): TimelineItem[] {
+  if (!live || live.length === 0 || !conv) {
+    return conv;
+  }
+  const convUsers = userPromptCount(conv);
+  const liveUsers = userPromptCount(live);
+  if (liveUsers <= convUsers) {
+    return conv;
+  }
+  let seen = 0;
+  let start = -1;
+  for (let i = 0; i < live.length; i++) {
+    if (live[i].kind !== 'userPrompt') {
+      continue;
+    }
+    if (seen === convUsers) {
+      start = i;
+      break;
+    }
+    seen += 1;
+  }
+  if (start < 0) {
+    return conv;
+  }
+  const out: TimelineItem[] = [];
+  for (let i = 0; i < conv.length; i++) {
+    out.push(conv[i]);
+  }
+  for (let i = start; i < live.length; i++) {
+    const it = live[i];
+    if (it.kind === 'streamNotice') {
+      continue;
+    }
+    out.push(copyItem(it));
+  }
+  return out;
 }
 
 function looksLikeTokenShort(s: string): boolean {

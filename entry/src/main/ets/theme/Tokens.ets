@@ -3,7 +3,7 @@
  *
  * Hairline surfaces, no drop shadows.
  * Radii: card 16, chip/button 12, field 10.
- * Accent (ink) is spare: send, plus, running border.
+ * Accent (ink) is spare: send, plus, running time.
  */
 export class Tokens {
   static readonly space1: number = 4;

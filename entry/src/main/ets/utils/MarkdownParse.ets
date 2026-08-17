@@ -421,3 +421,52 @@ function stripMdMarks(raw: string): string {
   }
   return out.replace(/  +/g, ' ').trim();
 }
+
+/** Cursor injects ```chat_selection fences; those are quotes, not code. */
+export function isCitationFence(lang: string): boolean {
+  const l = (lang ?? '').toLowerCase();
+  return l === 'chat_selection' || l === 'selection' || l === 'quoted_selection';
+}
+
+/** Body of a selection fence — `selected_text` only, drop agent_id / line numbers. */
+export function citationQuote(code: string): string {
+  const raw = (code ?? '').replace(/\r\n/g, '\n');
+  const lower = raw.toLowerCase();
+  const key = 'selected_text:';
+  const at = lower.indexOf(key);
+  if (at >= 0) {
+    let body = raw.substring(at + key.length);
+    if (body.length > 0 && body.charAt(0) === ' ') {
+      body = body.substring(1);
+    }
+    if (body.length > 0 && body.charAt(0) === '\n') {
+      body = body.substring(1);
+    }
+    return stripWrapQuotes(body.trim());
+  }
+  const lines = raw.split('\n');
+  const keep: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    const colon = t.indexOf(':');
+    if (colon > 0 && colon < 24 && t.indexOf(' ') < 0) {
+      const k = t.substring(0, colon).toLowerCase();
+      if (k === 'agent_id' || k === 'start_line' || k === 'end_line' || k === 'file') {
+        continue;
+      }
+    }
+    keep.push(lines[i]);
+  }
+  return keep.join('\n').trim();
+}
+
+function stripWrapQuotes(s: string): string {
+  if (s.length >= 2) {
+    const a = s.charAt(0);
+    const b = s.charAt(s.length - 1);
+    if ((a === '"' && b === '"') || (a === "'" && b === "'")) {
+      return s.substring(1, s.length - 1);
+    }
+  }
+  return s;
+}

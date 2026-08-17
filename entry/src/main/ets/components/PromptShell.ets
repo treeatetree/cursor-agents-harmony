@@ -3,6 +3,7 @@ import { Haptics } from '../utils/Haptics';
 import { hasPreviewMap, requirePreviewMap } from '../utils/ImagePicker';
 import { chromeTransition, fadeTransition, motionMs, prefersReducedMotion, runLayout, shakeSeq } from '../utils/Motion';
 import { HuChip } from './HuChip';
+import { HuIcon } from './HuIcon';
 import { HuTextButton } from './HuTextButton';
 
 /**
@@ -31,6 +32,7 @@ export struct PromptShell {
   @Prop queued: string = '';
   @Prop queueNote: string = '';
   @Prop status: string = '';
+  @Prop quoteText: string = '';
   @Prop bottomPad: number = 12;
   @State private focused: boolean = false;
   @State private wantFocus: boolean = false;
@@ -69,16 +71,24 @@ export struct PromptShell {
   };
   onFocusChange: (on: boolean) => void = (_on: boolean) => {
   };
+  onClearQuote: () => void = () => {
+  };
 
   private canSend(): boolean {
-    return !this.busy && (this.text.trim().length > 0 || this.imageCount > 0);
+    return !this.busy && (this.text.trim().length > 0 || this.imageCount > 0 ||
+      this.quoteText.length > 0);
   }
 
   private expanded(): boolean {
     if (!this.follow) {
       return true;
     }
-    return this.focused || this.text.trim().length > 0 || this.imageCount > 0;
+    return this.focused || this.text.trim().length > 0 || this.imageCount > 0 ||
+      this.quoteText.length > 0;
+  }
+
+  private quoteLine(): string {
+    return this.quoteText.split('\n').join(' ').trim();
   }
 
   private kickShake(): void {
@@ -197,6 +207,10 @@ export struct PromptShell {
       }
 
       Column({ space: 4 }) {
+        if (this.quoteText.length > 0) {
+          this.quoteChip()
+        }
+
         if (this.imageUris.length > 0 && this.expanded()) {
           Row({ space: 8 }) {
             ForEach(this.imageUris, (uri: string, idx: number) => {
@@ -327,6 +341,48 @@ export struct PromptShell {
       bottom: this.bottomPad
     })
     .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
+  }
+
+  @Builder
+  quoteChip() {
+    Row({ space: 6 }) {
+      HuIcon({
+        name: 'quote',
+        iconSize: 12,
+        tint: $r('app.color.text_tertiary')
+      })
+      Text(this.quoteLine())
+        .fontSize(Tokens.typeMicro)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+        .constraintSize({ minWidth: 0 })
+      Row() {
+        HuIcon({
+          name: 'close',
+          iconSize: 12,
+          tint: $r('app.color.text_tertiary')
+        })
+      }
+      .width(28)
+      .height(28)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        Haptics.tick();
+        this.onClearQuote();
+      })
+    }
+    .width('100%')
+    .height(28)
+    .padding({ left: 8, right: 2 })
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor($r('app.color.bg2'))
+    .border({ width: 1, color: $r('app.color.border') })
+    .borderRadius(Tokens.radiusChip)
+    .clip(true)
+    .transition(fadeTransition())
   }
 
   @Builder

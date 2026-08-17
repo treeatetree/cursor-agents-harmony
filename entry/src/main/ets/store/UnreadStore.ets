@@ -20,6 +20,7 @@ export class UnreadStore {
   private static instance: UnreadStore | undefined = undefined;
   private items: UnreadItem[] = [];
   private loaded: boolean = false;
+  private lastBadge: number = -1;
 
   static getInstance(): UnreadStore {
     if (!UnreadStore.instance) {
@@ -187,12 +188,16 @@ export class UnreadStore {
   }
 
   syncBadge(): void {
-    SessionDiag.emit({
-      tag: 'Unread',
-      event: 'count',
-      extra: `${this.items.length}`
-    });
-    Notify.setBadge(this.items.length).catch(() => {
+    const n = this.items.length;
+    if (n !== this.lastBadge) {
+      this.lastBadge = n;
+      SessionDiag.emit({
+        tag: 'Unread',
+        event: 'count',
+        extra: `${n}`
+      });
+    }
+    Notify.setBadge(n).catch(() => {
     });
   }
 }
