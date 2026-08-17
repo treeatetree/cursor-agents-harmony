@@ -3,15 +3,16 @@ import { gitCompareUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
 import { applyInboxQuery, groupAgents, mergeInboxLists, recencyMs } from '../main/ets/utils/InboxGrouping';
 import { unwrapAgentsList } from '../main/ets/api/ApiUnwrap';
 import { agentIdFromLaunch, noticeTextFromLaunch } from '../main/ets/utils/WantParse';
-import { clipNotice, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
+import { citationQuote, clipNotice, isCitationFence, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
 import { AgentSummary } from '../main/ets/models/Api';
 import { fileNameOf, isImagePath, isVideoPath } from '../main/ets/utils/DisplayFmt';
 import { sniffMime } from '../main/ets/utils/ImagePicker';
 import { isSubagentTool, subagentDetail } from '../main/ets/utils/StreamText';
 import { unwrapUsageRuns } from '../main/ets/api/ApiUnwrap';
-import { visibleTimeline } from '../main/ets/utils/TimelineView';
-import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, usedToolLine } from '../main/ets/utils/TimelineCopy';
-import { convFingerprint, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
+import { isWaitingThink, nextUserJumpAt, visibleTimeline } from '../main/ets/utils/TimelineView';
+import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, usedToolLine, waitingThinkLabel } from '../main/ets/utils/TimelineCopy';
+import { convFingerprint, keepPendingTurns, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
+import { formatModelSent, modelSentTags } from '../main/ets/utils/ModelGroups';
 import { TimelineItem } from '../main/ets/models/Timeline';
 import { ConversationMessage } from '../main/ets/models/Api';
 
@@ -238,6 +239,28 @@ export default function webAlignTest() {
       expect(out[0].latestRunStatus).assertEqual('RUNNING');
     });
 
+    it('keeps newer local ARCHIVED when the list API is stale', 0, () => {
+      const remote = [
+        agent({ id: 'a', status: 'ACTIVE', updatedAt: '2026-08-16T12:00:00.000Z' })
+      ];
+      const local = [
+        agent({ id: 'a', status: 'ARCHIVED', updatedAt: '2026-08-16T12:00:05.000Z' })
+      ];
+      const out = mergeInboxLists(remote, local, [], Date.parse('2026-08-16T12:00:10.000Z'));
+      expect(out[0].status).assertEqual('ARCHIVED');
+    });
+
+    it('takes remote unarchive when remote updatedAt is newer', 0, () => {
+      const remote = [
+        agent({ id: 'a', status: 'ACTIVE', updatedAt: '2026-08-16T12:00:08.000Z' })
+      ];
+      const local = [
+        agent({ id: 'a', status: 'ARCHIVED', updatedAt: '2026-08-16T12:00:01.000Z' })
+      ];
+      const out = mergeInboxLists(remote, local, [], Date.parse('2026-08-16T12:00:10.000Z'));
+      expect(out[0].status).assertEqual('ACTIVE');
+    });
+
     it('merge keeps the newer lastUserAt', 0, () => {
       const remote = [
         agent({ id: 'a', lastUserAt: '2026-08-16T10:00:00.000Z' })
@@ -247,6 +270,20 @@ export default function webAlignTest() {
       ];
       const out = mergeInboxLists(remote, local, [], Date.parse('2026-08-16T12:00:10.000Z'));
       expect(out[0].lastUserAt).assertEqual('2026-08-16T12:00:00.000Z');
+    });
+
+    it('keeps local in-flight follow-up when list still shows the old run', 0, () => {
+      const remote = [
+        agent({ id: 'a', lastUserAt: '2026-08-16T10:00:00.000Z', latestRunStatus: 'FINISHED' })
+      ];
+      remote[0].latestRunId = 'run-old';
+      const local = [
+        agent({ id: 'a', lastUserAt: '2026-08-16T12:00:00.000Z', latestRunStatus: 'CREATING' })
+      ];
+      local[0].latestRunId = 'run-new';
+      const out = mergeInboxLists(remote, local, [], Date.parse('2026-08-16T12:00:10.000Z'));
+      expect(out[0].latestRunId).assertEqual('run-new');
+      expect(out[0].latestRunStatus).assertEqual('CREATING');
     });
   });
 
@@ -395,6 +432,7 @@ export default function webAlignTest() {
       expect(out.length).assertEqual(5);
       expect(out[1].key).assertEqual('t1');
       expect(out[4].key).assertEqual('t2');
+      expect(isWaitingThink(out[4], false)).assertTrue();
     });
 
     it('shows a turn divider from the second run', 0, () => {
@@ -437,6 +475,21 @@ export default function webAlignTest() {
       expect(out.length).assertEqual(2);
       expect(out[0].kind).assertEqual('userPrompt');
       expect(out[1].kind).assertEqual('assistant');
+    });
+
+    it('first down from the latest message does not wrap to the first prompt', 0, () => {
+      const keys = ['u0', 'u6'];
+      const idxs = [0, 6];
+      expect(nextUserJumpAt(keys, idxs, '', 1, 7, 10)).assertEqual(-1);
+      expect(nextUserJumpAt(keys, idxs, '', -1, 7, 10)).assertEqual(0);
+    });
+
+    it('later taps move from the last jumped prompt', 0, () => {
+      const keys = ['u0', 'u3', 'u6'];
+      const idxs = [0, 3, 6];
+      expect(nextUserJumpAt(keys, idxs, 'u6', -1, 7, 10)).assertEqual(1);
+      expect(nextUserJumpAt(keys, idxs, 'u3', 1, 0, 4)).assertEqual(2);
+      expect(nextUserJumpAt(keys, idxs, 'u0', -1, 0, 2)).assertEqual(-1);
     });
   });
 
@@ -551,6 +604,60 @@ export default function webAlignTest() {
       const merged = mergeCachedActivity(conv, cached);
       expect(merged.length).assertEqual(2);
     });
+
+    it('keeps streaming empty thinking as a waiting placeholder', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'history', text: 'hi' },
+        { key: 'a', kind: 'assistant', runId: 'history', text: 'ok' }
+      ];
+      const cached: TimelineItem[] = [
+        { key: 'wait', kind: 'thinking', runId: 'run-x', text: '', streaming: true }
+      ];
+      const merged = mergeCachedActivity(conv, cached);
+      expect(merged.length).assertEqual(3);
+      expect(merged[1].streaming).assertEqual(true);
+      expect(isWaitingThink(merged[1], false)).assertTrue();
+    });
+
+    it('keeps a local follow-up the conversation GET has not ingested', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'history', text: 'first' },
+        { key: 'a1', kind: 'assistant', runId: 'history', text: 'done' }
+      ];
+      const live: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'history', text: 'first' },
+        { key: 'a1', kind: 'assistant', runId: 'history', text: 'done' },
+        { key: 'u2', kind: 'userPrompt', runId: 'pending', text: 'second' },
+        { key: 't2', kind: 'thinking', runId: 'pending', text: '', streaming: true }
+      ];
+      const merged = keepPendingTurns(conv, live);
+      expect(merged.length).assertEqual(4);
+      expect(merged[2].kind).assertEqual('userPrompt');
+      expect(merged[2].text).assertEqual('second');
+      expect(merged[3].kind).assertEqual('thinking');
+      expect(merged[3].streaming).assertEqual(true);
+    });
+  });
+
+  describe('ModelSent', () => {
+    it('merges model effort and fast into one chip', 0, () => {
+      const effort: Record<string, Object> = {};
+      effort['id'] = 'effort';
+      effort['value'] = 'high';
+      const fast: Record<string, Object> = {};
+      fast['id'] = 'fast';
+      fast['value'] = 'true';
+      const params: Object[] = [];
+      params.push(effort);
+      params.push(fast);
+      const model: Record<string, Object> = {};
+      model['id'] = 'Composer 1.5';
+      model['params'] = params;
+      const tags = modelSentTags(model);
+      expect(tags.length).assertEqual(1);
+      expect(tags[0]).assertEqual('Composer 1.5 · high · fast');
+      expect(formatModelSent(model)).assertEqual(tags[0]);
+    });
   });
 
   describe('MarkdownParse', () => {
@@ -587,6 +694,19 @@ export default function webAlignTest() {
       expect(s.indexOf('http') < 0).assertTrue();
       expect(s.indexOf('Inbox') >= 0).assertTrue();
     });
+
+    it('treats chat_selection fences as citations', 0, () => {
+      expect(isCitationFence('chat_selection')).assertTrue();
+      expect(isCitationFence('ts')).assertFalse();
+      const q = citationQuote(
+        'agent_id: bc-89c5f128-4db7-4eee-b909-a520d790807c\nselected_text:\n这次 GitHub 鉴权失败，没能重新 fetch，以上是本地缓存。');
+      expect(q).assertEqual('这次 GitHub 鉴权失败，没能重新 fetch，以上是本地缓存。');
+      const blocks = parseMarkdown('```chat_selection\nagent_id: bc-1\nselected_text:\nhello\n```\n\n怎么处理');
+      expect(blocks.length).assertEqual(2);
+      expect(blocks[0].kind).assertEqual('code');
+      expect(blocks[0].lang).assertEqual('chat_selection');
+      expect(blocks[1].kind).assertEqual('text');
+    });
   });
 
   describe('TimelineCopy', () => {
@@ -606,6 +726,9 @@ export default function webAlignTest() {
       expect(processLiveTitle(false, '', false, '')).assertEqual('在想下一步');
       expect(processDoneTitle(false, '1s')).assertEqual('思考了 1s');
       expect(processDoneTitle(true, '1m 18s')).assertEqual('用了 1m 18s');
+      expect(waitingThinkLabel(0)).assertEqual('思考中.');
+      expect(waitingThinkLabel(1)).assertEqual('思考中..');
+      expect(waitingThinkLabel(2)).assertEqual('思考中…');
     });
 
     it('keeps run headers as quiet verbs', 0, () => {

@@ -54,6 +54,9 @@ export struct HuIcon {
     if (this.name === 'check') {
       return $r('app.media.ic_check');
     }
+    if (this.name === 'quote') {
+      return $r('app.media.ic_quote');
+    }
     return $r('app.media.ic_more');
   }
 

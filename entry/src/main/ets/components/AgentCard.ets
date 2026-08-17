@@ -7,6 +7,7 @@ import { Haptics } from '../utils/Haptics';
 import { pressMs, pressScaleOf } from '../utils/Motion';
 import { PrefStore } from '../store/PrefStore';
 import { HuIcon } from './HuIcon';
+import { WaveDots } from './WaveDots';
 
 @Component
 export struct AgentCard {
@@ -146,8 +147,34 @@ export struct AgentCard {
     return 'PR';
   }
 
+  private repoLabel(): string {
+    if (this.agent.repos && this.agent.repos.length > 0) {
+      const name = repoTail(this.agent.repos[0].url ?? '');
+      if (name.length > 0) {
+        return name;
+      }
+    }
+    const env = `${this.agent.env?.name ?? ''}`;
+    return env;
+  }
+
+  private footerRepo(): string {
+    if (this.pinned || this.showRepo) {
+      return this.repoLabel();
+    }
+    return '';
+  }
+
+  private hasCorner(): boolean {
+    return this.running() || this.unread;
+  }
+
+  private sidePad(): number {
+    return (this.list ? 14 : Tokens.cardPad) + (this.hasCorner() ? 10 : 0);
+  }
+
   build() {
-    Stack() {
+    Stack({ alignContent: Alignment.TopEnd }) {
       Column({ space: this.list ? 4 : 6 }) {
       Text(this.titleText())
         .fontSize(Tokens.typeBody)
@@ -181,16 +208,21 @@ export struct AgentCard {
       Blank().layoutWeight(1)
 
       Row({ space: 8 }) {
-        if (this.pinned) {
-          Text('置顶')
+        if (this.footerRepo().length > 0) {
+          Text(this.footerRepo())
             .fontSize(Tokens.typeMicro)
             .fontColor($r('app.color.text_tertiary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+            .constraintSize({ minWidth: 0 })
         }
         if (this.statusLabel().length > 0) {
           Text(this.statusLabel())
             .fontSize(Tokens.typeMicro)
             .fontWeight(FontWeight.Medium)
             .fontColor(this.statusColor())
+            .flexShrink(0)
         }
         if (this.prText().length > 0) {
           Row({ space: 3 }) {
@@ -205,16 +237,20 @@ export struct AgentCard {
             })
           }
           .alignItems(VerticalAlign.Center)
+          .flexShrink(0)
           .onClick(() => {
             this.skipOpen = true;
             Haptics.tick();
             this.onOpenPr(firstPrUrl(this.agent));
           })
         }
-        Blank().layoutWeight(1)
+        if (this.footerRepo().length === 0) {
+          Blank().layoutWeight(1)
+        }
         Text(this.timeText())
           .fontSize(Tokens.typeMicro)
           .fontColor(this.running() ? $r('app.color.accent') : $r('app.color.text_tertiary'))
+          .flexShrink(0)
       }
       .width('100%')
       .height(16)
@@ -225,19 +261,19 @@ export struct AgentCard {
     .alignItems(HorizontalAlign.Start)
     .padding(this.list ? {
       left: 14,
-      right: 14,
+      right: this.sidePad(),
       top: 12,
       bottom: 12
     } : {
       left: Tokens.cardPad,
-      right: Tokens.cardPad,
+      right: this.sidePad(),
       top: Tokens.cardPad,
       bottom: Tokens.cardPad
     })
     .backgroundColor(this.active ? $r('app.color.bg2') : (this.pressed ? $r('app.color.bg_hover') : $r('app.color.bg1')))
     .border({
       width: 1,
-      color: this.running() ? $r('app.color.accent') : $r('app.color.border')
+      color: $r('app.color.border')
     })
     .borderRadius(this.list ? 12 : Tokens.radiusCard)
     .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
@@ -264,20 +300,19 @@ export struct AgentCard {
           this.onLong(this.agent);
         })
     )
-      if (this.unread) {
-        Row() {
-          Blank()
-            .layoutWeight(1)
-            .hitTestBehavior(HitTestMode.Transparent)
-          Column()
-            .width(8)
-            .height(8)
-            .borderRadius(4)
-            .backgroundColor($r('app.color.unread_dot'))
-        }
-        .width('100%')
-        .padding({ top: 8, right: 8 })
-        .hitTestBehavior(HitTestMode.Transparent)
+      if (this.running()) {
+        WaveDots({ tint: $r('app.color.text_tertiary') })
+          .margin({ top: 8, right: 8 })
+          .hitTestBehavior(HitTestMode.Transparent)
+      } else if (this.unread) {
+        Column()
+          .width(7)
+          .height(7)
+          .borderRadius(3.5)
+          .backgroundColor($r('app.color.accent'))
+          .border({ width: 1.5, color: this.active ? $r('app.color.bg2') : $r('app.color.bg1') })
+          .margin({ top: 8, right: 8 })
+          .hitTestBehavior(HitTestMode.Transparent)
       }
     }
     .width('100%')

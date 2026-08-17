@@ -3,7 +3,10 @@ import { Tokens } from '../theme/Tokens';
 import { copyToClipboard } from '../utils/Clipboard';
 import { showToast } from '../utils/AppToast';
 import { Haptics } from '../utils/Haptics';
-import { InlineSeg, MdBlock, parseMarkdown, tableRows, tokenizeInline } from '../utils/MarkdownParse';
+import { makeQuoteEditMenu } from '../utils/TextSelectMenu';
+import {
+  citationQuote, InlineSeg, isCitationFence, MdBlock, parseMarkdown, tableRows, tokenizeInline
+} from '../utils/MarkdownParse';
 
 interface TableRow {
   key: string;
@@ -18,11 +21,16 @@ interface TableRow {
 export struct MarkdownLite {
   @Prop content: string = '';
   @Prop compact: boolean = false;
+  /** Nested in a user bubble — boxes stay transparent, no second fill. */
+  @Prop inBubble: boolean = false;
+  /** Pixel cap so quotes / code cannot inflate the bubble past the feed. */
+  @Prop capWidth: number = 0;
   onQuote: (text: string) => void = (_text: string) => {
   };
-  @State private selSrc: string = '';
-  @State private selStart: number = 0;
-  @State private selEnd: number = 0;
+
+  private textCap(): number {
+    return this.capWidth > 0 ? this.capWidth : 8192;
+  }
 
   private proseSize(): number {
     return this.compact ? Tokens.typeCallout : Tokens.typeProse;
@@ -74,7 +82,7 @@ export struct MarkdownLite {
             .fontColor($r('app.color.text_primary'))
             .fontFamily(Tokens.fontMono)
             .fontWeight(FontWeight.Medium)
-            .backgroundColor($r('app.color.code_inline_bg'))
+            .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.code_inline_bg'))
         } else if (seg.url.length > 0) {
           Span(seg.text)
             .fontSize(size)
@@ -112,35 +120,15 @@ export struct MarkdownLite {
     .fontFamily(Tokens.fontUi)
     .lineHeight(line)
     .textAlign(TextAlign.Start)
-    .wordBreak(WordBreak.BREAK_ALL)
-    .copyOption(CopyOptions.InApp)
-    .onTextSelectionChange((start: number, end: number) => {
-      this.selSrc = text;
-      this.selStart = start;
-      this.selEnd = end;
-    })
-    .bindSelectionMenu(TextSpanType.TEXT, this.quoteMenu, TextResponseType.SELECT)
-    .width('100%')
-  }
-
-  @Builder
-  quoteMenu() {
-    Menu() {
-      MenuItem({ content: '引用' })
-        .onClick(() => {
-          let t = '';
-          if (this.selEnd > this.selStart && this.selSrc.length > 0) {
-            t = this.selSrc.substring(this.selStart, this.selEnd);
-          }
-          if (t.trim().length === 0) {
-            t = this.selSrc;
-          }
-          const q = t.trim();
-          if (q.length > 0) {
-            this.onQuote(q);
-          }
-        })
-    }
+    .wordBreak(WordBreak.BREAK_WORD)
+    .focusable(true)
+    .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
+    .copyOption(CopyOptions.LocalDevice)
+    .editMenuOptions(makeQuoteEditMenu(text, (q: string) => {
+      this.onQuote(q);
+    }))
+    .constraintSize({ maxWidth: this.textCap() })
+    .width(this.capWidth > 0 ? this.capWidth : '100%')
   }
 
   private softWrapCode(raw: string): string {
@@ -159,7 +147,11 @@ export struct MarkdownLite {
     Column() {
       ForEach(this.blocks(), (b: MdBlock, idx: number) => {
         if (b.kind === 'code') {
-          this.codeBlock(b)
+          if (isCitationFence(b.lang)) {
+            this.citeBlock(citationQuote(b.text))
+          } else {
+            this.codeBlock(b)
+          }
         } else if (b.kind === 'table') {
           this.tableBlock(b.text, idx)
         } else if (b.kind === 'h1') {
@@ -210,7 +202,8 @@ export struct MarkdownLite {
         }
       }, (b: MdBlock, idx: number) => `md-${idx}-${b.kind}-${b.text.length}-${b.indent}`)
     }
-    .width('100%')
+    .constraintSize({ maxWidth: this.textCap() })
+    .width(this.capWidth > 0 ? this.capWidth : '100%')
     .alignItems(HorizontalAlign.Start)
   }
 
@@ -239,13 +232,29 @@ export struct MarkdownLite {
 
   @Builder
   quoteBlock(text: string) {
-    Column() {
+    this.citeBlock(text)
+  }
+
+  @Builder
+  citeBlock(text: string) {
+    Column({ space: 4 }) {
+      Text('引用')
+        .fontSize(Tokens.typeMicro)
+        .fontColor($r('app.color.text_tertiary'))
       this.renderInline(text, this.proseSize(), $r('app.color.text_secondary'), FontWeight.Regular,
         this.proseLine())
     }
-    .width('100%')
-    .padding({ left: 12, right: 4, top: 2, bottom: 2 })
-    .border({ width: { left: 2 }, color: $r('app.color.border_strong') })
+    .constraintSize({ maxWidth: this.textCap() })
+    .width(this.capWidth > 0 ? this.capWidth : '100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: this.inBubble ? 0 : 10, right: this.inBubble ? 0 : 10, top: 2, bottom: 6 })
+    .backgroundColor(Color.Transparent)
+    .border({
+      width: this.inBubble ? 0 : 1,
+      color: $r('app.color.border')
+    })
+    .borderRadius(this.inBubble ? 0 : Tokens.radiusSm)
+    .margin({ top: 0, bottom: 8 })
   }
 
   @Builder
@@ -266,15 +275,16 @@ export struct MarkdownLite {
         }
         .width('100%')
         .alignItems(VerticalAlign.Top)
-        .backgroundColor(ri === 0 ? $r('app.color.bg2') : Color.Transparent)
+        .backgroundColor(ri === 0 && !this.inBubble ? $r('app.color.bg2') : Color.Transparent)
         .border({
           width: { bottom: 1 },
           color: $r('app.color.border')
         })
       }, (row: TableRow) => `${idx}-${row.key}`)
     }
-    .width('100%')
-    .backgroundColor($r('app.color.bg1'))
+    .constraintSize({ maxWidth: this.textCap() })
+    .width(this.capWidth > 0 ? this.capWidth : '100%')
+    .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.bg1'))
     .border({ width: 1, color: $r('app.color.border') })
     .borderRadius(Tokens.radiusSm)
     .clip(true)
@@ -307,20 +317,27 @@ export struct MarkdownLite {
       .height(32)
       .padding({ left: 12, right: 4 })
       .alignItems(VerticalAlign.Center)
-      .backgroundColor($r('app.color.bg2'))
+      .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.bg2'))
 
       Text(b.text)
         .fontSize(Tokens.typeCaption)
         .fontColor($r('app.color.text_primary'))
         .fontFamily(Tokens.fontMono)
         .lineHeight(Tokens.lineCaption + 2)
-        .width('100%')
+        .constraintSize({ maxWidth: this.textCap() })
+        .width(this.capWidth > 0 ? this.capWidth : '100%')
         .wordBreak(WordBreak.BREAK_ALL)
-        .copyOption(CopyOptions.None)
+        .focusable(true)
+        .textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE)
+        .copyOption(CopyOptions.LocalDevice)
+        .editMenuOptions(makeQuoteEditMenu(b.text, (q: string) => {
+          this.onQuote(q);
+        }))
         .padding({ left: 12, right: 12, top: 10, bottom: 14 })
     }
-    .width('100%')
-    .backgroundColor($r('app.color.code_bg'))
+    .constraintSize({ maxWidth: this.textCap() })
+    .width(this.capWidth > 0 ? this.capWidth : '100%')
+    .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.code_bg'))
     .border({ width: 1, color: $r('app.color.border') })
     .borderRadius(Tokens.radiusMd)
     .clip(true)

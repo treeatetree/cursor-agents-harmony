@@ -6,6 +6,7 @@ import {
 import { unwrapCreateAgent, unwrapModels } from '../api/ApiUnwrap';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { AgentCache } from '../store/AgentCache';
+import { ApiKeyStore } from '../store/ApiKeyStore';
 import { PrefStore } from '../store/PrefStore';
 import { recencyMs } from '../utils/InboxGrouping';
 import {
@@ -18,6 +19,7 @@ import { util } from '@kit.ArkTS';
 
 const TAG = 'NewAgentVM';
 const REPO_COOLDOWN_MS = 60 * 1000;
+const META_WARM_MS = 10 * 60 * 1000;
 const REPO_LIMIT_MSG = '仓库列表每分钟只能刷新一次，请稍后再试';
 
 let reposInFlight: Promise<RepoInfo[]> | undefined = undefined;
@@ -550,4 +552,28 @@ interface ModelLoose {
   description?: string;
   params?: Object[];
   parameters?: Object[];
+}
+
+export async function warmCreateMeta(): Promise<void> {
+  if (!ApiKeyStore.getInstance().isUnlocked()) {
+    return;
+  }
+  const cache = AgentCache.getInstance();
+  if (cache.isStale(cache.modelsFetchedAt(), META_WARM_MS)) {
+    try {
+      const modelResp = await CursorApiClient.getInstance().listModels();
+      cache.saveModels(normalizeModels(modelResp));
+    } catch (_e) {
+    }
+  }
+  if (cache.isStale(cache.reposFetchedAt(), META_WARM_MS)) {
+    const lastTry = Math.max(cache.reposFetchedAt(), lastReposAttemptAt);
+    if (lastTry > 0 && (Date.now() - lastTry) < REPO_COOLDOWN_MS) {
+      return;
+    }
+    try {
+      await fetchReposShared();
+    } catch (_e) {
+    }
+  }
 }

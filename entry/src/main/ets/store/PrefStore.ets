@@ -42,6 +42,7 @@ export class PrefStore {
   private pref: preferences.Preferences | undefined = undefined;
   private aliasById: Record<string, string> = {};
   private lastSeenById: Record<string, string> = {};
+  private pinnedIds: string[] | undefined = undefined;
 
   static getInstance(): PrefStore {
     if (!PrefStore.instance) {
@@ -70,6 +71,7 @@ export class PrefStore {
       SessionDiag.setEnabled(diagOn);
       this.aliasById = await this.loadStringMap(KEY_ALIAS);
       this.lastSeenById = await this.loadStringMap(KEY_LAST_SEEN);
+      this.pinnedIds = await this.readPinnedIds();
     } catch (e) {
       Log.warn(TAG, `init failed: ${JSON.stringify(e)}`);
     }
@@ -366,6 +368,27 @@ export class PrefStore {
   }
 
   async getPinnedIds(): Promise<string[]> {
+    if (this.pinnedIds !== undefined) {
+      return this.pinnedIds.slice();
+    }
+    this.pinnedIds = await this.readPinnedIds();
+    return this.pinnedIds.slice();
+  }
+
+  async setPinnedIds(ids: string[]): Promise<void> {
+    this.pinnedIds = ids.slice();
+    try {
+      AppStorage.setOrCreate('pinRev', Date.now());
+    } catch (_e) {
+    }
+    if (!this.pref) {
+      return;
+    }
+    await this.pref.put(KEY_INBOX_PINNED, JSON.stringify(ids));
+    await this.pref.flush();
+  }
+
+  private async readPinnedIds(): Promise<string[]> {
     if (!this.pref) {
       return [];
     }
@@ -376,14 +399,6 @@ export class PrefStore {
     } catch (_e) {
       return [];
     }
-  }
-
-  async setPinnedIds(ids: string[]): Promise<void> {
-    if (!this.pref) {
-      return;
-    }
-    await this.pref.put(KEY_INBOX_PINNED, JSON.stringify(ids));
-    await this.pref.flush();
   }
 
   async getTypePref(): Promise<string> {

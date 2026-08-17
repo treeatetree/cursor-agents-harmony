@@ -9,6 +9,7 @@ import { Log } from '../utils/Log';
 
 const TAG = 'CursorApi';
 const BASE = 'https://api.cursor.com';
+const EMPTY_BODY: Record<string, Object> = {};
 const RETRY_DELAYS_MS: number[] = [1000, 2000, 4000, 8000];
 const MAX_RETRIES = 3;
 const MAX_BACKOFF_MS = 30000;
@@ -132,17 +133,17 @@ export class CursorApiClient {
 
   async cancelRun(agentId: string, runId: string): Promise<object> {
     return await this.request<object>('POST',
-      `/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/cancel`);
+      `/v1/agents/${encodeURIComponent(agentId)}/runs/${encodeURIComponent(runId)}/cancel`, EMPTY_BODY);
   }
 
   async archiveAgent(agentId: string): Promise<object> {
     return await this.request<object>('POST',
-      `/v1/agents/${encodeURIComponent(agentId)}/archive`);
+      `/v1/agents/${encodeURIComponent(agentId)}/archive`, EMPTY_BODY);
   }
 
   async unarchiveAgent(agentId: string): Promise<object> {
     return await this.request<object>('POST',
-      `/v1/agents/${encodeURIComponent(agentId)}/unarchive`);
+      `/v1/agents/${encodeURIComponent(agentId)}/unarchive`, EMPTY_BODY);
   }
 
   async deleteAgent(agentId: string): Promise<object> {
@@ -281,6 +282,8 @@ export class CursorApiClient {
         message = 'Cursor 创建任务繁忙，请稍后再发';
       } else if (code === 503) {
         message = '服务繁忙，请稍后重试';
+      } else {
+        message = sanitizeApiMessage(message, `请求失败（${code}）`);
       }
       throw new ApiException(code, message, apiCode, retryable);
     } catch (e) {
@@ -300,4 +303,24 @@ function looksLikeConcurrencyLimit(message: string): boolean {
   return low.indexOf('limit') >= 0 || low.indexOf('upgrade') >= 0 ||
     low.indexOf('simultaneous') >= 0 || low.indexOf('concurrent') >= 0 ||
     message.indexOf('上限') >= 0 || message.indexOf('同时') >= 0;
+}
+
+/** Drop raw JSON / HTML / "body..." so toasts stay readable. */
+function sanitizeApiMessage(message: string, fallback: string): string {
+  const t = (message ?? '').trim();
+  if (t.length === 0) {
+    return fallback;
+  }
+  const head = t.substring(0, 1);
+  if (head === '{' || head === '[' || head === '<') {
+    return fallback;
+  }
+  const low = t.toLowerCase();
+  if (low.indexOf('body') === 0 || low.indexOf('"body"') >= 0 || low.indexOf('request body') >= 0) {
+    return fallback;
+  }
+  if (t.length > 96) {
+    return fallback;
+  }
+  return t;
 }
