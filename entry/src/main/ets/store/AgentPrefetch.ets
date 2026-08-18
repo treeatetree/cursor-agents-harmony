@@ -292,6 +292,14 @@ export class AgentPrefetch {
       return miss;
     } finally {
       this.inflight[agentId] = false;
+      const next: Record<string, Promise<PrefetchHit>> = {};
+      const ids = Object.keys(this.inflightJobs);
+      for (let i = 0; i < ids.length; i++) {
+        if (ids[i] !== agentId) {
+          next[ids[i]] = this.inflightJobs[ids[i]];
+        }
+      }
+      this.inflightJobs = next;
     }
   }
 }

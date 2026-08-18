@@ -21,6 +21,7 @@ export class NetworkMonitor {
       return;
     }
     try {
+      this.setOnline(connection.hasDefaultNetSync());
       this.netCap = connection.createNetConnection();
       this.netCap.register(() => {
       });

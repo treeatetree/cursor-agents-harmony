@@ -5,6 +5,7 @@ import { Sounds } from '../utils/Sounds';
 import { Notify } from '../utils/Notify';
 import { SessionDiag } from '../utils/SessionDiag';
 import { Log } from '../utils/Log';
+import { CacheCrypto } from './CacheCrypto';
 
 const TAG = 'PrefStore';
 const PREF_NAME = 'cursor_prefs';
@@ -37,10 +38,12 @@ const KEY_UNREAD = 'unread_items';
 const KEY_QUEUED = 'queued_followup';
 const KEY_QUEUED_IMGS = 'queued_followup_imgs';
 const KEY_CREATE_SEED = 'create_seed';
+const KEY_PENDING_OPS = 'pending_operation_ids';
 
 export class PrefStore {
   private static instance: PrefStore | undefined = undefined;
   private pref: preferences.Preferences | undefined = undefined;
+  private initTask: Promise<void> | undefined = undefined;
   private aliasById: Record<string, string> = {};
   private lastSeenById: Record<string, string> = {};
   private pinnedIds: string[] | undefined = undefined;
@@ -53,11 +56,25 @@ export class PrefStore {
   }
 
   async init(context: common.UIAbilityContext): Promise<void> {
+    if (this.initTask) {
+      await this.initTask;
+      return;
+    }
     if (this.pref) {
       return;
     }
+    this.initTask = this.initialize(context);
+    try {
+      await this.initTask;
+    } finally {
+      this.initTask = undefined;
+    }
+  }
+
+  private async initialize(context: common.UIAbilityContext): Promise<void> {
     try {
       this.pref = await preferences.getPreferences(context, PREF_NAME);
+      await CacheCrypto.getInstance().init(context);
       // Sync haptics gate into process-local cache.
       const enabled = await this.getHapticsEnabled();
       Haptics.setEnabled(enabled);
@@ -513,7 +530,7 @@ export class PrefStore {
       return '';
     }
     try {
-      const raw = (await this.pref.get(KEY_QUEUED, '{}')) as string;
+      const raw = await this.readSensitiveString(KEY_QUEUED, '{}');
       const map = JSON.parse(raw) as Record<string, string>;
       return map[agentId] ?? '';
     } catch (_e) {
@@ -527,7 +544,7 @@ export class PrefStore {
     }
     let map: Record<string, string> = {};
     try {
-      const raw = (await this.pref.get(KEY_QUEUED, '{}')) as string;
+      const raw = await this.readSensitiveString(KEY_QUEUED, '{}');
       map = JSON.parse(raw) as Record<string, string>;
     } catch (_e) {
       map = {};
@@ -545,8 +562,7 @@ export class PrefStore {
     } else {
       map[agentId] = text;
     }
-    await this.pref.put(KEY_QUEUED, JSON.stringify(map));
-    await this.pref.flush();
+    await this.writeSensitiveString(KEY_QUEUED, JSON.stringify(map));
   }
 
   async getQueuedImageCount(agentId: string): Promise<number> {
@@ -613,18 +629,48 @@ export class PrefStore {
   }
 
   async getCreateSeed(): Promise<string> {
-    if (!this.pref) {
-      return '';
-    }
-    return (await this.pref.get(KEY_CREATE_SEED, '')) as string;
+    return await this.readSensitiveString(KEY_CREATE_SEED, '');
   }
 
   async setCreateSeed(raw: string): Promise<void> {
-    if (!this.pref) {
+    await this.writeSensitiveString(KEY_CREATE_SEED, raw);
+  }
+
+  async getPendingOperationId(scope: string): Promise<string> {
+    if (scope.length === 0) {
+      return '';
+    }
+    const map = await this.loadStringMap(KEY_PENDING_OPS);
+    return map[scope] ?? '';
+  }
+
+  async setPendingOperationId(scope: string, opId: string): Promise<void> {
+    if (!this.pref || scope.length === 0) {
       return;
     }
-    await this.pref.put(KEY_CREATE_SEED, raw);
-    await this.pref.flush();
+    const map = await this.loadStringMap(KEY_PENDING_OPS);
+    if (opId.length === 0) {
+      const next: Record<string, string> = {};
+      const keys = Object.keys(map);
+      for (let i = 0; i < keys.length; i++) {
+        if (keys[i] !== scope) {
+          next[keys[i]] = map[keys[i]];
+        }
+      }
+      await this.saveStringMap(KEY_PENDING_OPS, next);
+      return;
+    }
+    map[scope] = opId;
+    const keys = Object.keys(map);
+    if (keys.length > 64) {
+      const capped: Record<string, string> = {};
+      for (let i = keys.length - 64; i < keys.length; i++) {
+        capped[keys[i]] = map[keys[i]];
+      }
+      await this.saveStringMap(KEY_PENDING_OPS, capped);
+      return;
+    }
+    await this.saveStringMap(KEY_PENDING_OPS, map);
   }
 
   async clearAccountLocal(): Promise<void> {
@@ -632,10 +678,11 @@ export class PrefStore {
       return;
     }
     await this.pref.put(KEY_UNREAD, '[]');
-    await this.pref.put(KEY_QUEUED, '{}');
+    await this.pref.put(KEY_QUEUED, '');
     await this.pref.put(KEY_QUEUED_IMGS, '{}');
     await this.pref.put(KEY_LAST_EVENT, '{}');
     await this.pref.put(KEY_CREATE_SEED, '');
+    await this.pref.put(KEY_PENDING_OPS, '{}');
     await this.pref.flush();
   }
 
@@ -651,6 +698,46 @@ export class PrefStore {
     const map = await this.loadEventMap();
     map[`${agentId}:${runId}`] = eventId;
     await this.pref.put(KEY_LAST_EVENT, JSON.stringify(map));
+    await this.pref.flush();
+  }
+
+  private async readSensitiveString(key: string, fallback: string): Promise<string> {
+    if (!this.pref) {
+      return fallback;
+    }
+    const raw = (await this.pref.get(key, fallback)) as string;
+    if (raw.length === 0) {
+      return fallback;
+    }
+    const crypto = CacheCrypto.getInstance();
+    const opened = crypto.open(raw);
+    if (opened.length === 0) {
+      return fallback;
+    }
+    if (!crypto.isSealed(raw)) {
+      const migrated = crypto.seal(opened);
+      if (migrated.length > 0) {
+        await this.pref.put(key, migrated);
+        await this.pref.flush();
+      }
+    }
+    return opened;
+  }
+
+  private async writeSensitiveString(key: string, raw: string): Promise<void> {
+    if (!this.pref) {
+      return;
+    }
+    if (raw.length === 0) {
+      await this.pref.put(key, '');
+      await this.pref.flush();
+      return;
+    }
+    const sealed = CacheCrypto.getInstance().seal(raw);
+    if (sealed.length === 0) {
+      throw new Error('sensitive preference encryption unavailable');
+    }
+    await this.pref.put(key, sealed);
     await this.pref.flush();
   }
 

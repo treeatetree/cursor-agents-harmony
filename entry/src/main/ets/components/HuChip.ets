@@ -1,6 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
-import { motionMs, pressMs, pressScaleOf } from '../utils/Motion';
+import { pressMs, pressScaleOf } from '../utils/Motion';
 
 /**
  * Chip: visual 32. Composer toolbar is 44 and centers this; do not wrap to 44
@@ -43,40 +43,44 @@ export struct HuChip {
   }
 
   build() {
-    Text(this.label)
-      .fontSize(Tokens.typeMicro)
-      .fontWeight(this.on ? FontWeight.Medium : FontWeight.Regular)
-      .fontColor(this.ink())
-      .maxLines(1)
-      .textOverflow({ overflow: TextOverflow.Ellipsis })
-      .height(32)
-      .padding({ left: 10, right: 10 })
-      .textAlign(TextAlign.Center)
-      .backgroundColor(this.wash())
-      .borderRadius(Tokens.radiusChip)
-      .border({
-        width: 1,
-        color: this.line()
-      })
-      .constraintSize({ maxWidth: this.maxVp > 0 ? this.maxVp : 280 })
-      .flexShrink(0)
-      .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
-      .opacity(this.pressed ? 0.82 : 1)
-      .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
-      .onTouch((e: TouchEvent) => {
-        if (e.type === TouchType.Down) {
-          this.pressed = true;
-        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-          this.pressed = false;
-        }
-      })
-      .gesture(
-        TapGesture()
-          .onAction(() => {
-            Haptics.tick();
-            this.onTap();
-          })
-      )
+    Row() {
+      Text(this.label)
+        .fontSize(Tokens.typeMicro)
+        .fontWeight(this.on ? FontWeight.Medium : FontWeight.Regular)
+        .fontColor(this.ink())
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+    }
+    .height(32)
+    .padding({ left: 10, right: 10 })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .backgroundColor(this.wash())
+    .borderRadius(Tokens.radiusChip)
+    .border({
+      width: 1,
+      color: this.line()
+    })
+    .constraintSize({ maxWidth: this.maxVp > 0 ? this.maxVp : 280 })
+    .flexShrink(0)
+    .alignSelf(ItemAlign.Start)
+    .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
+    .opacity(this.pressed ? 0.82 : 1)
+    .animation({ duration: pressMs(), curve: Curve.EaseOut })
+    .onTouch((e: TouchEvent) => {
+      if (e.type === TouchType.Down) {
+        this.pressed = true;
+      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        this.pressed = false;
+      }
+    })
+    .gesture(
+      TapGesture()
+        .onAction(() => {
+          Haptics.tick();
+          this.onTap();
+        })
+    )
   }
 }
 

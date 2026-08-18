@@ -12,6 +12,7 @@ const TAG = 'AgentCache';
 const LRU_MAX = 80;
 const DISK_HARD_MAX = 2000;
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
+const CACHE_FILE_MAX_BYTES = 32 * 1024 * 1024;
 
 interface InboxFile {
   schema: number;
@@ -473,9 +474,6 @@ export class AgentCache {
     this.summariesLoaded = false;
     this.sweepAgentFiles();
     this.sweepQueueDirs();
-    CacheCrypto.getInstance().clear().catch((e: Object) => {
-      Log.warn(TAG, `crypto clear failed: ${JSON.stringify(e)}`);
-    });
   }
 
   private readInboxFile(): InboxFile | undefined {
@@ -678,8 +676,12 @@ export class AgentCache {
   private readJson<T>(name: string): T | undefined {
     try {
       const p = this.pathOf(name);
-      const file = fs.openSync(p, fs.OpenMode.READ_ONLY);
       const stat = fs.statSync(p);
+      if (stat.size <= 0 || stat.size > CACHE_FILE_MAX_BYTES) {
+        Log.warn(TAG, `skip oversized cache ${name}`);
+        return undefined;
+      }
+      const file = fs.openSync(p, fs.OpenMode.READ_ONLY);
       const buf = new ArrayBuffer(stat.size);
       fs.readSync(file.fd, buf);
       fs.closeSync(file);
@@ -688,7 +690,11 @@ export class AgentCache {
       if (!opened || opened.length === 0) {
         return undefined;
       }
-      return JSON.parse(opened) as T;
+      const parsed = JSON.parse(opened) as T;
+      if (this.shouldSeal(name) && !CacheCrypto.getInstance().isSealed(text)) {
+        this.writeJson(name, parsed as object);
+      }
+      return parsed;
     } catch (_e) {
       return undefined;
     }
@@ -700,6 +706,10 @@ export class AgentCache {
       const tmp = `${p}.tmp`;
       const raw = JSON.stringify(obj);
       const text = this.shouldSeal(name) ? CacheCrypto.getInstance().seal(raw) : raw;
+      if (text.length === 0) {
+        Log.warn(TAG, `write ${name} skipped: encryption unavailable`);
+        return;
+      }
       const bytes = new util.TextEncoder().encodeInto(text);
       const file = fs.openSync(tmp, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       fs.writeSync(file.fd, bytes.buffer);

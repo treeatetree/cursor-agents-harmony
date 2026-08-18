@@ -7,7 +7,7 @@
 
 ## 产品
 
-- 本地：`.`
+- 本地：当前仓库根目录
 - GitHub：`treeatetree/cursor-agents-harmony`（由 `agents-android-shell` 改名）
 - 包名：`com.brian.cursor.mobile`
 - 鸿蒙原生 **Cursor Cloud Agents** 指挥台，直连 `https://api.cursor.com`

@@ -28,7 +28,7 @@ import { PromptImage, toApiImages } from '../utils/ImagePicker';
 import { formatModelSent, modelSentJson, modelSentTags } from '../utils/ModelGroups';
 import { convFingerprint, keepPendingTurns, lastMessageStamp, mergeCachedActivity, restoreUserSentTags } from '../utils/TimelineMerge';
 import { SessionDiag } from '../utils/SessionDiag';
-import { capTimeline } from '../utils/CacheLimit';
+import { appendRuntimeText, capTimeline } from '../utils/CacheLimit';
 import { cacheCoversConversation, cacheCoversDetail } from '../utils/CachePolicy';
 import { isRunInFlight } from '../utils/InboxGrouping';
 import { countNewContent, findUnreadAnchor, lastContentKey, visibleTimeline } from '../utils/TimelineView';
@@ -42,6 +42,7 @@ import { RunStateMachine } from './RunStateMachine';
 import { ArtifactService } from './ArtifactService';
 import { StreamSession } from '../api/StreamSession';
 import { canFlushQueue } from './FollowUpQueue';
+import { isSafeHttpsUrl } from '../utils/SafeUrl';
 
 const TAG = 'DetailVM';
 
@@ -638,16 +639,18 @@ export class DetailVM {
       this.notify();
       return;
     }
+    const opScope = `create:${draft.localId}`;
     try {
-      const opId = OpIdStore.nextId('create');
+      const opId = await OpIdStore.getOrCreate(opScope, 'create');
       const raw = await CursorApiClient.getInstance().createAgent(draft.body, opId);
-      if (this.openGen !== gen) {
-        return;
-      }
       const resp = unwrapCreateAgent(raw as object);
       const agent = resp.agent;
       if (!agent || !agent.id) {
         throw new ApiException(500, '创建响应缺少 id', 'invalid_create', true);
+      }
+      await OpIdStore.clear(opScope);
+      if (this.openGen !== gen) {
+        return;
       }
       const nowIso = agent.updatedAt && agent.updatedAt.length > 0 ? agent.updatedAt :
         (agent.createdAt && agent.createdAt.length > 0 ? agent.createdAt : new Date().toISOString());
@@ -694,6 +697,10 @@ export class DetailVM {
     } catch (e) {
       if (!this.stillSession(gen)) {
         return;
+      }
+      if (e instanceof ApiException && e.code !== 0 && e.apiCode !== 'network' && !e.retryable) {
+        await OpIdStore.clear(opScope).catch(() => {
+        });
       }
       if (e instanceof ApiException && (e.apiCode === 'network' || e.code === 0)) {
         this.unknownSubmit = true;
@@ -840,7 +847,8 @@ export class DetailVM {
 
   async openArtifact(path: string): Promise<string> {
     const resp = await CursorApiClient.getInstance().downloadArtifact(this.agentId, path);
-    return resp.url ?? '';
+    const url = resp.url ?? '';
+    return isSafeHttpsUrl(url) ? url : '';
   }
 
   async unarchive(): Promise<boolean> {
@@ -907,6 +915,16 @@ export class DetailVM {
   }
 
   clearExpandedState(): void {
+    const items = capTimeline(this.source.snapshot());
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      item.pinnedOpen = false;
+      if (item.kind === 'thinking' || item.kind === 'progress' || item.kind === 'tool' ||
+        item.kind === 'step') {
+        item.collapsed = true;
+      }
+    }
+    this.source.replaceAll(items);
     this.notify();
   }
 
@@ -1069,6 +1087,7 @@ export class DetailVM {
     });
     this.bumpInbox();
     InboxVM.getInstance().markUserAt(this.agentId);
+    let opScope = '';
     try {
       const body: Record<string, Object> = {};
       const promptObj: Record<string, Object> = {};
@@ -1092,8 +1111,10 @@ export class DetailVM {
       if (mcp.length > 0) {
         body['mcpServers'] = mcp;
       }
-      const opId = OpIdStore.nextId(`run:${agentId}`);
+      opScope = OpIdStore.bodyScope('run', agentId, body);
+      const opId = await OpIdStore.getOrCreate(opScope, 'run');
       const run = await CursorApiClient.getInstance().createRun(agentId, body, opId);
+      await OpIdStore.clear(opScope);
       if (!this.stillSession(gen, agentId)) {
         return false;
       }
@@ -1157,6 +1178,11 @@ export class DetailVM {
       }
       const apiCode = e instanceof ApiException ? e.apiCode : '';
       const apiN = e instanceof ApiException ? e.code : -1;
+      if (opScope.length > 0 && e instanceof ApiException && e.code !== 0 &&
+        e.apiCode !== 'network' && !e.retryable) {
+        await OpIdStore.clear(opScope).catch(() => {
+        });
+      }
       SessionDiag.emit({
         tag: TAG,
         event: 'follow',
@@ -1942,8 +1968,9 @@ export class DetailVM {
       const st = parseJson(frame.data);
       const text = `${st['text'] ?? ''}`;
       if (text.length > 0) {
-        this.resultText = text;
-        this.ensureFinalAssistant(text);
+        const safeText = appendRuntimeText('', text);
+        this.resultText = safeText;
+        this.ensureFinalAssistant(safeText);
       }
       const git = st['git'];
       if (git) {
@@ -1984,7 +2011,7 @@ export class DetailVM {
     const idx = this.source.findIndexByKey(key);
     if (idx >= 0) {
       this.source.mutateAt(idx, (item: TimelineItem) => {
-        item.text = `${item.text ?? ''}${delta}`;
+        item.text = appendRuntimeText(item.text ?? '', delta);
         item.streaming = true;
         item.runId = this.activeRunId;
         if (item.pinnedOpen !== true) {
@@ -1997,7 +2024,7 @@ export class DetailVM {
       key: key,
       kind: 'thinking',
       runId: this.activeRunId,
-      text: delta,
+      text: appendRuntimeText('', delta),
       collapsed: true,
       streaming: true
     });
@@ -2009,7 +2036,7 @@ export class DetailVM {
       const idx = this.source.findIndexByKey(this.activeAssistantKey);
       if (idx >= 0) {
         this.source.mutateAt(idx, (item: TimelineItem) => {
-          item.text = `${item.text ?? ''}${delta}`;
+          item.text = appendRuntimeText(item.text ?? '', delta);
           item.streaming = true;
         });
         return;
@@ -2098,7 +2125,7 @@ export class DetailVM {
         key: key,
         kind: 'progress',
         runId: this.activeRunId,
-        text: delta,
+        text: appendRuntimeText('', delta),
         collapsed: true,
         streaming: true,
         stepCount: 1
@@ -2112,7 +2139,7 @@ export class DetailVM {
       return;
     }
     this.source.mutateAt(idx, (item: TimelineItem) => {
-      item.text = `${item.text ?? ''}${delta}`;
+      item.text = appendRuntimeText(item.text ?? '', delta);
       item.streaming = true;
       if (item.pinnedOpen !== true) {
         item.collapsed = true;
@@ -2158,7 +2185,7 @@ export class DetailVM {
       key: key,
       kind: 'assistant',
       runId: this.activeRunId,
-      text: text,
+      text: appendRuntimeText('', text),
       streaming: true
     });
   }
@@ -2199,7 +2226,7 @@ export class DetailVM {
         const cur = this.source.getData(idx);
         if ((cur.text ?? '').trim().length === 0) {
           this.source.mutateAt(idx, (item: TimelineItem) => {
-            item.text = text;
+            item.text = appendRuntimeText('', text);
           });
         }
         return;
@@ -2706,7 +2733,7 @@ export class DetailVM {
       });
     }
     if (run.result && run.result.length > 0) {
-      this.resultText = run.result;
+      this.resultText = appendRuntimeText('', run.result);
     }
     if (run.git && run.git.branches) {
       this.branches = run.git.branches;

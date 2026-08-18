@@ -34,6 +34,7 @@ export class CacheCrypto {
   private pref: preferences.Preferences | undefined = undefined;
   private dataKey: Uint8Array | undefined = undefined;
   private ready: boolean = false;
+  private initTask: Promise<void> | undefined = undefined;
 
   static getInstance(): CacheCrypto {
     if (!CacheCrypto.instance) {
@@ -46,10 +47,27 @@ export class CacheCrypto {
     return this.ready && this.dataKey !== undefined;
   }
 
+  isSealed(raw: string): boolean {
+    return raw.indexOf('"enc":1') >= 0;
+  }
+
   async init(context: common.UIAbilityContext): Promise<void> {
     if (this.ready) {
       return;
     }
+    if (this.initTask) {
+      await this.initTask;
+      return;
+    }
+    this.initTask = this.initialize(context);
+    try {
+      await this.initTask;
+    } finally {
+      this.initTask = undefined;
+    }
+  }
+
+  private async initialize(context: common.UIAbilityContext): Promise<void> {
     try {
       this.pref = await preferences.getPreferences(context, PREF_NAME);
       await this.ensureWrapKey();
@@ -62,6 +80,12 @@ export class CacheCrypto {
   }
 
   async clear(): Promise<void> {
+    if (this.initTask) {
+      try {
+        await this.initTask;
+      } catch (_e) {
+      }
+    }
     this.dataKey = undefined;
     this.ready = false;
     if (this.pref) {
@@ -80,7 +104,8 @@ export class CacheCrypto {
 
   seal(plain: string): string {
     if (!this.dataKey) {
-      return plain;
+      Log.warn(TAG, 'seal skipped: key unavailable');
+      return '';
     }
     try {
       const iv = cryptoFramework.createRandom().generateRandomSync(12).data;
@@ -90,12 +115,12 @@ export class CacheCrypto {
       return JSON.stringify(env);
     } catch (e) {
       Log.warn(TAG, `seal failed: ${errMsg(e)}`);
-      return plain;
+      return '';
     }
   }
 
   open(raw: string): string {
-    if (!raw || raw.indexOf('"enc":1') < 0) {
+    if (!raw || !this.isSealed(raw)) {
       return raw;
     }
     if (!this.dataKey) {

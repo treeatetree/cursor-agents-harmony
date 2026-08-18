@@ -3,7 +3,8 @@ import { isBlockedLinkScheme, isInAppBrowserUrl, isSafeHttpsUrl, parseHttpUrl } 
 import { repoIdentity } from '../main/ets/utils/DisplayFmt';
 import { canApplyRunStatus, isInFlightStatus, isTerminalStatus, phaseFromRun, pickNewerIso } from '../main/ets/utils/RunState';
 import { canFlushQueue, emptyQueue } from '../main/ets/viewmodels/FollowUpQueue';
-import { capMessages, capTimeline, clipText, CACHE_TEXT_MAX, CACHE_TIMELINE_MAX_ITEMS } from '../main/ets/utils/CacheLimit';
+import { appendRuntimeText, capMessages, capTimeline, clipText, CACHE_TEXT_MAX,
+  CACHE_TIMELINE_MAX_ITEMS } from '../main/ets/utils/CacheLimit';
 import { sanitizeDiagExtra } from '../main/ets/utils/SessionDiag';
 import { isLiveWaitItem, isOpaqueStepLabel, isShowableImageUrl, imageUrlsFromMessage, imageUrlsFromText } from '../main/ets/utils/TimelineMedia';
 import { meaningfulStepTitle } from '../main/ets/utils/TimelineCopy';
@@ -12,6 +13,7 @@ import { noticeTextFromLaunch, showUnreadFromLaunch } from '../main/ets/utils/Wa
 import { parseMarkdown } from '../main/ets/utils/MarkdownParse';
 import { ConversationMessage } from '../main/ets/models/Api';
 import { TimelineItem } from '../main/ets/models/Timeline';
+import { hashOperationBody } from '../main/ets/store/OpIdStore';
 
 function fillText(ch: string, n: number): string {
   let s = '';
@@ -118,6 +120,21 @@ export default function safeUrlTest() {
       expect(out[0].text.length).assertEqual(CACHE_TEXT_MAX);
       expect(out[0].createdAt).assertEqual('2026-08-18T00:00:00.000Z');
       expect((out[0].images ?? []).length).assertEqual(1);
+    });
+
+    it('caps streaming text with an explicit marker', 0, () => {
+      const out = appendRuntimeText('12345678901234567890', 'abcdefghijklmnopqrst', 32);
+      expect(out.length).assertEqual(32);
+      expect(out.indexOf('截断') >= 0).assertTrue();
+      expect(appendRuntimeText(out, 'later', 32)).assertEqual(out);
+    });
+  });
+
+  describe('OperationId', () => {
+    it('hashes the same request body deterministically', 0, () => {
+      const body = '{"prompt":{"text":"hi"}}';
+      expect(hashOperationBody(body)).assertEqual(hashOperationBody(body));
+      expect(hashOperationBody(body) === hashOperationBody('{"prompt":{"text":"bye"}}')).assertFalse();
     });
   });
 

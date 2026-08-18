@@ -5,12 +5,26 @@ export const CACHE_TEXT_MAX = 32 * 1024;
 export const CACHE_SUMMARY_MAX = 240;
 export const CACHE_TIMELINE_MAX_ITEMS = 400;
 export const CACHE_MESSAGES_MAX = 200;
+export const RUNTIME_TEXT_MAX = 256 * 1024;
+const TRUNCATED_SUFFIX = '\n\n[内容过长，已截断]';
 
 export function clipText(s: string, maxN: number = CACHE_TEXT_MAX): string {
   if (!s || s.length <= maxN) {
     return s ?? '';
   }
   return s.substring(0, maxN);
+}
+
+export function appendRuntimeText(current: string, delta: string, maxN: number = RUNTIME_TEXT_MAX): string {
+  if (current.endsWith(TRUNCATED_SUFFIX) || delta.length === 0) {
+    return current;
+  }
+  if (current.length + delta.length <= maxN) {
+    return `${current}${delta}`;
+  }
+  const keep = Math.max(0, maxN - TRUNCATED_SUFFIX.length);
+  const combined = `${current}${delta}`;
+  return `${combined.substring(0, keep)}${TRUNCATED_SUFFIX}`;
 }
 
 export function capTimeline(items: TimelineItem[]): TimelineItem[] {

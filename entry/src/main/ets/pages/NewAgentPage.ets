@@ -86,6 +86,7 @@ export struct NewAgentPage {
   @State paramStamp: string = '';
   @State modelChipLabel: string = '自动';
   @State windowW: number = 360;
+  @State windowH: number = 780;
   @State topInset: number = 0;
   @State bottomInset: number = 0;
   @State imageNames: string[] = [];
@@ -108,10 +109,12 @@ export struct NewAgentPage {
     this.topInset = this.embedded ? 8 : this.bp.safeTop();
     this.bottomInset = this.bp.composerBottom();
     this.windowW = this.bp.widthVp;
+    this.windowH = this.bp.heightVp;
     this.unsubBp = this.bp.onChange(() => {
       this.topInset = this.embedded ? 8 : this.bp.safeTop();
       this.bottomInset = this.bp.composerBottom();
       this.windowW = this.bp.widthVp;
+      this.windowH = this.bp.heightVp;
     });
     this.vm.hydrateFromCache();
     this.syncFromVm();
@@ -154,6 +157,18 @@ export struct NewAgentPage {
   private closeSheet(): void {
     this.showSheet = false;
     this.showBindSheet = false;
+  }
+
+  private sheetMaxVp(): number {
+    const h = this.windowH > 0 ? this.windowH : this.bp.heightVp;
+    const ratio = this.embedded ? 0.85 : 0.62;
+    const cap = Math.floor(h * ratio);
+    return cap > 280 ? cap : 280;
+  }
+
+  private sheetScrollMaxVp(): number {
+    const max = this.sheetMaxVp() - Tokens.sheetPadTop - Tokens.sheetPadBottom - 52;
+    return max > 160 ? max : 160;
   }
 
   private scheduleDraftSave(text: string): void {
@@ -796,15 +811,9 @@ export struct NewAgentPage {
           this.sheetBody()
         }
         .width('100%')
-        .constraintSize({ maxHeight: '85%' })
+        .constraintSize({ maxHeight: this.sheetMaxVp() })
         .backgroundColor($r('app.color.overlay'))
         .borderRadius({ topLeft: Tokens.radiusSheet, topRight: Tokens.radiusSheet })
-        .padding({
-          left: Tokens.sheetPadH,
-          right: Tokens.sheetPadH,
-          top: Tokens.sheetPadTop,
-          bottom: Tokens.sheetPadBottom
-        })
       }
       this.noticeDock()
     }
@@ -1153,9 +1162,11 @@ export struct NewAgentPage {
           TextInput({ text: this.agentName, placeholder: '空着则按任务自动起名' })
             .height(Tokens.touchMin)
             .width('100%')
+            .constraintSize({ minHeight: Tokens.touchMin, maxHeight: Tokens.touchMin })
             .fontSize(Tokens.typeCallout)
             .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
             .placeholderColor($r('app.color.text_placeholder'))
+            .fontColor($r('app.color.text_primary'))
             .maxLength(100)
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
@@ -1182,11 +1193,13 @@ export struct NewAgentPage {
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .layoutWeight(1)
+      .constraintSize({ maxHeight: this.sheetScrollMaxVp() })
+      .align(Alignment.TopStart)
       .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%')
-    .height('100%')
+    .constraintSize({ maxHeight: this.sheetMaxVp() })
     .padding({
       left: Tokens.sheetPadH,
       right: Tokens.sheetPadH,
@@ -1194,7 +1207,7 @@ export struct NewAgentPage {
       bottom: Tokens.sheetPadBottom
     })
     .alignItems(HorizontalAlign.Start)
-    .backgroundColor($r('app.color.bg0'))
+    .backgroundColor($r('app.color.overlay'))
     .onDisAppear(() => {
       this.vm.mcpServers = this.mcpServers;
       this.vm.subagents = this.subagents;
@@ -1264,9 +1277,9 @@ export struct NewAgentPage {
         })
       }
       .width('100%')
-      .layoutWeight(1)
+      .constraintSize({ maxHeight: this.sheetScrollMaxVp() })
       .scrollBar(BarState.Off)
-      .align(Alignment.Top)
+      .align(Alignment.TopStart)
       .edgeEffect(EdgeEffect.Spring)
     }
     .padding({
@@ -1276,9 +1289,9 @@ export struct NewAgentPage {
       bottom: Tokens.sheetPadBottom
     })
     .width('100%')
-    .height('100%')
+    .constraintSize({ maxHeight: this.sheetMaxVp() })
     .alignItems(HorizontalAlign.Start)
-    .backgroundColor($r('app.color.bg0'))
+    .backgroundColor($r('app.color.overlay'))
   }
 
   @Builder
@@ -1467,13 +1480,17 @@ export struct NewAgentPage {
         .width('100%')
       McpListEditor({ servers: $mcpServers })
 
-      HuChip({
-        label: '高级',
-        on: this.showAdvanced,
-        onTap: () => {
-          this.showAdvanced = !this.showAdvanced;
-        }
-      })
+      Row() {
+        HuChip({
+          label: '高级',
+          on: this.showAdvanced,
+          onTap: () => {
+            this.showAdvanced = !this.showAdvanced;
+          }
+        })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.Start)
       if (this.showAdvanced) {
         Text('子代理')
           .fontSize(Tokens.typeMicro)

@@ -43,6 +43,7 @@ import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { relativeTime } from '../utils/TimeFmt';
 import { isShowableImageUrl, isOpaqueStepLabel } from '../utils/TimelineMedia';
 import { isWaitingThink, nextUserJumpAt, visibleKeySig, visibleRowSig, visibleTimeline } from '../utils/TimelineView';
+import { isSafeHttpsUrl } from '../utils/SafeUrl';
 import { meaningfulStepTitle, processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug,
   waitingThinkLabel } from '../utils/TimelineCopy';
 import { makeQuoteEditMenu } from '../utils/TextSelectMenu';
@@ -465,7 +466,7 @@ struct AgentDetailPage {
   }
 
   private openLink(link: string, title: string = 'Web'): void {
-    if (!link) {
+    if (!isSafeHttpsUrl(link)) {
       return;
     }
     if (shouldUseInAppBrowser(link)) {
@@ -1294,9 +1295,7 @@ struct AgentDetailPage {
         tone: 'warn',
         action: '重试',
         onAction: () => {
-          this.vm.retryConversation().then(() => {
-            this.sync();
-          });
+          this.runRetry();
         }
       })
     } else if (this.showJump) {
