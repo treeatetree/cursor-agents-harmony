@@ -41,7 +41,7 @@
 - 无线调试端口会变；`hdc list targets` 为 `[Empty]` 时不要硬装
 - 签名：跟踪的 `build-profile.json5` 必须空 `signingConfigs`。本机用 gitignored `build-profile.local.json5`（`build.sh` / `test.sh` 都会 overlay）。
 - 2026-08-18 已换本机调试证书（`default_cursor-agents-harmony_*.p12`），旧 `HM_APP` 材料已从 `~/.ohos/config` 删除。DevEco 自动签名后跑 `./scripts/capture-signing-local.sh`（会把 product 绑到 `signingConfig`）。证书变了要先卸载再装，API Key 可能要重贴。
-- Git 历史里还有**旧**口令；仓是私有的。旧 p12 已删，那些口令签不出新包。
+- Git 历史里的旧口令已于 2026-08-18 `filter-repo` 替换并 force-push。本机旧 `HM_APP` p12 已删。
 
 ---
 
@@ -65,11 +65,8 @@ entry/src/main/ets/
 
 | 项 | 说明 |
 |----|------|
-| 原生选图 → `prompt.images` | API 支持；VM 已有 `imagePayloads`，UI 未接相册 |
-| 从 PR 创建 | 不要用假 Web 按钮顶替 |
-| MCP / 命名环境 / Secrets | 禁假链 |
-| DetailVM 再拆、流式增量 persist | 审查时故意没做 |
-| git history rewrite / force-push | 旧口令仍在历史里；仓私有。换证已完成 |
+| 选图 / MCP / 从 PR | 新建页已有相册、MCP 编辑器和 `prUrl`；不要再做假 Web 入口 |
+| git history 旧口令 | 2026-08-18 已 filter-repo + force-push `main` |
 
 ---
 

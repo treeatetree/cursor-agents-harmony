@@ -11,6 +11,6 @@
 - 服务端 Push / webhook（v1 coming soon）
 - 系统剪贴板一键读写（READ_PASTEBOARD 受限）
 - MCP / Secrets / 命名环境管理
-- git history rewrite / filter-repo / force-push（仓仍私有。本机已换证并删除旧 p12，历史口令已失效但字面量还在）
+- git history rewrite：2026-08-18 已 `filter-repo` 替换历史口令为 `REDACTED_SIGNING_SECRET` 并 force-push `main`。GitHub 服务端旧对象可能仍短暂可见，私有仓风险可接受。
 
 原生主路径直连 api.cursor.com。InAppBrowser 代码保留备用，业务页不再挂假入口。
