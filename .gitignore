@@ -5,7 +5,9 @@
 **/.gradle/
 local.properties
 build-profile.local.json5
+build-profile.local.json5.bak.*
 build-profile.json5.committed
+**/.test/
 .hvigor/
 .idea/
 *.hap

@@ -1,42 +1,47 @@
-# 交接说明（2026-08-08）
+# 交接说明（2026-08-18）
 
-给下一个 agent：先读本文件 + `PARKED.txt` + `.cursor/plans/cloud_agents_原生设计_fef50a12.plan.md`。
-**不要**再做「假 WebView 功能按钮」（点了只打开 Agents 首页那种）——用户已明确骂过，且已清场。
+给下一个 agent：先读本文件 + `PARKED.txt` + `.cursor/HANDOFF-REVIEW.md`。  
+**不要**再做假 WebView 功能按钮。不要改 `.cursor/plans/`。默认不 commit。
 
 ---
 
-## 产品是什么
+## 产品
 
+- 本地：`.`
+- GitHub：`treeatetree/cursor-agents-harmony`（由 `agents-android-shell` 改名）
 - 包名：`com.brian.cursor.mobile`
-- 鸿蒙原生 **Cursor Cloud Agents** 客户端，直连 `https://api.cursor.com`
+- 鸿蒙原生 **Cursor Cloud Agents** 指挥台，直连 `https://api.cursor.com`
 - 主路径：Inbox → 新建 Agent → 详情（对话/SSE/追问/PR）→ 设置（API Key）
-- 设备：HUAWEI Pura X Max（无线调试）；构建 `./scripts/build.sh`，安装 `./scripts/install.sh`
+- 设备：HUAWEI Pura X Max（无线调试）
+- 构建 `./scripts/build.sh`，安装 `./scripts/install.sh`
+
+卓易通 WebView 壳在独立仓 `treeatetree/cursor-agents-android`，本仓不再含 Android 工程。
 
 ---
 
-## 刚完成的一轮（方案 2：清场 + 打磨三页）
+## 2026-08-18 已合入 main（PR #9 squash `3bb63a2`）
 
-计划：`.cursor/plans/清场打磨三页_cc0e4b06.plan.md`（**已实现，勿重复清场**）
+审查加固 + Android 拆仓已在 GitHub `main`。本地应与 `origin/main` 对齐。
 
-已做：
-1. **删光假入口**：添加图片 / 从 PR / 命名环境 / 连接 GitHub / Composer「图片」/ 菜单「带图追问」；设置里「账号与集成」Web 行也删了
-2. **Inbox**：去掉邮箱+刷新噪声条；空态只留「新建任务」；列表 hairline
-3. **新建**：描述 → 仓库（粘贴 URL 折叠）→ 分支 → 模式 → 模型 → 仅两核心开关；高级 PR 选项折叠进「更多选项」；无底部营销块
-4. **详情**：纯文本 Composer；Outcome 有 PR 才强调「查看 PR」+「产物」；时间线密度微调
-5. 删除组件：`FeatureChip.ets`、`FeatureActionRow.ets`（已不存在）
-6. 真机验收过：Inbox / 新建 / 详情布局无假入口（截图在 `.cursor/review-shots/qa/polish-*.jpeg`）
+已做（节选）：
+- Inbox 分组打平为 `header | pair | agent`，单 `LazyForEach`（`InboxFeedSource` + `flattenCardFeed` / `flattenListFeed`）
+- 缓存上限、SessionDiag extra 收紧、ohosTest 桩 + `scripts/test.sh`（走同一套签名 overlay）
+- CI Guard：秘密扫描 + 双列清单；**不在 GitHub 编 HAP**
+- 本仓删除 `android-shell/`、`android-shell-immersive/`、`scripts/install-android.sh`
 
-**未 commit**（用户未要求提交）。工作区大量未跟踪原生代码。
+视觉锁仍有效：beUI；锌浅/深；无绿糖、无左边条；封面/外屏/内屏竖固定双列；`Tokens.cardH = 116`；禁止卡片 `height: '100%'`。
 
 ---
 
 ## 用户偏好 / 雷区
 
-- 体验差时用户会很直接；**不要**用「去 Web 补齐」冒充功能按钮
-- 若以后要 WebView：必须是**真功能**（打开能完成该动作的页面/流程），落在合适交互位，不是泛入口横条
-- 本轮用户选的是「先别管 WebView，专心原生主路径」；MCP/选图/环境先放 `PARKED.txt`
+- 体验差时用户会很直接；不要用「去 Web 补齐」冒充功能
 - 回复用简体中文；不要擅自 commit / push
 - 锁屏时 `install.sh` 可能启动失败（10106102），需用户解锁后再 `aa start`
+- 无线调试端口会变；`hdc list targets` 为 `[Empty]` 时不要硬装
+- 签名：跟踪的 `build-profile.json5` 必须空 `signingConfigs`。本机用 gitignored `build-profile.local.json5`（`build.sh` / `test.sh` 都会 overlay）。
+- 2026-08-18 已换本机调试证书（`default_cursor-agents-harmony_*.p12`），旧 `HM_APP` 材料已从 `~/.ohos/config` 删除。DevEco 自动签名后跑 `./scripts/capture-signing-local.sh`（会把 product 绑到 `signingConfig`）。证书变了要先卸载再装，API Key 可能要重贴。
+- Git 历史里还有**旧**口令；仓是私有的。旧 p12 已删，那些口令签不出新包。
 
 ---
 
@@ -47,40 +52,24 @@ entry/src/main/ets/
   api/          CursorApiClient, RunSseClient, SseParser, StreamCoordinator, ApiUnwrap
   viewmodels/   InboxVM, DetailVM, NewAgentVM, SessionVM
   pages/        Index(Inbox), NewAgentPage, AgentDetailPage, SettingsPage, InAppBrowserPage(备用)
-  components/   AgentRow, ComposerBar, OutcomeStrip, MarkdownLite, ToolCallRow, …
+  datasource/   InboxFeedSource
+  utils/        InboxGrouping, CacheLimit, SafeUrl, CacheCrypto, …
   store/        ApiKeyStore(HUKS), AgentCache, ThemeStore, PrefStore, BreakpointStore
-  models/       Api.ets, Timeline.ets, Sse.ets
 ```
 
-关键链路：
-- 列表：`GET /v1/agents`
-- 对话：`GET /v0/agents/{id}/conversation`（Bearer；详情时间线主数据源，不是只靠 runs）
-- 运行/结果：`GET .../runs` + SSE `.../stream`；OutcomeStrip 用 git.branches / prUrl
-- 创建：`POST /v1/agents`；追问：`POST .../runs`
-
-设计原稿：`.cursor/plans/cloud_agents_原生设计_fef50a12.plan.md`
+页面路由走 Index 的 Navigation（`main_pages.json` 只挂 Index + 锁屏，正常）。
 
 ---
 
-## 已知缺口（可接，但先问用户优先级）
+## 已知缺口（先问优先级）
 
 | 项 | 说明 |
 |----|------|
 | 原生选图 → `prompt.images` | API 支持；VM 已有 `imagePayloads`，UI 未接相册 |
-| 从 PR 创建 | API `repos[].prUrl`；表单未做，不要用假 Web 按钮顶替 |
-| MCP / 命名环境 / Secrets | API/产品不做完整管理；真要做再设计入口，禁假链 |
-| InAppBrowser | 代码仍在；CF/登录可能卡，有「外开」；业务页当前基本不挂 |
-| 对话/时间线体验 | 比早期好多了，但用户整体仍觉得「差很远」——下一轮优先继续打磨原生可读性/密度，别再加假能力 |
-| 视觉 | Tokens + zinc/indigo 已铺；用户要成品感，可继续对照 Linear/Cursor iOS 收细节 |
-
----
-
-## 建议下一 agent 起步
-
-1. 真机装一版，自己点 Inbox / 新建 / 详情 / 设置，建立体感（别只看代码）
-2. 问用户：下一刀是 **详情对话体验**、**新建表单打磨**、还是 **某个真功能（选图/prUrl）**
-3. 改完 `./scripts/build.sh && ./scripts/install.sh`，锁屏要用户解锁
-4. 截图可放 `.cursor/review-shots/qa/`
+| 从 PR 创建 | 不要用假 Web 按钮顶替 |
+| MCP / 命名环境 / Secrets | 禁假链 |
+| DetailVM 再拆、流式增量 persist | 审查时故意没做 |
+| git history rewrite / force-push | 旧口令仍在历史里；仓私有。换证已完成 |
 
 ---
 
@@ -90,5 +79,6 @@ entry/src/main/ets/
 ./scripts/wifi-connect.sh connect <ip:port>
 ./scripts/build.sh
 ./scripts/install.sh
+./scripts/test.sh          # 需要已连接设备
 CURSOR_API_KEY=… python3 ./scripts/api-smoke.py
 ```

@@ -1,10 +1,11 @@
-交付说明（2026-08-08）
+交付说明（2026-08-18）
 
 主路径：鸿蒙原生 Cloud Agents 客户端（com.brian.cursor.mobile）
   - 直连 https://api.cursor.com
-  - 已替换原 ArkWeb / 卓易通网页壳方案
+  - 仓库：treeatetree/cursor-agents-harmony（本地 .）
   - HUKS 存 Key；Inbox/Detail/新建/设置；SSE；Artifacts/usage；分页/归档恢复
 
+2026-08-18：审查加固合入 main（PR #9）；Android 壳拆到 cursor-agents-android。
 2026-08-08 晚：假 WebView 入口已清场，三页原生主路径已收紧。
   → 完整交接见 HANDOFF.txt（给下一个 agent 必读）
   → 后置能力见 PARKED.txt

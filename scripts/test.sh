@@ -13,5 +13,10 @@ HVIGOR_BIN="${HVIGOR_BIN:-$DEVECO_APP/tools/hvigor/bin}"
 export PATH="$JAVA_HOME/bin:$NODE_HOME/bin:$OHPM_BIN:$HVIGOR_BIN:$DEVECO_SDK_HOME/default/openharmony/toolchains:${PATH}"
 
 cd "$ROOT"
+# shellcheck source=signing-overlay.sh
+source "$ROOT/scripts/signing-overlay.sh"
+apply_signing_overlay
+trap restore_signing_overlay EXIT
+
 echo "==> hvigor entry@ohosTest"
 hvigorw --mode module -p module=entry@ohosTest -p product=default test --no-daemon

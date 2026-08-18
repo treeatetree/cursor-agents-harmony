@@ -11,7 +11,7 @@
 鸿蒙原生 **Cursor Cloud Agents 指挥台**，bundle `com.brian.cursor.mobile`。  
 不是聊天 App，不是 IDE。Inbox 是任务队列，详情是对话日志 + 底栏追问。
 
-设备：华为 Pura X Max。无线 hdc `192.168.31.65:33415`。
+设备：华为 Pura X Max。无线 hdc 端口会变；最近一次是 `<device-ip>:33415`。
 
 | 屏 | 约 vp |
 |---|---|
@@ -54,15 +54,13 @@ Token / 色：`entry/src/main/ets/theme/Tokens.ets`，`entry/src/main/resources/
 
 ---
 
-## 这一轮刚落地（未 commit）
+## 当前 Inbox（已合入 main / PR #9）
 
-### Inbox 卡片 — **刚回滚，优先验这个**
+分组列表打平为 `header | pair | agent`，单一 `LazyForEach`（`InboxFeedSource` + `flattenCardFeed` / `flattenListFeed`）。手风琴仍一次只开一组；未标注桶保持展开。切分组 / Split 时 `rebuildFeed()`。
 
-上一任把卡片改成 `height: '100%'` + `SpaceBetween`，双列被撑变形。用户当场否决。
+卡片固定高 `Tokens.cardH = 116` / `listCardH = 68`。**禁止** `height: '100%'`。标题占 2 行高，摘要占 1 行高。
 
-**已改回：** 固定高 `Tokens.cardH = 116` / `listCardH = 68`。标题占 2 行高，摘要占 1 行高，底栏状态 / PR / 时间。摘要优先 cache preview，否则 `latestResult`，再否则仓库名。
-
-审查：双列是否齐平、单行标题是否被垂直居中得难看、摘要是否空、PR 是否误触整卡。
+审查：双列是否齐平、分组展开/收起是否刷新、单行标题是否被垂直居中得难看、摘要是否空、PR 是否误触整卡。
 
 ### 顶栏
 
@@ -110,7 +108,7 @@ Token / 色：`entry/src/main/ets/theme/Tokens.ets`，`entry/src/main/resources/
 
 ## 建议审查顺序（真机）
 
-1. **外屏 Inbox**：双列卡齐平、头像、状态芯片、`+`。
+1. **外屏 Inbox**：双列卡齐平（高 116）、头像、状态芯片、`+`；分组手风琴展开后仍双列。
 2. **头像 sheet**：设置 / 分组 / 排序。
 3. **设置页**：列表行、主题三段、更换 Key。
 4. **新任务**：贴顶输入、左对齐芯片、模型 sheet 中文速度、图片只出相册。
@@ -137,7 +135,7 @@ Token / 色：`entry/src/main/ets/theme/Tokens.ets`，`entry/src/main/resources/
 
 ### 机器
 
-- 仓库：`/Users/brian/Desktop/HM_APP`
+- 仓库：`.`
 - 系统：macOS darwin，shell zsh
 - DevEco Studio：`/Applications/DevEco-Studio.app`
 - SDK：`DEVECO_SDK_HOME` 默认 `/Applications/DevEco-Studio.app/Contents/sdk`
@@ -157,7 +155,7 @@ HDC="/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains
 
 - 机型：华为 Pura X Max（外屏 + 内屏折叠）
 - bundle：`com.brian.cursor.mobile`，ability：`EntryAbility`，版本 `1.0.0` / `1000000`
-- 当前无线调试：`192.168.31.65:33415`（同一 Wi-Fi；端口会变）
+- 当前无线调试：`<device-ip>:33415`（同一 Wi-Fi；端口会变）
 - 锁屏时 `aa start` 失败 **10106102**（开发者模式不能自动解锁）。HAP 仍会装上，让用户解锁后再开 App
 
 连设备：
@@ -167,7 +165,7 @@ HDC="/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains
 ./scripts/wifi-connect.sh status
 
 # 已配对，只重连（无线调试主页上的 IP:调试端口，不是配对端口）
-./scripts/wifi-connect.sh connect 192.168.31.65:33415
+./scripts/wifi-connect.sh connect <device-ip>:33415
 
 # 首次配对（无线调试 → 配对码）
 ./scripts/wifi-connect.sh pair <ip:pairPort> <pairingCode>
@@ -182,7 +180,7 @@ HDC="/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains
 ### 编译安装
 
 ```bash
-cd /Users/brian/Desktop/HM_APP
+cd .
 ./scripts/build.sh && ./scripts/install.sh
 ```
 
@@ -205,7 +203,7 @@ PATH 里没有 `hdc` 时用上面的 `$HDC`。
 ```bash
 # 截当前屏
 "$HDC" shell snapshot_display -f /data/local/tmp/qa.jpeg
-"$HDC" file recv /data/local/tmp/qa.jpeg /Users/brian/Desktop/HM_APP/.cursor/review-shots/qa.jpeg
+"$HDC" file recv /data/local/tmp/qa.jpeg ./.cursor/review-shots/qa.jpeg
 
 # 控件树
 "$HDC" shell uitest dumpLayout -p /data/local/tmp/layout.json
@@ -240,7 +238,7 @@ API Key **不得**出现在 hilog 明文。不要把 Key 写进仓库、截图�
 ### 设计预览（HTML 稿，不是真机）
 
 ```bash
-python3 -m http.server 4311 --directory /Users/brian/Desktop/HM_APP/designs
+python3 -m http.server 4311 --directory ./designs
 ```
 
 打开 `http://localhost:4311/cursor-mobile/Be.html`。禁止 `file://`。

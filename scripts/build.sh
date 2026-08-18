@@ -14,18 +14,10 @@ export PATH="$JAVA_HOME/bin:$NODE_HOME/bin:$OHPM_BIN:$HVIGOR_BIN:$DEVECO_SDK_HOM
 BUILD_MODE="${BUILD_MODE:-debug}"
 
 cd "$ROOT"
-
-if [[ -f "$ROOT/build-profile.local.json5" ]]; then
-  echo "==> using gitignored build-profile.local.json5"
-  cp "$ROOT/build-profile.json5" "$ROOT/build-profile.json5.committed"
-  cp "$ROOT/build-profile.local.json5" "$ROOT/build-profile.json5"
-  restore_profile() {
-    if [[ -f "$ROOT/build-profile.json5.committed" ]]; then
-      mv -f "$ROOT/build-profile.json5.committed" "$ROOT/build-profile.json5"
-    fi
-  }
-  trap restore_profile EXIT
-fi
+# shellcheck source=signing-overlay.sh
+source "$ROOT/scripts/signing-overlay.sh"
+apply_signing_overlay
+trap restore_signing_overlay EXIT
 
 echo "==> DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
 echo "==> BUILD_MODE=$BUILD_MODE"

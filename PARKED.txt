@@ -4,14 +4,13 @@
 2026-08-18：Android 壳拆到 https://github.com/treeatetree/cursor-agents-android ，本仓只保留鸿蒙原生客户端。
 
 2026-08-08：改为 Cloud Agents API 原生客户端。
-
-2026-08-08（清场）：假 WebView「功能按钮」已全部撤回。本轮只打磨原生主路径
-（Inbox / 新建 / 详情）。MCP / 选图 / 命名环境 / 从 PR 创建等以后再做真实现。
+2026-08-08（清场）：假 WebView「功能按钮」已全部撤回。MCP / 选图 / 命名环境 / 从 PR 创建等以后再做真实现。
 
 仍后置（平台或产品限制）：
 - 语音输入（需麦克风 + ASR）
 - 服务端 Push / webhook（v1 coming soon）
 - 系统剪贴板一键读写（READ_PASTEBOARD 受限）
 - MCP / Secrets / 命名环境管理
+- git history rewrite / filter-repo / force-push（仓仍私有。本机已换证并删除旧 p12，历史口令已失效但字面量还在）
 
 原生主路径直连 api.cursor.com。InAppBrowser 代码保留备用，业务页不再挂假入口。
