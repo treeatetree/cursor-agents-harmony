@@ -7,6 +7,8 @@ import { makeQuoteEditMenu } from '../utils/TextSelectMenu';
 import {
   citationQuote, InlineSeg, isCitationFence, MdBlock, parseMarkdown, tableRows, tokenizeInline
 } from '../utils/MarkdownParse';
+import { isSafeHttpsUrl, isTrustedCursorHost, linkHostname } from '../utils/SafeUrl';
+import { confirmDanger } from '../utils/AppDialog';
 
 interface TableRow {
   key: string;
@@ -63,11 +65,19 @@ export struct MarkdownLite {
   }
 
   private open(url: string): void {
-    if (url.length === 0) {
+    if (url.length === 0 || !isSafeHttpsUrl(url)) {
       return;
     }
+    const host = linkHostname(url);
     const ctx = getContext(this) as common.UIAbilityContext;
-    ctx.openLink(url).catch(() => {
+    if (isTrustedCursorHost(host)) {
+      ctx.openLink(url).catch(() => {
+      });
+      return;
+    }
+    confirmDanger('打开外部链接', `将打开 ${host}`, '打开', () => {
+      ctx.openLink(url).catch(() => {
+      });
     });
   }
 

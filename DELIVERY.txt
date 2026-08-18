@@ -18,4 +18,4 @@
   ./scripts/build.sh && ./scripts/install.sh
 
 适配重点：HUAWEI Pura X Max 外屏 / 内屏展开 / 横竖屏断点。
-备用：android-shell APK 仍保留，不再作为默认路径。
+Android 卓易通壳已移到 https://github.com/treeatetree/cursor-agents-android ，本仓不再保留 APK。

@@ -44,8 +44,17 @@ export class BreakpointStore {
     return BreakpointStore.instance;
   }
 
-  onChange(cb: () => void): void {
+  onChange(cb: () => void): () => void {
     this.listeners.push(cb);
+    return () => {
+      const next: Array<() => void> = [];
+      for (let i = 0; i < this.listeners.length; i++) {
+        if (this.listeners[i] !== cb) {
+          next.push(this.listeners[i]);
+        }
+      }
+      this.listeners = next;
+    };
   }
 
   updateWindow(widthVp: number, heightVp: number): void {

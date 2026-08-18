@@ -42,7 +42,7 @@ struct SettingsPage {
   @State hapticsEnabled: boolean = true;
   @State soundsEnabled: boolean = true;
   @State notifyEnabled: boolean = true;
-  @State diagEnabled: boolean = true;
+  @State diagEnabled: boolean = false;
   @State defaultModel: string = '';
   @State appVersion: string = '1.0.0';
   @State topInset: number = 0;
@@ -55,12 +55,14 @@ struct SettingsPage {
   @State avatarPhoto: string = '';
   @State showAvatarEdit: boolean = false;
   @State cropUri: string = '';
+  @State notifyDetail: boolean = false;
+  private unsubBp: (() => void) | undefined = undefined;
 
   aboutToAppear(): void {
     const bp = BreakpointStore.getInstance();
     this.topInset = bp.safeTop();
     this.bottomInset = bp.composerBottom();
-    bp.onChange(() => {
+    this.unsubBp = bp.onChange(() => {
       this.topInset = bp.safeTop();
       this.bottomInset = bp.composerBottom();
     });
@@ -70,12 +72,20 @@ struct SettingsPage {
     this.appVersion = '1.0.0';
   }
 
+  aboutToDisappear(): void {
+    if (this.unsubBp) {
+      this.unsubBp();
+      this.unsubBp = undefined;
+    }
+  }
+
   private async loadPrefs(): Promise<void> {
     const prefs = PrefStore.getInstance();
     this.defaultAutoPR = await prefs.getDefaultAutoPR();
     this.hapticsEnabled = await prefs.getHapticsEnabled();
     this.soundsEnabled = await prefs.getSoundsEnabled();
     this.notifyEnabled = await prefs.getNotifyEnabled();
+    this.notifyDetail = await prefs.getNotifyDetail();
     this.diagEnabled = await prefs.getDiagEnabled();
     this.defaultModel = await prefs.getDefaultModel();
     const preset = normalizeAvatarId(await prefs.getAvatarPreset());
@@ -291,6 +301,15 @@ struct SettingsPage {
                 onToggle: async () => {
                   this.notifyEnabled = !this.notifyEnabled;
                   await PrefStore.getInstance().setNotifyEnabled(this.notifyEnabled);
+                }
+              })
+              HuSwitch({
+                on: this.notifyDetail,
+                label: '显示通知详情',
+                hint: '关闭后锁屏只显示「任务已更新」',
+                onToggle: async () => {
+                  this.notifyDetail = !this.notifyDetail;
+                  await PrefStore.getInstance().setNotifyDetail(this.notifyDetail);
                 }
               })
               HuSwitch({

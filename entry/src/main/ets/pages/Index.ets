@@ -14,6 +14,7 @@ import { AgentSummary } from '../models/Api';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { PrefStore } from '../store/PrefStore';
 import { AgentCache } from '../store/AgentCache';
+import { InboxFeedSource } from '../datasource/InboxFeedSource';
 import { UnreadItem, UnreadStore } from '../store/UnreadStore';
 import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { Haptics } from '../utils/Haptics';
@@ -46,10 +47,12 @@ import {
   SortMode,
   GroupBucket,
   CardPair,
+  InboxFeedRow,
   applyInboxQuery,
+  flattenCardFeed,
+  flattenListFeed,
   groupAgents,
-  isPinnedId,
-  pairAgents
+  isPinnedId
 } from '../utils/InboxGrouping';
 
 const GROUP_ALL_COLLAPSED = '__none__';
@@ -107,6 +110,11 @@ struct Index {
   private openingAgentId: string = '';
   private openingAt: number = 0;
   private inboxHidden: boolean = false;
+  private feedSource: InboxFeedSource = new InboxFeedSource();
+  private unsubNet: (() => void) | undefined = undefined;
+  private unsubBp: (() => void) | undefined = undefined;
+  private unsubInbox: (() => void) | undefined = undefined;
+  private unsubSession: (() => void) | undefined = undefined;
 
   // Inbox toolbar state
   @State query: string = '';
@@ -146,7 +154,7 @@ struct Index {
       registerAppFonts();
     }
     NetworkMonitor.getInstance().start();
-    NetworkMonitor.getInstance().onChange((v: boolean) => {
+    this.unsubNet = NetworkMonitor.getInstance().onChange((v: boolean) => {
       this.online = v;
       if (v && this.hasKey && this.session.keyReady) {
         this.inbox.refresh(true).then(() => {
@@ -159,14 +167,14 @@ struct Index {
       }
     });
     this.online = NetworkMonitor.getInstance().online;
-    this.bpStore.onChange(() => {
+    this.unsubBp = this.bpStore.onChange(() => {
       this.syncBreakpoint();
     });
     // Split mode keeps Index painted — Settings save must push state via SessionVM.onChange.
-    this.inbox.onChange(() => {
+    this.unsubInbox = this.inbox.onChange(() => {
       this.pullInboxUi();
     });
-    this.session.onChange(() => {
+    this.unsubSession = this.session.onChange(() => {
       const hadKey = this.hasKey;
       this.refreshSession();
       this.pullInboxUi();
@@ -216,6 +224,18 @@ struct Index {
 
   aboutToDisappear(): void {
     this.stopPoll();
+    if (this.unsubNet) {
+      this.unsubNet();
+    }
+    if (this.unsubBp) {
+      this.unsubBp();
+    }
+    if (this.unsubInbox) {
+      this.unsubInbox();
+    }
+    if (this.unsubSession) {
+      this.unsubSession();
+    }
   }
 
   onPageShow(): void {
@@ -299,11 +319,16 @@ struct Index {
   }
 
   private syncBreakpoint(): void {
-    this.useSplit = this.bpStore.useSplit;
+    const split = this.bpStore.useSplit;
+    const splitChanged = split !== this.useSplit;
+    this.useSplit = split;
     this.pagePad = Tokens.pagePad;
     this.topInset = this.bpStore.safeTop();
     this.bottomInset = this.bpStore.bottomInsetVp;
     this.keyboardInset = this.bpStore.keyboardInsetVp;
+    if (splitChanged) {
+      this.rebuildFeed();
+    }
   }
 
   private refreshSession(): void {
@@ -384,15 +409,6 @@ struct Index {
     return s;
   }
 
-  private bucketStamp(bucket: GroupBucket): string {
-    let s = `${bucket.key}:${bucket.items.length}`;
-    for (let i = 0; i < bucket.items.length; i++) {
-      const a = bucket.items[i];
-      s = `${s}|${a.id}:${a.status}:${isPinnedId(a.id, this.pinnedIds) ? 1 : 0}`;
-    }
-    return s;
-  }
-
   private resyncInboxChrome(): void {
     this.pullInboxUi();
     PrefStore.getInstance().getPinnedIds().then((ids: string[]) => {
@@ -429,6 +445,26 @@ struct Index {
       this.buckets = grouped;
       this.flatItems = [];
     }
+    this.rebuildFeed();
+  }
+
+  private rebuildFeed(): void {
+    const open = this.openGroupKey();
+    if (this.useSplit) {
+      this.feedSource.replaceAll(flattenListFeed(this.buckets, this.flatItems, open));
+    } else {
+      this.feedSource.replaceAll(flattenCardFeed(this.buckets, this.flatItems, open));
+    }
+  }
+
+  private feedRowKey(row: InboxFeedRow): string {
+    if (row.kind === 'header') {
+      return `${row.key}:${row.collapsed ? 0 : 1}:${row.bucketCount}`;
+    }
+    if (row.kind === 'pair') {
+      return this.pairFreshSig(row.pair);
+    }
+    return this.cardFreshSig(row.agent);
   }
 
   private async loadInboxPrefs(): Promise<void> {
@@ -522,22 +558,16 @@ struct Index {
   }
 
   private openGroupKey(): string {
-    if (this.expandedKey === GROUP_ALL_COLLAPSED) {
+    if (this.expandedKey === GROUP_ALL_COLLAPSED || this.expandedKey.length === 0) {
       return '';
     }
-    if (this.expandedKey.length > 0 && this.hasBucketKey(this.expandedKey)) {
+    if (this.hasBucketKey(this.expandedKey)) {
       return this.expandedKey;
-    }
-    if (this.buckets.length > 0) {
-      return this.buckets[0].key;
     }
     return '';
   }
 
   private groupCollapsed(key: string): boolean {
-    if (key === 'pinned') {
-      return this.expandedKey === GROUP_ALL_COLLAPSED;
-    }
     const open = this.openGroupKey();
     return open.length === 0 || key !== open;
   }
@@ -550,8 +580,9 @@ struct Index {
       } else {
         this.expandedKey = key;
       }
+      this.rebuildFeed();
+      PrefStore.getInstance().setInboxExpanded(this.expandedKey);
     });
-    PrefStore.getInstance().setInboxExpanded(this.expandedKey);
   }
 
   private setGroupMode(mode: GroupMode): void {
@@ -1143,60 +1174,6 @@ struct Index {
             .style({ strokeWidth: 2, enableSmoothEffect: true })
         }
 
-        if (this.keyReady && (this.authExpired || (this.errorMsg.length > 0 && this.errorMsg.indexOf('API Key') >= 0))) {
-          StatusBanner({
-            text: this.authExpired ? 'API Key 失效，请重新粘贴' : this.errorMsg,
-            tone: 'danger',
-            action: '去设置',
-            onAction: () => {
-              this.navStack.pushPath({ name: 'Settings' });
-            }
-          })
-        } else if (this.errorMsg.length > 0) {
-          StatusBanner({
-            text: this.errorMsg,
-            tone: 'danger',
-            action: '去设置',
-            onAction: () => {
-              this.navStack.pushPath({ name: 'Settings' });
-            }
-          })
-        }
-
-        if (this.needsPlanUpgrade) {
-          StatusBanner({
-            text: '套餐不足，打开 Dashboard 升级',
-            tone: 'warn',
-            action: '升级',
-            external: true,
-            onAction: () => {
-              this.openBrowser('https://cursor.com/dashboard', 'Dashboard');
-            }
-          })
-        }
-
-        if (this.inboxError.length > 0 && !this.authExpired && !this.needsPlanUpgrade) {
-          StatusBanner({
-            text: this.inboxError,
-            tone: 'warn',
-            action: '重试',
-            onAction: () => {
-              this.runInboxRefresh();
-            }
-          })
-        }
-
-        if (this.actionBanner.length > 0) {
-          StatusBanner({
-            text: this.actionBanner,
-            tone: 'danger',
-            action: this.actionKind === 'retry-create' ? '重试' : '',
-            onAction: () => {
-              this.retryCreateFromBanner();
-            }
-          })
-        }
-
         // Filter bar — always visible once we have data (or once first load finished)
         InboxFilterBar({
           query: this.query,
@@ -1264,6 +1241,64 @@ struct Index {
             this.setInboxOpen(false);
           }
         })
+        if (this.keyReady && (this.authExpired || (this.errorMsg.length > 0 && this.errorMsg.indexOf('API Key') >= 0))) {
+          StatusBanner({
+            text: this.authExpired ? 'API Key 失效，请重新粘贴' : this.errorMsg,
+            tone: 'danger',
+            action: '去设置',
+            onAction: () => {
+              this.navStack.pushPath({ name: 'Settings' });
+            }
+          })
+        } else if (this.errorMsg.length > 0) {
+          StatusBanner({
+            text: this.errorMsg,
+            tone: 'danger',
+            action: '去设置',
+            onAction: () => {
+              this.navStack.pushPath({ name: 'Settings' });
+            }
+          })
+        }
+
+        if (this.needsPlanUpgrade) {
+          StatusBanner({
+            text: '套餐不足，打开 Dashboard 升级',
+            tone: 'warn',
+            action: '升级',
+            external: true,
+            onAction: () => {
+              this.openBrowser('https://cursor.com/dashboard', 'Dashboard');
+            }
+          })
+        }
+
+        if (this.inboxError.length > 0 && !this.authExpired && !this.needsPlanUpgrade) {
+          StatusBanner({
+            text: this.inboxError,
+            tone: 'warn',
+            action: '重试',
+            onAction: () => {
+              this.runInboxRefresh();
+            }
+          })
+        }
+
+        if (this.actionBanner.length > 0) {
+          StatusBanner({
+            text: this.actionBanner,
+            tone: 'danger',
+            action: this.actionKind === 'retry-create' ? '重试' : '',
+            dismissible: true,
+            onAction: () => {
+              this.retryCreateFromBanner();
+            },
+            onDismiss: () => {
+              this.inbox.clearActionBanner();
+            }
+          })
+        }
+
         if (!this.online) {
           StatusBanner({
             text: '网络已断开 · 显示缓存内容',
@@ -1392,20 +1427,12 @@ struct Index {
   listFeed() {
     Refresh({ refreshing: $$this.isRefreshing }) {
       List({ space: 0 }) {
-        if (this.buckets.length === 0) {
-          this.listItems(this.flatItems)
-        } else {
-          ForEach(this.buckets, (bucket: GroupBucket) => {
-            if (bucket.label.length > 0) {
-              ListItem() {
-                this.sectionHeader(bucket)
-              }
-            }
-            if (!this.groupCollapsed(bucket.key)) {
-              this.listItems(bucket.items)
-            }
-          }, (bucket: GroupBucket) => this.bucketStamp(bucket))
-        }
+        LazyForEach(this.feedSource, (row: InboxFeedRow) => {
+          ListItem() {
+            this.feedListRow(row)
+          }
+          .transition(expandTransition())
+        }, (row: InboxFeedRow) => this.feedRowKey(row))
         ListItem() {
           Column()
             .width('100%')
@@ -1438,55 +1465,46 @@ struct Index {
   }
 
   @Builder
-  listItems(items: AgentSummary[]) {
-    ForEach(items, (item: AgentSummary) => {
-      ListItem() {
-        AgentCard({
-          agent: item,
-          showRepo: this.groupMode !== 'repo',
-          preview: AgentCache.getInstance().peekSummary(item.id),
-          list: true,
-          pinned: isPinnedId(item.id, this.pinnedIds),
-          unread: this.isFresh(item.id),
-          active: item.id === this.selectedId,
-          onOpen: (id: string) => {
-            this.openAgent(id);
-          },
-          onLong: (agent: AgentSummary) => {
-            this.bindLong(agent);
-          },
-          onOpenPr: (url: string) => {
-            this.openPr(url);
-          }
+  feedListRow(row: InboxFeedRow) {
+    if (row.kind === 'header') {
+      this.sectionHeader(row)
+    } else {
+      AgentCard({
+        agent: row.agent,
+        showRepo: this.groupMode !== 'repo',
+        preview: AgentCache.getInstance().peekSummary(row.agent.id),
+        list: true,
+        pinned: isPinnedId(row.agent.id, this.pinnedIds),
+        unread: this.isFresh(row.agent.id),
+        active: row.agent.id === this.selectedId,
+        onOpen: (id: string) => {
+          this.openAgent(id);
+        },
+        onLong: (agent: AgentSummary) => {
+          this.bindLong(agent);
+        },
+        onOpenPr: (url: string) => {
+          this.openPr(url);
+        }
+      })
+        .padding({
+          left: this.pagePad,
+          right: this.pagePad,
+          bottom: Tokens.space2
         })
-          .padding({
-            left: this.pagePad,
-            right: this.pagePad,
-            bottom: Tokens.space2
-          })
-      }
-      .transition(expandTransition())
-    }, (item: AgentSummary) => this.cardFreshSig(item))
+    }
   }
 
   @Builder
   cardFeed() {
     Refresh({ refreshing: $$this.isRefreshing }) {
       List({ space: 0 }) {
-        if (this.buckets.length === 0) {
-          this.cardItems(this.flatItems)
-        } else {
-          ForEach(this.buckets, (bucket: GroupBucket) => {
-            if (bucket.label.length > 0) {
-              ListItem() {
-                this.sectionHeader(bucket)
-              }
-            }
-            if (!this.groupCollapsed(bucket.key)) {
-              this.cardItems(bucket.items)
-            }
-          }, (bucket: GroupBucket) => this.bucketStamp(bucket))
-        }
+        LazyForEach(this.feedSource, (row: InboxFeedRow) => {
+          ListItem() {
+            this.feedCardRow(row)
+          }
+          .transition(expandTransition())
+        }, (row: InboxFeedRow) => this.feedRowKey(row))
         ListItem() {
           Column()
             .width('100%')
@@ -1519,7 +1537,7 @@ struct Index {
   }
 
   @Builder
-  sectionHeader(bucket: GroupBucket) {
+  sectionHeader(row: InboxFeedRow) {
     Row({ space: 6 }) {
       Column() {
         HuIcon({
@@ -1530,9 +1548,9 @@ struct Index {
       }
       .width(16)
       .height(16)
-      .rotate({ angle: this.groupCollapsed(bucket.key) ? 0 : 90 })
+      .rotate({ angle: row.collapsed ? 0 : 90 })
       .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
-      Text(bucket.label)
+      Text(row.bucketLabel)
         .fontSize(Tokens.typeCaption)
         .fontFamily(Tokens.fontUi)
         .fontWeight(FontWeight.Medium)
@@ -1541,8 +1559,8 @@ struct Index {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
-      if (this.groupCollapsed(bucket.key)) {
-        Text(`${bucket.items.length}`)
+      if (row.collapsed) {
+        Text(`${row.bucketCount}`)
           .fontSize(Tokens.typeMicro)
           .fontColor($r('app.color.text_tertiary'))
           .transition(fadeTransition())
@@ -1559,18 +1577,17 @@ struct Index {
     })
     .backgroundColor($r('app.color.bg0'))
     .onClick(() => {
-      this.toggleGroup(bucket.key);
+      this.toggleGroup(row.bucketKey);
     })
   }
 
   @Builder
-  cardItems(items: AgentSummary[]) {
-    ForEach(pairAgents(items), (pair: CardPair) => {
-      ListItem() {
-        this.cardPairRow(pair)
-      }
-      .transition(expandTransition())
-    }, (pair: CardPair) => this.pairFreshSig(pair))
+  feedCardRow(row: InboxFeedRow) {
+    if (row.kind === 'header') {
+      this.sectionHeader(row)
+    } else {
+      this.cardPairRow(row.pair)
+    }
   }
 
   @Builder

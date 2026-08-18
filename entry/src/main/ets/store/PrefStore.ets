@@ -16,6 +16,7 @@ const KEY_DEFAULT_AUTO_PR = 'default_auto_pr';
 const KEY_HAPTICS = 'haptics_enabled';
 const KEY_SOUNDS = 'sounds_enabled';
 const KEY_NOTIFY = 'notify_enabled';
+const KEY_NOTIFY_DETAIL = 'notify_detail';
 const KEY_DIAG = 'diag_enabled';
 const KEY_ALIAS = 'alias_by_id';
 const KEY_LAST_SEEN = 'last_seen_by_id';
@@ -66,6 +67,7 @@ export class PrefStore {
       });
       const notifyOn = await this.getNotifyEnabled();
       Notify.setEnabled(notifyOn);
+      Notify.setDetailEnabled(await this.getNotifyDetail());
       SessionDiag.init(context);
       const diagOn = await this.getDiagEnabled();
       SessionDiag.setEnabled(diagOn);
@@ -189,11 +191,27 @@ export class PrefStore {
     await this.pref.flush();
   }
 
+  async getNotifyDetail(): Promise<boolean> {
+    if (!this.pref) {
+      return false;
+    }
+    return (await this.pref.get(KEY_NOTIFY_DETAIL, false)) as boolean;
+  }
+
+  async setNotifyDetail(value: boolean): Promise<void> {
+    Notify.setDetailEnabled(value);
+    if (!this.pref) {
+      return;
+    }
+    await this.pref.put(KEY_NOTIFY_DETAIL, value);
+    await this.pref.flush();
+  }
+
   async getDiagEnabled(): Promise<boolean> {
     if (!this.pref) {
-      return true;
+      return false;
     }
-    return (await this.pref.get(KEY_DIAG, true)) as boolean;
+    return (await this.pref.get(KEY_DIAG, false)) as boolean;
   }
 
   async setDiagEnabled(value: boolean): Promise<void> {

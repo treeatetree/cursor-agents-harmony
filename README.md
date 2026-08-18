@@ -2,6 +2,9 @@
 
 Cursor Cloud Agents 的鸿蒙原生指挥台。直连 `api.cursor.com`，不走 WebView。
 
+仓库：[`treeatetree/cursor-agents-harmony`](https://github.com/treeatetree/cursor-agents-harmony)（原名 `agents-android-shell`）。  
+卓易通 WebView 壳已拆到 [`treeatetree/cursor-agents-android`](https://github.com/treeatetree/cursor-agents-android)，本仓不再包含 Android 工程。
+
 ## 功能
 
 - API Key 加密存储 + `/v1/me` 校验
@@ -22,12 +25,18 @@ Cursor Cloud Agents 的鸿蒙原生指挥台。直连 `api.cursor.com`，不走 
 # WiFi 调试（手机「无线调试」页的 IP:端口）
 ./scripts/wifi-connect.sh connect <ip:port>
 
-# 编译
+# 本地秘密扫描 + 编译
+./scripts/check-secrets.sh
 ./scripts/build.sh
+
+# 真机 Hypium（需要已连接设备）
+./scripts/test.sh
 
 # 安装并启动
 ./scripts/install.sh
 ```
+
+GitHub Actions 只做秘密扫描和验收清单门禁；HAP / Hypium 必须在本机 DevEco 环境跑。
 
 ## 获取 API Key
 

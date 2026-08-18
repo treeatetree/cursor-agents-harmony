@@ -3,17 +3,17 @@ import { webview } from '@kit.ArkWeb';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { HuIconButton } from '../components/HuIconButton';
+import { isInAppBrowserUrl } from '../utils/SafeUrl';
 
 /**
  * Prefer in-app WebView for Cursor product/docs surfaces.
  * Login / Cloudflare challenges can still fall back to system browser.
  */
 export function shouldUseInAppBrowser(url: string): boolean {
-  const u = url.toLowerCase();
-  if (u.indexOf('cursor.com') < 0 && u.indexOf('cursor.so') < 0) {
+  if (!isInAppBrowserUrl(url)) {
     return false;
   }
-  // Auth callbacks that must leave the app — keep external.
+  const u = url.toLowerCase();
   if (u.indexOf('accounts.google.com') >= 0 || u.indexOf('github.com/login') >= 0) {
     return false;
   }
@@ -144,13 +144,33 @@ struct InAppBrowserPage {
             .zIndex(0)
             .javaScriptAccess(true)
             .domStorageAccess(true)
-            .fileAccess(true)
+            .fileAccess(false)
             .imageAccess(true)
             .onlineImageAccess(true)
-            .mixedMode(MixedMode.All)
+            .mixedMode(MixedMode.None)
+            .onLoadIntercept((event) => {
+              let next = '';
+              try {
+                next = `${event.data.getRequestUrl()}`;
+              } catch (_e) {
+                next = '';
+              }
+              if (next.length > 0 && !shouldUseInAppBrowser(next)) {
+                const ctx = getContext(this) as common.UIAbilityContext;
+                ctx.openLink(next).catch(() => {
+                });
+                return true;
+              }
+              return false;
+            })
             .onPageBegin((event) => {
               this.loading = true;
               if (event && event.url) {
+                if (!shouldUseInAppBrowser(event.url)) {
+                  this.pageUrl = '';
+                  this.openExternal();
+                  return;
+                }
                 this.maybeMarkChallenge('', event.url);
               }
             })
@@ -212,8 +232,16 @@ struct InAppBrowserPage {
       });
       const p = ctx.pathInfo.param as Record<string, Object>;
       if (p) {
-        this.pageUrl = p['url'] ? `${p['url']}` : '';
+        const next = p['url'] ? `${p['url']}` : '';
         this.pageTitle = p['title'] ? `${p['title']}` : 'Web';
+        if (shouldUseInAppBrowser(next)) {
+          this.pageUrl = next;
+        } else if (next.length > 0) {
+          this.pageUrl = '';
+          const ctx2 = getContext(this) as common.UIAbilityContext;
+          ctx2.openLink(next).catch(() => {
+          });
+        }
       }
     })
   }

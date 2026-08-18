@@ -1,6 +1,7 @@
 历史备注（已退役）
 
 2026-07-12：ArkWeb 加载 cursor.com 被 Cloudflare Turnstile 阻断，曾 park 为 android-shell APK 路径。
+2026-08-18：Android 壳拆到 https://github.com/treeatetree/cursor-agents-android ，本仓只保留鸿蒙原生客户端。
 
 2026-08-08：改为 Cloud Agents API 原生客户端。
 

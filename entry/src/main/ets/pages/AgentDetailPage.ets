@@ -2,6 +2,7 @@ import { common } from '@kit.AbilityKit';
 import { KeyboardAvoidMode, LengthMetrics } from '@kit.ArkUI';
 import { DetailVM } from '../viewmodels/DetailVM';
 import { TimelineItem } from '../models/Timeline';
+import { TimelineSource } from '../datasource/TimelineSource';
 import {
   ArtifactInfo, CustomSubagentDef, EnvVarDef, McpServerDef, ModelInfo, RunUsage
 } from '../models/Api';
@@ -95,6 +96,8 @@ struct AgentDetailPage {
   @State bottomInset: number = 0;
   @State queuedFollowUp: string = '';
   @State feed: TimelineItem[] = [];
+  private visibleSource: TimelineSource = new TimelineSource();
+  private unsubBp: (() => void) | undefined = undefined;
   @State followUpMode: string = 'agent';
   @State followModelLabel: string = '';
   @State followUpModel: string = '';
@@ -161,6 +164,10 @@ struct AgentDetailPage {
       this.jumpHintTimer = -1;
     }
     this.vm.close();
+    if (this.unsubBp) {
+      this.unsubBp();
+      this.unsubBp = undefined;
+    }
   }
 
   private armMdSettle(): void {
@@ -402,6 +409,7 @@ struct AgentDetailPage {
       next.push(rows[i]);
     }
     this.feed = next;
+    this.visibleSource.replaceAll(next);
   }
 
   private consumeNotice(): void {
@@ -1155,7 +1163,7 @@ struct AgentDetailPage {
       this.topInset = this.bp.safeTop();
       this.bottomInset = this.bp.followComposerBottom();
       this.isHover = this.bp.isHover;
-      this.bp.onChange(() => {
+      this.unsubBp = this.bp.onChange(() => {
         runLayout(() => {
           this.pagePad = this.bp.pagePad();
           this.topInset = this.bp.safeTop();
@@ -1246,7 +1254,7 @@ struct AgentDetailPage {
         }
         Stack() {
           List({ space: Tokens.sec, scroller: this.listScroller }) {
-            ForEach(this.feed, (item: TimelineItem) => {
+            LazyForEach(this.visibleSource, (item: TimelineItem) => {
               ListItem() {
                 this.timelineItem(item)
               }

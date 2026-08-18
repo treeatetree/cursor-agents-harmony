@@ -1,7 +1,7 @@
 ---
 name: hm-app-os
 description: >-
-  Project adapter for the HarmonyOS Cloud Agents console (HM_APP). Use when
+  Project adapter for the HarmonyOS Cloud Agents console (cursor-agents-harmony). Use when
   changing Inbox, composer, SSE detail, settings, Tokens, or hdc install
   on this repo. Read personal dev-os first.
 ---
@@ -12,7 +12,7 @@ description: >-
 
 ## 本仓
 
-鸿蒙原生 **Cursor Cloud Agents 指挥台**，不是聊天 App，不是本机 `agents-android-shell` 那个卓易通 WebView 壳。
+鸿蒙原生 **Cursor Cloud Agents 指挥台**，不是聊天 App。卓易通 WebView 壳在独立仓库 `cursor-agents-android`。
 
 - 视觉锁：beUI。锌浅 `#FAFAFA` / 深 `#0B0B0C`。强调墨色，不要绿糖、左边条。
 - 圆角：卡 16 / 芯片 12 / 输入 10。无投影。

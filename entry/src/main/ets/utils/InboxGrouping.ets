@@ -1,5 +1,5 @@
 import { AgentSummary } from '../models/Api';
-import { repoTail, shortRepoName } from './DisplayFmt';
+import { repoIdentity, repoTail } from './DisplayFmt';
 
 export type FilterMode = 'all' | 'running' | 'error' | 'done';
 export type SortMode = 'updated' | 'created' | 'name';
@@ -17,6 +17,18 @@ export interface CardPair {
   left: AgentSummary;
   right: AgentSummary;
   hasRight: boolean;
+}
+
+/** Flattened Inbox row for a single LazyForEach (header, card pair, or split list card). */
+export interface InboxFeedRow {
+  key: string;
+  kind: string;
+  bucketKey: string;
+  bucketLabel: string;
+  bucketCount: number;
+  collapsed: boolean;
+  pair: CardPair;
+  agent: AgentSummary;
 }
 
 export interface RecentRepo {
@@ -58,6 +70,127 @@ export function pairAgents(items: AgentSummary[]): CardPair[] {
       right: hasRight ? items[i + 1] : left,
       hasRight: hasRight
     });
+  }
+  return out;
+}
+
+function emptyAgent(): AgentSummary {
+  return {
+    id: '',
+    name: '',
+    status: 'ACTIVE',
+    url: '',
+    createdAt: '',
+    updatedAt: ''
+  };
+}
+
+function emptyPair(): CardPair {
+  const a = emptyAgent();
+  return { key: '', left: a, right: a, hasRight: false };
+}
+
+function headerRow(bucket: GroupBucket, collapsed: boolean): InboxFeedRow {
+  return {
+    key: `h:${bucket.key}`,
+    kind: 'header',
+    bucketKey: bucket.key,
+    bucketLabel: bucket.label,
+    bucketCount: bucket.items.length,
+    collapsed: collapsed,
+    pair: emptyPair(),
+    agent: emptyAgent()
+  };
+}
+
+function pairRow(pair: CardPair): InboxFeedRow {
+  return {
+    key: `p:${pair.key}`,
+    kind: 'pair',
+    bucketKey: '',
+    bucketLabel: '',
+    bucketCount: 0,
+    collapsed: false,
+    pair: pair,
+    agent: emptyAgent()
+  };
+}
+
+function agentRow(agent: AgentSummary): InboxFeedRow {
+  return {
+    key: `a:${agent.id}`,
+    kind: 'agent',
+    bucketKey: '',
+    bucketLabel: '',
+    bucketCount: 0,
+    collapsed: false,
+    pair: emptyPair(),
+    agent: agent
+  };
+}
+
+function appendBucketCards(out: InboxFeedRow[], bucket: GroupBucket, openKey: string): void {
+  const labeled = bucket.label.length > 0;
+  const collapsed = labeled && (openKey.length === 0 || bucket.key !== openKey);
+  if (labeled) {
+    out.push(headerRow(bucket, collapsed));
+  }
+  if (!collapsed) {
+    const pairs = pairAgents(bucket.items);
+    for (let i = 0; i < pairs.length; i++) {
+      out.push(pairRow(pairs[i]));
+    }
+  }
+}
+
+function appendBucketAgents(out: InboxFeedRow[], bucket: GroupBucket, openKey: string): void {
+  const labeled = bucket.label.length > 0;
+  const collapsed = labeled && (openKey.length === 0 || bucket.key !== openKey);
+  if (labeled) {
+    out.push(headerRow(bucket, collapsed));
+  }
+  if (!collapsed) {
+    for (let i = 0; i < bucket.items.length; i++) {
+      out.push(agentRow(bucket.items[i]));
+    }
+  }
+}
+
+/** Cover / portrait Inbox: headers + two-up pairs. Unlabeled buckets stay open. */
+export function flattenCardFeed(
+  buckets: GroupBucket[],
+  flatItems: AgentSummary[],
+  openKey: string
+): InboxFeedRow[] {
+  const out: InboxFeedRow[] = [];
+  if (buckets.length === 0) {
+    const pairs = pairAgents(flatItems);
+    for (let i = 0; i < pairs.length; i++) {
+      out.push(pairRow(pairs[i]));
+    }
+    return out;
+  }
+  for (let i = 0; i < buckets.length; i++) {
+    appendBucketCards(out, buckets[i], openKey);
+  }
+  return out;
+}
+
+/** Inner landscape Split: headers + single-column cards. Unlabeled buckets stay open. */
+export function flattenListFeed(
+  buckets: GroupBucket[],
+  flatItems: AgentSummary[],
+  openKey: string
+): InboxFeedRow[] {
+  const out: InboxFeedRow[] = [];
+  if (buckets.length === 0) {
+    for (let i = 0; i < flatItems.length; i++) {
+      out.push(agentRow(flatItems[i]));
+    }
+    return out;
+  }
+  for (let i = 0; i < buckets.length; i++) {
+    appendBucketAgents(out, buckets[i], openKey);
   }
   return out;
 }
@@ -454,7 +587,8 @@ export function mergeInboxLists(
 
 function repoKey(a: AgentSummary): string {
   if (a.repos && a.repos.length > 0) {
-    return shortRepoName(a.repos[0].url ?? '') || 'repo';
+    const id = repoIdentity(a.repos[0].url ?? '');
+    return id.length > 0 ? id : 'repo';
   }
   return 'none';
 }
@@ -577,12 +711,13 @@ export function collectRecentRepos(agents: AgentSummary[], maxN: number): Recent
       continue;
     }
     const url = `${repos[0].url ?? ''}`.trim();
-    if (url.length === 0) {
+    const id = repoIdentity(url);
+    if (url.length === 0 || id.length === 0) {
       continue;
     }
     let seen = false;
     for (let j = 0; j < out.length; j++) {
-      if (out[j].url === url) {
+      if (repoIdentity(out[j].url) === id) {
         seen = true;
         break;
       }
@@ -598,6 +733,37 @@ export function collectRecentRepos(agents: AgentSummary[], maxN: number): Recent
       title: title.length > 0 ? title : url
     };
     out.push(item);
+    if (out.length >= maxN) {
+      break;
+    }
+  }
+  return out;
+}
+
+/** Newest-first unique named cloud environments from inbox cards. */
+export function collectRecentEnvs(agents: AgentSummary[], maxN: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < agents.length; i++) {
+    const env = agents[i].env;
+    if (!env || env.type !== 'cloud') {
+      continue;
+    }
+    const name = `${env.name ?? ''}`.trim();
+    if (name.length === 0) {
+      continue;
+    }
+    const key = name.toLowerCase();
+    let seen = false;
+    for (let j = 0; j < out.length; j++) {
+      if (out[j].toLowerCase() === key) {
+        seen = true;
+        break;
+      }
+    }
+    if (seen) {
+      continue;
+    }
+    out.push(name);
     if (out.length >= maxN) {
       break;
     }

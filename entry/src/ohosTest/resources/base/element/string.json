@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_test_desc", "value": "Hypium test ability" },
+    { "name": "TestAbility_desc", "value": "Hypium TestAbility" },
+    { "name": "TestAbility_label", "value": "entry_test" }
+  ]
+}

@@ -9,12 +9,14 @@ import { AgentCache } from '../store/AgentCache';
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { PrefStore } from '../store/PrefStore';
 import { recencyMs } from '../utils/InboxGrouping';
+import { repoIdentity } from '../utils/DisplayFmt';
 import {
   defaultEnv, parseToolsPref, serializeTools, toApiEnv, toApiEnvVars, toApiMcp,
   toApiSubagents, usesNamedEnv
 } from '../utils/AgentCapabilities';
 import { Log } from '../utils/Log';
 import { coerceParamsToVariant, findModel, modelSentJson } from '../utils/ModelGroups';
+import { isOriginRepo, normalizeCreateRepoUrl } from '../utils/GitLinks';
 import { util } from '@kit.ArkTS';
 
 const TAG = 'NewAgentVM';
@@ -168,7 +170,17 @@ export class NewAgentVM {
       scored.push(list[i]);
     }
     scored.sort((a: RepoInfo, b: RepoInfo) => repoRecency(b, agents) - repoRecency(a, agents));
-    return scored;
+    const uniq: RepoInfo[] = [];
+    const seen: string[] = [];
+    for (let i = 0; i < scored.length; i++) {
+      const id = repoIdentity(scored[i].repository);
+      if (id.length === 0 || seen.indexOf(id) >= 0) {
+        continue;
+      }
+      seen.push(id);
+      uniq.push(scored[i]);
+    }
+    return uniq;
   }
 
   canSubmit(): boolean {
@@ -196,7 +208,7 @@ export class NewAgentVM {
     if (cleaned.length === 0) {
       return;
     }
-    this.selectedRepo = cleaned;
+    this.selectedRepo = normalizeCreateRepoUrl(cleaned);
   }
 
   titleFromPrompt(): string {
@@ -231,7 +243,9 @@ export class NewAgentVM {
     body['autoCreatePR'] = this.autoCreatePR;
     body['workOnCurrentBranch'] = this.workOnCurrentBranch;
     if (this.autoCreatePR) {
-      body['openAsCursorGithubApp'] = this.openAsCursorGithubApp;
+      if (!isOriginRepo(this.selectedRepo)) {
+        body['openAsCursorGithubApp'] = this.openAsCursorGithubApp;
+      }
       body['skipReviewerRequest'] = this.skipReviewerRequest;
     }
     const named = toApiEnv(this.env);
@@ -239,7 +253,7 @@ export class NewAgentVM {
       body['env'] = named;
     } else if (this.repoMode !== 'none') {
       const repo: Record<string, Object> = {};
-      repo['url'] = this.selectedRepo.trim();
+      repo['url'] = normalizeCreateRepoUrl(this.selectedRepo);
       if (this.repoMode === 'pr') {
         repo['prUrl'] = this.selectedPrUrl.trim();
       } else if (this.selectedBranch.trim().length > 0) {

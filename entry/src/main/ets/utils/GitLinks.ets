@@ -5,7 +5,7 @@ export interface GitWebRef {
   path: string;
 }
 
-/** Parse github/gitlab https or ssh remote into web path parts. */
+/** Parse github/gitlab/origin https or ssh remote into web path parts. */
 export function parseGitWeb(repoUrl: string): GitWebRef | undefined {
   const raw = (repoUrl ?? '').trim();
   if (raw.length === 0) {
@@ -45,6 +45,18 @@ export function parseGitWeb(repoUrl: string): GitWebRef | undefined {
   if (segs.length < 2 || segs[0].length === 0 || segs[1].length === 0) {
     return undefined;
   }
+  const h = host.toLowerCase();
+  if ((h === 'cursor.com' || h === 'www.cursor.com') && segs[0] === 'codebase') {
+    if (segs.length < 3 || segs[1].length === 0 || segs[2].length === 0) {
+      return undefined;
+    }
+    return {
+      host: host,
+      owner: segs[1],
+      repo: segs[segs.length - 1],
+      path: segs.slice(1).join('/')
+    };
+  }
   return {
     host: host,
     owner: segs[0],
@@ -53,17 +65,42 @@ export function parseGitWeb(repoUrl: string): GitWebRef | undefined {
   };
 }
 
-/**
- * Files-changed URL. GitHub compare when we have a head branch;
- * falls back to the branch tree page.
- */
-export function gitCompareUrl(repoUrl: string, baseRef: string, headBranch: string): string {
-  const head = (headBranch ?? '').trim();
-  if (head.length === 0) {
-    return '';
+export function isOriginRepo(repoUrl: string): boolean {
+  const low = (repoUrl ?? '').toLowerCase();
+  if (low.indexOf('origin.cursor.com') >= 0 || low.indexOf('cursor.com/codebase') >= 0) {
+    return true;
   }
   const git = parseGitWeb(repoUrl);
+  return !!git && isOriginGit(git);
+}
+
+/** Codebase browse URL → Origin clone URL used by Cloud Agents. */
+export function normalizeCreateRepoUrl(url: string): string {
+  const cleaned = (url ?? '').trim();
+  if (cleaned.length === 0) {
+    return cleaned;
+  }
+  const git = parseGitWeb(cleaned);
+  if (git && (isOriginGit(git) || isOriginRepo(cleaned))) {
+    return `https://origin.cursor.com/${git.owner}/${git.repo}`;
+  }
+  return cleaned;
+}
+
+/**
+ * Files-changed URL. GitHub compare when we have a head branch;
+ * Origin falls back to the Codebase repo page (no public compare path).
+ */
+export function gitCompareUrl(repoUrl: string, baseRef: string, headBranch: string): string {
+  const git = parseGitWeb(repoUrl);
   if (!git) {
+    return '';
+  }
+  if (isOriginGit(git) || isOriginRepo(repoUrl)) {
+    return `https://cursor.com/codebase/${git.owner}/${git.repo}`;
+  }
+  const head = (headBranch ?? '').trim();
+  if (head.length === 0) {
     return '';
   }
   const base = (baseRef ?? '').trim();
@@ -81,6 +118,11 @@ export function gitCompareUrl(repoUrl: string, baseRef: string, headBranch: stri
     return `https://${git.host}/${git.path}/-/tree/${enc(head)}`;
   }
   return '';
+}
+
+function isOriginGit(git: GitWebRef): boolean {
+  const host = git.host.toLowerCase();
+  return host === 'origin.cursor.com' || host.endsWith('.origin.cursor.com');
 }
 
 function enc(value: string): string {

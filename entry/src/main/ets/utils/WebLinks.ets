@@ -1,3 +1,5 @@
+import { isInAppBrowserUrl } from './SafeUrl';
+
 /** Canonical Cursor Web surfaces for features the native API cannot cover fully. */
 export class WebLinks {
   static readonly agentsHome: string = 'https://cursor.com/agents';
@@ -23,7 +25,7 @@ export class WebLinks {
 
 /** Push InAppBrowser onto the shared NavPathStack. */
 export function pushInAppBrowser(nav: NavPathStack, url: string, title: string = 'Web'): void {
-  if (!url || url.length === 0) {
+  if (!url || url.length === 0 || !isInAppBrowserUrl(url)) {
     return;
   }
   const param: Record<string, Object> = {};

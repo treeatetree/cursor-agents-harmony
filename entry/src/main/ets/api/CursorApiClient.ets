@@ -98,21 +98,21 @@ export class CursorApiClient {
   }
 
   /** POST create — no auto-retry (avoid duplicate agents). */
-  async createAgent(body: object): Promise<CreateAgentResponse> {
+  async createAgent(body: object, idempotencyKey: string = ''): Promise<CreateAgentResponse> {
     this.mutating++;
     try {
-      return await this.request<CreateAgentResponse>('POST', '/v1/agents', body);
+      return await this.request<CreateAgentResponse>('POST', '/v1/agents', body, undefined, idempotencyKey);
     } finally {
       this.mutating--;
     }
   }
 
   /** POST follow-up — no auto-retry (avoid duplicate runs). Keep unwrap. */
-  async createRun(agentId: string, body: object): Promise<Run> {
+  async createRun(agentId: string, body: object, idempotencyKey: string = ''): Promise<Run> {
     this.mutating++;
     try {
       const resp = await this.request<CreateRunResponse>('POST',
-        `/v1/agents/${encodeURIComponent(agentId)}/runs`, body);
+        `/v1/agents/${encodeURIComponent(agentId)}/runs`, body, undefined, idempotencyKey);
     if (resp.run && resp.run.id) {
       return resp.run;
     }
@@ -169,7 +169,7 @@ export class CursorApiClient {
     let attempt = 0;
     while (true) {
       try {
-        return await this.request<T>(method, path, body, overrideKey);
+        return await this.request<T>(method, path, body, overrideKey, '');
       } catch (e) {
         const rateLimited = e instanceof ApiException && e.code === 429;
         if (!(e instanceof ApiException) || rateLimited || !e.retryable || attempt >= MAX_RETRIES) {
@@ -196,7 +196,7 @@ export class CursorApiClient {
   }
 
   private async request<T>(method: http.RequestMethod | string, path: string, body?: object,
-    overrideKey?: string): Promise<T> {
+    overrideKey?: string, idempotencyKey: string = ''): Promise<T> {
     const key = overrideKey && overrideKey.length > 0 ? overrideKey : ApiKeyStore.getInstance().getKey();
     if (!key) {
       // Not a server 401 — key may still be locked in HUKS. Callers must not treat this as expired.
@@ -210,6 +210,9 @@ export class CursorApiClient {
     headers['Accept'] = 'application/json';
     headers['Content-Type'] = 'application/json';
     headers['User-Agent'] = 'CursorHarmonyNative/1.0';
+    if (idempotencyKey.length > 0) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
 
     try {
       Log.info(TAG, `${method} ${path}`);

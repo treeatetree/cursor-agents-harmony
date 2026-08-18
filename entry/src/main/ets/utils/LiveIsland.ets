@@ -123,7 +123,7 @@ export class LiveIsland {
         content: {
           notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_BASIC_TEXT,
           normal: {
-            title: LiveIsland.title,
+            title: '任务进行中',
             text: statusZh,
             additionalText: '点按回到任务'
           }

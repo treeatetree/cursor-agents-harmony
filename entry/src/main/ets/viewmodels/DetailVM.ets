@@ -19,16 +19,23 @@ import { UnreadStore } from '../store/UnreadStore';
 import { LiveIsland } from '../utils/LiveIsland';
 import { ThemeStore } from '../store/ThemeStore';
 import { Log } from '../utils/Log';
-import { formatTokenShort, formatUsageFriendly } from '../utils/DisplayFmt';
+import { formatTokenShort } from '../utils/DisplayFmt';
 import { toApiMcp } from '../utils/AgentCapabilities';
 import { countSteps, dropLastStep, isProgressText, lastNonEmptyLine, lastStep } from '../utils/StreamText';
 import { usedToolFromEvent } from '../utils/TimelineCopy';
-import { gitCompareUrl } from '../utils/GitLinks';
+import { gitCompareUrl, isOriginRepo } from '../utils/GitLinks';
 import { PromptImage, toApiImages } from '../utils/ImagePicker';
 import { formatModelSent, modelSentJson, modelSentTags } from '../utils/ModelGroups';
 import { convFingerprint, keepPendingTurns, mergeCachedActivity, restoreUserSentTags } from '../utils/TimelineMerge';
 import { SessionDiag } from '../utils/SessionDiag';
+import { capTimeline } from '../utils/CacheLimit';
 import { countNewContent, findUnreadAnchor, lastContentKey, visibleTimeline } from '../utils/TimelineView';
+import { canApplyRunStatus, isNewerIso, isTerminalStatus } from '../utils/RunState';
+import { OpIdStore } from '../store/OpIdStore';
+import { RunStateMachine } from './RunStateMachine';
+import { ArtifactService } from './ArtifactService';
+import { StreamSession } from '../api/StreamSession';
+import { canFlushQueue } from './FollowUpQueue';
 
 const TAG = 'DetailVM';
 
@@ -106,10 +113,16 @@ export class DetailVM {
   private followFirstFrame: boolean = false;
   private openWasUnread: boolean = false;
   private openGen: number = 0;
+  private streamSession: number = 0;
+  private lastRunUpdatedAt: string = '';
+  private unknownSubmit: boolean = false;
+  private phaseMachine: RunStateMachine = new RunStateMachine();
+  private artifactsSvc: ArtifactService = new ArtifactService();
+  private streamSessionHandle: StreamSession = new StreamSession();
   private onUi: (() => void) | undefined = undefined;
 
   constructor() {
-    this.uiFlush = new Throttle(40, () => {
+    this.uiFlush = new Throttle(100, () => {
       this.source.flushChanges();
       if (this.dirty && this.onUi) {
         this.dirty = false;
@@ -119,7 +132,7 @@ export class DetailVM {
     this.eventIdFlush = new Throttle(800, () => {
       this.persistLastEventId();
     });
-    this.timelineFlush = new Throttle(1600, () => {
+    this.timelineFlush = new Throttle(4000, () => {
       this.persistTimeline();
     });
   }
@@ -131,6 +144,20 @@ export class DetailVM {
   private notify(): void {
     this.dirty = true;
     this.uiFlush.kick();
+  }
+
+  private stillSession(gen: number, agentId?: string, runId?: string): boolean {
+    if (this.openGen !== gen) {
+      return false;
+    }
+    if (agentId !== undefined && agentId.length > 0 && this.agentId !== agentId) {
+      return false;
+    }
+    if (runId !== undefined && runId.length > 0 && this.streamRunId.length > 0 &&
+      this.streamRunId !== runId) {
+      return false;
+    }
+    return true;
   }
 
   async open(agentId: string): Promise<void> {
@@ -379,17 +406,22 @@ export class DetailVM {
     if (this.agentId.length === 0) {
       return;
     }
+    const gen = this.openGen;
+    const agentId = this.agentId;
     this.convError = '';
     this.syncing = true;
     this.notify();
     const started = Date.now();
     try {
-      const conv = await CursorApiClient.getInstance().getConversation(this.agentId);
+      const conv = await CursorApiClient.getInstance().getConversation(agentId);
+      if (!this.stillSession(gen, agentId)) {
+        return;
+      }
       const messages = conv.messages ?? [];
       SessionDiag.emit({
         tag: TAG,
         event: 'conv_retry',
-        agentId: this.agentId,
+        agentId: agentId,
         elapsedMs: Date.now() - started,
         extra: `n=${messages.length}`
       });
@@ -401,22 +433,28 @@ export class DetailVM {
         this.convKey = nextKey;
       }
     } catch (_e) {
+      if (!this.stillSession(gen, agentId)) {
+        return;
+      }
       this.convError = '同步对话失败';
       SessionDiag.emit({
         tag: TAG,
         event: 'conv_retry',
-        agentId: this.agentId,
+        agentId: agentId,
         elapsedMs: Date.now() - started,
         extra: 'fail'
       });
     } finally {
-      this.syncing = false;
-      this.notify();
+      if (this.stillSession(gen, agentId)) {
+        this.syncing = false;
+        this.notify();
+      }
     }
   }
 
   /** Leave the composer immediately: paint the user turn, then POST create. */
   async openFromCreate(localId: string): Promise<void> {
+    const gen = ++this.openGen;
     this.releaseRuntime();
     DetailVM.activeInstance = this;
     this.agentId = localId;
@@ -464,7 +502,11 @@ export class DetailVM {
       return;
     }
     try {
-      const raw = await CursorApiClient.getInstance().createAgent(draft.body);
+      const opId = OpIdStore.nextId('create');
+      const raw = await CursorApiClient.getInstance().createAgent(draft.body, opId);
+      if (this.openGen !== gen) {
+        return;
+      }
       const resp = unwrapCreateAgent(raw as object);
       const agent = resp.agent;
       if (!agent || !agent.id) {
@@ -510,9 +552,16 @@ export class DetailVM {
       }
       CreateDraftStore.getInstance().clear();
       this.createRetryable = false;
+      this.unknownSubmit = false;
       this.loadArtifactsAndUsage();
     } catch (e) {
-      if (e instanceof ApiException) {
+      if (!this.stillSession(gen)) {
+        return;
+      }
+      if (e instanceof ApiException && (e.apiCode === 'network' || e.code === 0)) {
+        this.unknownSubmit = true;
+        this.errorMsg = '提交结果未知，请先回 Inbox 确认，不要直接重发';
+      } else if (e instanceof ApiException) {
         this.errorMsg = e.message;
       } else {
         this.errorMsg = '创建失败';
@@ -597,21 +646,16 @@ export class DetailVM {
   }
 
   private async loadArtifactsAndUsage(): Promise<void> {
-    try {
-      const arts = await CursorApiClient.getInstance().listArtifacts(this.agentId);
-      this.artifacts = arts.items ?? [];
-    } catch (_e) {
-      this.artifacts = [];
+    const gen = this.openGen;
+    const agentId = this.agentId;
+    const bundle = await this.artifactsSvc.load(agentId);
+    if (!this.stillSession(gen, agentId)) {
+      return;
     }
-    try {
-      const usage = await CursorApiClient.getInstance().getUsage(this.agentId);
-      this.usageLabel = formatUsageFriendly(usage as object);
-      this.usageRuns = unwrapUsageRuns(usage as object);
-      this.applyUsageToHeaders();
-    } catch (_e) {
-      this.usageLabel = '';
-      this.usageRuns = [];
-    }
+    this.artifacts = bundle.artifacts;
+    this.usageLabel = bundle.usageLabel;
+    this.usageRuns = bundle.usageRuns;
+    this.applyUsageToHeaders();
     this.notify();
   }
 
@@ -659,6 +703,7 @@ export class DetailVM {
       DetailVM.activeInstance = undefined;
       AppStorage.setOrCreate('watchingAgentId', '');
     }
+    this.streamSessionHandle.release();
     StreamCoordinator.getInstance().release();
     this.clearPoll();
     this.eventIdFlush.flush();
@@ -714,6 +759,11 @@ export class DetailVM {
   }
 
   async retryCreate(): Promise<void> {
+    if (this.unknownSubmit) {
+      this.errorMsg = '提交结果未知，请先回 Inbox 确认是否已创建';
+      this.notify();
+      return;
+    }
     if (this.agentId.indexOf('local-') !== 0) {
       return;
     }
@@ -805,6 +855,8 @@ export class DetailVM {
   }
 
   private async sendFollowUp(prompt: string, images: PromptImage[] = []): Promise<boolean> {
+    const gen = this.openGen;
+    const agentId = this.agentId;
     this.sending = true;
     this.errorMsg = '';
     this.streamNotice = '正在提交…';
@@ -872,7 +924,11 @@ export class DetailVM {
       if (mcp.length > 0) {
         body['mcpServers'] = mcp;
       }
-      const run = await CursorApiClient.getInstance().createRun(this.agentId, body);
+      const opId = OpIdStore.nextId(`run:${agentId}`);
+      const run = await CursorApiClient.getInstance().createRun(agentId, body, opId);
+      if (!this.stillSession(gen, agentId)) {
+        return false;
+      }
       SessionDiag.emit({
         tag: TAG,
         event: 'createRun',
@@ -924,6 +980,9 @@ export class DetailVM {
       await this.startStream(run.id);
       return true;
     } catch (e) {
+      if (!this.stillSession(gen, agentId)) {
+        return false;
+      }
       const idx = this.source.findIndexByKey(tempKey);
       if (idx >= 0) {
         const item = this.source.getData(idx);
@@ -952,7 +1011,9 @@ export class DetailVM {
         });
         return true;
       }
-      if (e instanceof ApiException) {
+      if (e instanceof ApiException && (e.apiCode === 'network' || e.code === 0)) {
+        this.errorMsg = '提交结果未知，请先确认是否已发出，不要直接重发';
+      } else if (e instanceof ApiException) {
         this.errorMsg = e.message;
       } else {
         this.errorMsg = '追问失败';
@@ -970,9 +1031,11 @@ export class DetailVM {
       Haptics.fail();
       return false;
     } finally {
-      this.sending = false;
-      this.notify();
-      this.uiFlush.flush();
+      if (this.stillSession(gen, agentId)) {
+        this.sending = false;
+        this.notify();
+        this.uiFlush.flush();
+      }
     }
   }
 
@@ -1013,13 +1076,18 @@ export class DetailVM {
     if (this.agentId.length === 0) {
       return;
     }
-    const saved = await PrefStore.getInstance().getQueuedFollowUp(this.agentId);
-    const imgCount = await PrefStore.getInstance().getQueuedImageCount(this.agentId);
-    if (saved.length === 0) {
+    const gen = this.openGen;
+    const agentId = this.agentId;
+    const saved = await PrefStore.getInstance().getQueuedFollowUp(agentId);
+    if (!this.stillSession(gen, agentId)) {
+      return;
+    }
+    const imgCount = await PrefStore.getInstance().getQueuedImageCount(agentId);
+    if (!this.stillSession(gen, agentId) || saved.length === 0) {
       return;
     }
     this.queuedFollowUp = saved;
-    const cachedImgs = AgentCache.getInstance().loadQueueImages(this.agentId);
+    const cachedImgs = AgentCache.getInstance().loadQueueImages(agentId);
     if (cachedImgs.length > 0) {
       const imgs: PromptImage[] = [];
       for (let i = 0; i < cachedImgs.length; i++) {
@@ -1042,11 +1110,23 @@ export class DetailVM {
   }
 
   private async flushQueuedFollowUp(): Promise<void> {
+    const gen = this.openGen;
+    const agentId = this.agentId;
     const q = this.queuedFollowUp.trim();
     if (q.length === 0) {
       return;
     }
-    if (this.sending || this.isRunActive()) {
+    if (!canFlushQueue({
+      text: q,
+      images: this.queuedImages,
+      retries: this.queueRetries
+    }, this.sending, this.isRunActive())) {
+      if (this.queueRetries >= 5) {
+        this.errorMsg = '追问排队发送失败，请手动重试';
+        this.streamNotice = '';
+        this.notify();
+        return;
+      }
       this.scheduleFlushQueue(1600);
       return;
     }
@@ -1065,6 +1145,9 @@ export class DetailVM {
       this.streamNotice = '';
     }
     const ok = await this.sendFollowUp(q, imgs);
+    if (!this.stillSession(gen, agentId)) {
+      return;
+    }
     if (!ok && this.queuedFollowUp.length === 0) {
       this.queuedFollowUp = q;
       this.queuedImages = imgs;
@@ -1103,8 +1186,13 @@ export class DetailVM {
     if (runId.length === 0) {
       return;
     }
+    const gen = this.openGen;
+    const agentId = this.agentId;
     try {
-      const usage = await CursorApiClient.getInstance().getUsage(this.agentId, runId);
+      const usage = await CursorApiClient.getInstance().getUsage(agentId, runId);
+      if (!this.stillSession(gen, agentId)) {
+        return;
+      }
       const runs = unwrapUsageRuns(usage as object);
       let total = 0;
       if (runs.length > 0) {
@@ -1263,6 +1351,10 @@ export class DetailVM {
   }
 
   private async startStream(runId: string, resume: boolean = false): Promise<void> {
+    const gen = this.openGen;
+    const agentId = this.agentId;
+    this.streamSession = gen;
+    this.streamSessionHandle.bind(agentId, runId);
     this.activeRunId = runId;
     this.streamRunId = runId;
     this.streamFrames = 0;
@@ -1296,11 +1388,34 @@ export class DetailVM {
     LiveIsland.start(this.agentId, this.name, runStatusZh(this.runStatus.length > 0 ? this.runStatus : 'RUNNING'))
       .catch(() => {
       });
+    this.armPoll(runId, gen, agentId);
+
+    const lastId = await PrefStore.getInstance().getLastEventId(agentId, runId);
+    if (!this.stillSession(gen, agentId, runId)) {
+      return;
+    }
+    await StreamCoordinator.getInstance().acquire(agentId, runId, (frame: SseFrame) => {
+      if (!this.stillSession(gen, agentId, runId)) {
+        return;
+      }
+      if (frame.id.length > 0) {
+        this.pendingEventId = frame.id;
+        this.eventIdFlush.kick();
+      }
+      this.onFrame(frame);
+    }, (kind: string, detail: string) => {
+      if (!this.stillSession(gen, agentId, runId)) {
+        return;
+      }
+      this.onStreamStatus(kind, detail);
+    }, lastId);
+  }
+
+  private armPoll(runId: string, gen: number, agentId: string): void {
     this.clearPoll();
-    // CREATING / flap fallback — design: ~5–15s; use 5s while CREATING else 8s
     const pollMs = this.runStatus === 'CREATING' ? 5000 : 8000;
-    this.pollTimer = setInterval(async () => {
-      if (this.streamRunId.length > 0 && this.streamRunId !== runId) {
+    const tick = async () => {
+      if (!this.stillSession(gen, agentId, runId)) {
         return;
       }
       if (!this.isRunActive()) {
@@ -1308,8 +1423,8 @@ export class DetailVM {
         return;
       }
       try {
-        const run = await CursorApiClient.getInstance().getRun(this.agentId, runId);
-        if (this.streamRunId.length > 0 && this.streamRunId !== runId) {
+        const run = await CursorApiClient.getInstance().getRun(agentId, runId);
+        if (!this.stillSession(gen, agentId, runId)) {
           return;
         }
         this.applyRunSnapshot(run);
@@ -1322,21 +1437,20 @@ export class DetailVM {
           Haptics.success();
           this.announceFinished(run.status, run.result ?? this.resultText);
           this.settleLive(run.id, run.status);
+          return;
         }
-      } catch (_e) {
+      } catch (e) {
+        Log.warn(TAG, `poll failed: ${JSON.stringify(e)}`);
       }
+      if (this.stillSession(gen, agentId, runId) && this.isRunActive()) {
+        this.pollTimer = setTimeout(() => {
+          tick();
+        }, pollMs) as number;
+      }
+    };
+    this.pollTimer = setTimeout(() => {
+      tick();
     }, pollMs) as number;
-
-    const lastId = await PrefStore.getInstance().getLastEventId(this.agentId, runId);
-    await StreamCoordinator.getInstance().acquire(this.agentId, runId, (frame: SseFrame) => {
-      if (frame.id.length > 0) {
-        this.pendingEventId = frame.id;
-        this.eventIdFlush.kick();
-      }
-      this.onFrame(frame);
-    }, (kind: string, detail: string) => {
-      this.onStreamStatus(kind, detail);
-    }, lastId);
   }
 
   private onStreamStatus(kind: string, detail: string): void {
@@ -1392,8 +1506,14 @@ export class DetailVM {
     if (this.activeRunId.length === 0) {
       return;
     }
+    const gen = this.openGen;
+    const agentId = this.agentId;
+    const runId = this.activeRunId;
     try {
-      const run = await CursorApiClient.getInstance().getRun(this.agentId, this.activeRunId);
+      const run = await CursorApiClient.getInstance().getRun(agentId, runId);
+      if (!this.stillSession(gen, agentId)) {
+        return;
+      }
       this.applyRunSnapshot(run);
       this.streamNotice = '';
       if (isTerminal(run.status)) {
@@ -1476,6 +1596,9 @@ export class DetailVM {
   }
 
   private onFrame(frame: SseFrame): void {
+    if (this.openGen !== this.streamSession) {
+      return;
+    }
     if (frame.event === 'heartbeat' || frame.event === 'unknown') {
       return;
     }
@@ -1495,7 +1618,7 @@ export class DetailVM {
     if (frame.event === 'status') {
       const st = parseJson(frame.data);
       const status = `${st['status'] ?? ''}`;
-      if (status.length > 0) {
+      if (status.length > 0 && canApplyRunStatus(this.runStatus, status)) {
         this.runStatus = status;
         this.upsertRunHeader(this.activeRunId, status);
       }
@@ -1971,6 +2094,9 @@ export class DetailVM {
     if (this.agentId.length === 0 || this.agentId.indexOf('local-') === 0) {
       return;
     }
+    if (!force && this.isRunActive()) {
+      return;
+    }
     const snap = this.source.snapshot();
     const toolRuns: Record<string, boolean> = {};
     for (let i = 0; i < snap.length; i++) {
@@ -2012,7 +2138,7 @@ export class DetailVM {
     }
     if (keep.length > 0 || force) {
       if (keep.length > 0) {
-        AgentCache.getInstance().saveTimeline(this.agentId, keep);
+        AgentCache.getInstance().saveTimeline(this.agentId, capTimeline(keep));
       }
       let summary = '';
       for (let i = keep.length - 1; i >= 0; i--) {
@@ -2280,8 +2406,19 @@ export class DetailVM {
       return;
     }
     const prev = this.runStatus;
+    if (!canApplyRunStatus(prev, run.status)) {
+      return;
+    }
+    if (run.updatedAt && run.updatedAt.length > 0 &&
+      !isNewerIso(run.updatedAt, this.lastRunUpdatedAt) && prev === run.status) {
+      return;
+    }
     this.activeRunId = run.id;
     this.runStatus = run.status;
+    this.phaseMachine.sync(this.runStatus, this.loading, this.sending);
+    if (run.updatedAt && run.updatedAt.length > 0) {
+      this.lastRunUpdatedAt = run.updatedAt;
+    }
     if (prev !== run.status && !isTerminal(run.status)) {
       LiveIsland.update(runStatusZh(run.status)).catch(() => {
       });
@@ -2304,6 +2441,7 @@ export class DetailVM {
   private recomputeCompareUrl(): void {
     let head = '';
     let repo = this.repoUrl;
+    let pr = '';
     for (let i = 0; i < this.branches.length; i++) {
       const b = this.branches[i];
       if (!head && b.branch && b.branch.length > 0) {
@@ -2312,6 +2450,13 @@ export class DetailVM {
       if (b.repoUrl && b.repoUrl.length > 0) {
         repo = b.repoUrl;
       }
+      if (!pr && b.prUrl && b.prUrl.length > 0) {
+        pr = b.prUrl;
+      }
+    }
+    if (isOriginRepo(repo) && pr.length > 0) {
+      this.compareUrl = pr;
+      return;
     }
     this.compareUrl = gitCompareUrl(repo, this.startingRef, head);
   }
@@ -2359,7 +2504,7 @@ export class DetailVM {
 
   private clearPoll(): void {
     if (this.pollTimer >= 0) {
-      clearInterval(this.pollTimer);
+      clearTimeout(this.pollTimer);
       this.pollTimer = -1;
     }
   }
@@ -2433,7 +2578,7 @@ function runStatusZh(status: string): string {
 }
 
 function isTerminal(status: RunStatus | string): boolean {
-  return status === 'FINISHED' || status === 'ERROR' || status === 'CANCELLED' || status === 'EXPIRED';
+  return isTerminalStatus(`${status}`);
 }
 
 function extractRuns(raw: object): Run[] {

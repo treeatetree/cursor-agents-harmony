@@ -42,6 +42,11 @@ export function shortRepoName(url: string): string {
   return cleaned;
 }
 
+/** Case-insensitive owner/name, so inbox URL and API repository collapse. */
+export function repoIdentity(url: string): string {
+  return shortRepoName(url ?? '').toLowerCase();
+}
+
 /** Shorten opaque agent ids for list rows. */
 export function shortAgentId(id: string): string {
   if (!id || id.length <= 14) {

@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="cursor_bg">#141414</color>
-    <color name="cursor_accent">#F54E00</color>
-    <!-- Match APP_ICON_3D_DARK main plate (#14120B) -->
-    <color name="ic_launcher_background">#14120B</color>
-</resources>

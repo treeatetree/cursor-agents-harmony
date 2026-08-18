@@ -4,10 +4,13 @@ import { util } from '@kit.ArkTS';
 import { AgentDetail, AgentSummary, ConversationMessage, RepoInfo, ModelInfo, Run } from '../models/Api';
 import { TimelineItem } from '../models/Timeline';
 import { Log } from '../utils/Log';
+import { CacheCrypto } from './CacheCrypto';
+import { capMessages, capTimeline, clipText, CACHE_SUMMARY_MAX } from '../utils/CacheLimit';
 
 const TAG = 'AgentCache';
 const LRU_MAX = 20;
 const DISK_SOFT_MAX = 80;
+const DISK_HARD_MAX = 120;
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 interface InboxFile {
@@ -76,16 +79,24 @@ export class AgentCache {
   async init(context: common.UIAbilityContext): Promise<void> {
     this.dir = `${context.filesDir}/cache`;
     try {
-      // accessSync throws when missing on some API levels — always try mkdir.
       fs.mkdirSync(this.dir);
     } catch (_e) {
-      try {
-        // already exists or need parent — ignore
-        Log.info(TAG, `cache dir ready: ${this.dir}`);
-      } catch (__e) {
-        Log.warn(TAG, 'mkdir cache skipped');
-      }
+      Log.info(TAG, `cache dir ready: ${this.dir}`);
     }
+    await CacheCrypto.getInstance().init(context);
+  }
+
+  async wipeAll(): Promise<void> {
+    this.agentMemIds = [];
+    this.agentMemVals = [];
+    this.inboxFile = undefined;
+    this.summaries = {};
+    this.sweepAgentFiles();
+    this.sweepQueueDirs();
+    this.safeUnlink('inbox.json');
+    this.safeUnlink('index.json');
+    this.safeUnlink('summaries.json');
+    await CacheCrypto.getInstance().clear();
   }
 
   loadInbox(): AgentSummary[] {
@@ -280,14 +291,14 @@ export class AgentCache {
       payload.runs = prev.runs;
     }
     if (messages && messages.length > 0) {
-      payload.messages = messages;
+      payload.messages = capMessages(messages);
     } else if (prev?.messages && prev.messages.length > 0) {
-      payload.messages = prev.messages;
+      payload.messages = capMessages(prev.messages);
     } else if (messages) {
-      payload.messages = messages;
+      payload.messages = capMessages(messages);
     }
     if (prev?.timeline && prev.timeline.length > 0) {
-      payload.timeline = prev.timeline;
+      payload.timeline = capTimeline(prev.timeline);
     }
     if (prev?.eventIdWatermark && prev.eventIdWatermark.length > 0) {
       payload.eventIdWatermark = prev.eventIdWatermark;
@@ -296,9 +307,9 @@ export class AgentCache {
       payload.timelineRunId = prev.timelineRunId;
     }
     if (timelineSummary !== undefined) {
-      payload.timelineSummary = timelineSummary;
+      payload.timelineSummary = clipText(timelineSummary, CACHE_SUMMARY_MAX);
     } else if (prev?.timelineSummary !== undefined) {
-      payload.timelineSummary = prev.timelineSummary;
+      payload.timelineSummary = clipText(prev.timelineSummary, CACHE_SUMMARY_MAX);
     }
     if (payload.timelineSummary && payload.timelineSummary.length > 0) {
       this.ensureSummaries();
@@ -328,7 +339,7 @@ export class AgentCache {
     if (prev?.messages) {
       payload.messages = prev.messages;
     }
-    payload.timeline = items.slice();
+    payload.timeline = capTimeline(items);
     if (prev?.timelineSummary !== undefined) {
       payload.timelineSummary = prev.timelineSummary;
     }
@@ -352,7 +363,7 @@ export class AgentCache {
       return;
     }
     if (summary.length > 0) {
-      prev.timelineSummary = summary;
+      prev.timelineSummary = clipText(summary, CACHE_SUMMARY_MAX);
       this.ensureSummaries();
       this.summaries[agentId] = summary;
       this.writeSummaries();
@@ -415,6 +426,9 @@ export class AgentCache {
     this.summariesLoaded = false;
     this.sweepAgentFiles();
     this.sweepQueueDirs();
+    CacheCrypto.getInstance().clear().catch((e: Object) => {
+      Log.warn(TAG, `crypto clear failed: ${JSON.stringify(e)}`);
+    });
   }
 
   private readInboxFile(): InboxFile | undefined {
@@ -459,6 +473,23 @@ export class AgentCache {
     return undefined;
   }
 
+  trimMemory(): void {
+    let keepId = '';
+    try {
+      keepId = `${AppStorage.get<string>('watchingAgentId') ?? ''}`;
+    } catch (_e) {
+      keepId = '';
+    }
+    if (keepId.length === 0) {
+      this.agentMemIds = [];
+      this.agentMemVals = [];
+      return;
+    }
+    const hit = this.memGet(keepId);
+    this.agentMemIds = hit ? [keepId] : [];
+    this.agentMemVals = hit ? [hit] : [];
+  }
+
   private memPut(agentId: string, payload: CachedAgentPayload): void {
     for (let i = 0; i < this.agentMemIds.length; i++) {
       if (this.agentMemIds[i] === agentId) {
@@ -501,8 +532,12 @@ export class AgentCache {
       const id = order[i];
       const data = this.readJson<CachedAgentPayload>(this.agentFileName(id));
       const hasTimeline = data?.timeline && data.timeline.length > 0;
-      if (!hasTimeline) {
+      if (!hasTimeline || order.length > DISK_HARD_MAX) {
         drop.push(id);
+      } else if (data) {
+        data.timeline = undefined;
+        data.messages = undefined;
+        this.writeJson(this.agentFileName(id), data);
       }
     }
     if (drop.length === 0) {
@@ -608,7 +643,11 @@ export class AgentCache {
       fs.readSync(file.fd, buf);
       fs.closeSync(file);
       const text = util.TextDecoder.create('utf-8').decodeToString(new Uint8Array(buf));
-      return JSON.parse(text) as T;
+      const opened = this.shouldSeal(name) ? CacheCrypto.getInstance().open(text) : text;
+      if (!opened || opened.length === 0) {
+        return undefined;
+      }
+      return JSON.parse(opened) as T;
     } catch (_e) {
       return undefined;
     }
@@ -618,7 +657,8 @@ export class AgentCache {
     try {
       const p = this.pathOf(name);
       const tmp = `${p}.tmp`;
-      const text = JSON.stringify(obj);
+      const raw = JSON.stringify(obj);
+      const text = this.shouldSeal(name) ? CacheCrypto.getInstance().seal(raw) : raw;
       const bytes = new util.TextEncoder().encodeInto(text);
       const file = fs.openSync(tmp, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
       fs.writeSync(file.fd, bytes.buffer);
@@ -632,6 +672,11 @@ export class AgentCache {
     } catch (e) {
       Log.warn(TAG, `write ${name} failed`);
     }
+  }
+
+  private shouldSeal(name: string): boolean {
+    return name.indexOf('agent_') === 0 || name.indexOf('queue_') === 0 ||
+      name.indexOf('images.json') >= 0;
   }
 
   private safeUnlink(name: string): void {

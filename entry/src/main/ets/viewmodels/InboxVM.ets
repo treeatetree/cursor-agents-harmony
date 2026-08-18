@@ -19,6 +19,7 @@ import {
 import { repoTail } from '../utils/DisplayFmt';
 import { AppState } from '../utils/AppState';
 import { LiveIsland } from '../utils/LiveIsland';
+import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { DetailVM } from './DetailVM';
 
 const TAG = 'InboxVM';
@@ -46,10 +47,20 @@ export class InboxVM {
   private refreshQueued: boolean = false;
   private watchTimer: number = -1;
   private watchBusy: boolean = false;
+  private watchCooldownUntil: number = 0;
   private listeners: Array<() => void> = [];
 
-  onChange(cb: () => void): void {
+  onChange(cb: () => void): () => void {
     this.listeners.push(cb);
+    return () => {
+      const next: Array<() => void> = [];
+      for (let i = 0; i < this.listeners.length; i++) {
+        if (this.listeners[i] !== cb) {
+          next.push(this.listeners[i]);
+        }
+      }
+      this.listeners = next;
+    };
   }
 
   private emitChange(): void {
@@ -238,27 +249,46 @@ export class InboxVM {
       return;
     }
     this.tickWatch();
-    this.watchTimer = setInterval(() => {
-      this.tickWatch();
-    }, 1000) as number;
+    this.armWatch();
   }
 
   stopWatch(): void {
     if (this.watchTimer >= 0) {
-      clearInterval(this.watchTimer);
+      clearTimeout(this.watchTimer);
       this.watchTimer = -1;
     }
   }
 
+  private armWatch(): void {
+    if (this.watchTimer >= 0) {
+      return;
+    }
+    const jitter = Math.floor(Math.random() * 3000);
+    this.watchTimer = setTimeout(() => {
+      this.watchTimer = -1;
+      this.tickWatch();
+      if (AppState.foreground) {
+        this.armWatch();
+      }
+    }, 8000 + jitter) as number;
+  }
+
   private tickWatch(): void {
-    if (this.watchBusy || !ApiKeyStore.getInstance().isUnlocked()) {
+    if (!AppState.foreground || this.watchBusy || !ApiKeyStore.getInstance().isUnlocked()) {
+      return;
+    }
+    if (Date.now() < this.watchCooldownUntil) {
+      return;
+    }
+    if (!NetworkMonitor.getInstance().online) {
       return;
     }
     const inflight = this.inFlightAgents();
     if (inflight.length === 0) {
       return;
     }
-    this.enrichRunStatuses(inflight).catch(() => {
+    this.enrichRunStatuses(inflight).catch((e: Object) => {
+      Log.warn(TAG, `watch failed: ${JSON.stringify(e)}`);
     });
   }
 
@@ -285,7 +315,8 @@ export class InboxVM {
     }
     this.watchBusy = true;
     const tasks: Promise<void>[] = [];
-    const cap = agents.length > 12 ? 12 : agents.length;
+    const cap = agents.length > 3 ? 3 : agents.length;
+    let changed = false;
     for (let i = 0; i < cap; i++) {
       const a = agents[i];
       if (!a.latestRunId || a.latestRunId.length === 0 || a.status !== 'ACTIVE') {
@@ -300,6 +331,10 @@ export class InboxVM {
           for (let j = 0; j < snap.length; j++) {
             if (snap[j].id === agentId) {
               const oldStatus = `${snap[j].latestRunStatus ?? ''}`;
+              if (oldStatus === `${run.status}` &&
+                (!run.updatedAt || run.updatedAt === snap[j].updatedAt)) {
+                break;
+              }
               const next = copyAgent(snap[j]);
               next.latestRunStatus = run.status;
               if (run.updatedAt && run.updatedAt.length > 0) {
@@ -313,22 +348,31 @@ export class InboxVM {
               applyRunResult(next, run);
               this.source.updateAt(j, next);
               this.noteTerminal(next, oldStatus);
+              changed = true;
               break;
             }
           }
-        } catch (_e) {
+        } catch (e) {
+          if (e instanceof ApiException && e.code === 429) {
+            this.watchCooldownUntil = Date.now() + 30000;
+            Log.warn(TAG, 'watch cooldown after 429');
+          } else {
+            Log.warn(TAG, `enrich ${agentId} failed`);
+          }
         }
       })());
     }
     try {
       if (tasks.length > 0) {
         await Promise.all(tasks);
-        AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
-        UnreadStore.getInstance().syncBadge();
-        this.pushWidget();
-        LiveIsland.syncRunning(this.inFlightAgents()).catch(() => {
-        });
-        this.emitChange();
+        if (changed) {
+          AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
+          UnreadStore.getInstance().syncBadge();
+          this.pushWidget();
+          LiveIsland.syncRunning(this.inFlightAgents()).catch(() => {
+          });
+          this.emitChange();
+        }
       }
     } finally {
       this.watchBusy = false;
@@ -536,7 +580,10 @@ export class InboxVM {
   }
 
   noteCreateFailed(name: string): void {
-    const title = name.length > 0 ? name : '新任务';
+    let title = name.length > 0 ? name : '新任务';
+    if (title.length > 14) {
+      title = `${title.substring(0, 14)}…`;
+    }
     this.actionBanner = `「${title}」创建失败`;
     this.actionKind = 'retry-create';
     this.emitChange();

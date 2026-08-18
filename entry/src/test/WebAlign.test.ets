@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { gitCompareUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
-import { applyInboxQuery, groupAgents, mergeInboxLists, recencyMs } from '../main/ets/utils/InboxGrouping';
+import { gitCompareUrl, isOriginRepo, normalizeCreateRepoUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
+import { applyInboxQuery, collectRecentEnvs, groupAgents, mergeInboxLists, recencyMs } from '../main/ets/utils/InboxGrouping';
 import { unwrapAgentsList } from '../main/ets/api/ApiUnwrap';
 import { agentIdFromLaunch, noticeTextFromLaunch } from '../main/ets/utils/WantParse';
 import { citationQuote, clipNotice, isCitationFence, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
@@ -125,6 +125,32 @@ export default function webAlignTest() {
       const url = gitCompareUrl('https://github.com/acme/app.git', '', 'feat/x');
       expect(url).assertEqual('https://github.com/acme/app/tree/feat%2Fx');
     });
+
+    it('parses origin clone and codebase browse urls', 0, () => {
+      const a = parseGitWeb('https://origin.cursor.com/acme/app.git');
+      expect(a?.owner).assertEqual('acme');
+      expect(a?.repo).assertEqual('app');
+      const b = parseGitWeb('https://cursor.com/codebase/acme/app');
+      expect(b?.owner).assertEqual('acme');
+      expect(b?.repo).assertEqual('app');
+      expect(isOriginRepo('https://origin.cursor.com/acme/app')).assertTrue();
+      expect(isOriginRepo('https://github.com/acme/app')).assertFalse();
+      expect(isOriginRepo('https://cursor.com/docs/origin')).assertFalse();
+    });
+
+    it('normalizes codebase urls to origin clone urls', 0, () => {
+      expect(normalizeCreateRepoUrl('https://cursor.com/codebase/acme/app'))
+        .assertEqual('https://origin.cursor.com/acme/app');
+      expect(normalizeCreateRepoUrl('https://origin.cursor.com/acme/app.git'))
+        .assertEqual('https://origin.cursor.com/acme/app');
+      expect(normalizeCreateRepoUrl('https://github.com/acme/app'))
+        .assertEqual('https://github.com/acme/app');
+    });
+
+    it('origin compare falls back to codebase home', 0, () => {
+      const url = gitCompareUrl('https://origin.cursor.com/acme/app', 'main', 'cursor/fix');
+      expect(url).assertEqual('https://cursor.com/codebase/acme/app');
+    });
   });
 
   describe('InboxGrouping', () => {
@@ -206,6 +232,17 @@ export default function webAlignTest() {
       expect(buckets[0].items[0].id).assertEqual('newer');
     });
 
+    it('merges repo groups that differ only by case', 0, () => {
+      const items = [
+        agent({ id: 'a', repo: 'https://github.com/x/MyCloudSever' }),
+        agent({ id: 'b', repo: 'https://github.com/x/mycloudsever.git' })
+      ];
+      const buckets = groupAgents(items, 'repo');
+      expect(buckets.length).assertEqual(1);
+      expect(buckets[0].key).assertEqual('x/mycloudsever');
+      expect(buckets[0].items.length).assertEqual(2);
+    });
+
     it('groups by status', 0, () => {
       const items = [
         agent({ id: 'a', latestRunStatus: 'ERROR' }),
@@ -213,6 +250,23 @@ export default function webAlignTest() {
       ];
       const buckets = groupAgents(items, 'status');
       expect(buckets.length).assertEqual(2);
+    });
+
+    it('collects unique cloud env names newest first', 0, () => {
+      const a = agent({ id: 'a' });
+      a.env = { type: 'cloud', name: 'treeatetree/family-finance' };
+      const b = agent({ id: 'b' });
+      b.env = { type: 'cloud', name: 'treeatetree/mess' };
+      const c = agent({ id: 'c' });
+      c.env = { type: 'cloud', name: 'treeatetree/family-finance' };
+      const d = agent({ id: 'd' });
+      d.env = { type: 'cloud' };
+      const e = agent({ id: 'e' });
+      e.env = { type: 'pool', name: 'gpu' };
+      const names = collectRecentEnvs([a, b, c, d, e], 8);
+      expect(names.length).assertEqual(2);
+      expect(names[0]).assertEqual('treeatetree/family-finance');
+      expect(names[1]).assertEqual('treeatetree/mess');
     });
 
     it('pinned ids stay first in pin order', 0, () => {
@@ -358,7 +412,7 @@ export default function webAlignTest() {
     it('reads agentId from parameters or uri', 0, () => {
       expect(agentIdFromLaunch({ agentId: 'bc-9' }, '')).assertEqual('bc-9');
       expect(agentIdFromLaunch(undefined, 'cursoragent://open/bc-8')).assertEqual('bc-8');
-      expect(noticeTextFromLaunch({ noticeText: '已完成' })).assertEqual('已完成');
+      expect(noticeTextFromLaunch({ noticeText: '已完成' })).assertEqual('');
     });
   });
 

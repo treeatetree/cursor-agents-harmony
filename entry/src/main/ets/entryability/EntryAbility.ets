@@ -18,6 +18,9 @@ import { AppState } from '../utils/AppState';
 import { agentIdFromLaunch, noticeTextFromLaunch, showUnreadFromLaunch } from '../utils/WantParse';
 import { applyAppFont, registerAppFonts } from '../theme/AppFonts';
 import { SessionDiag } from '../utils/SessionDiag';
+import { AgentCache } from '../store/AgentCache';
+import { AgentPrefetch } from '../store/AgentPrefetch';
+import { dropAllPreviewMaps, sweepPreviewFiles } from '../utils/ImagePicker';
 
 const DOMAIN = 0x435552;
 const TAG = 'CursorMobile';
@@ -46,6 +49,10 @@ export default class EntryAbility extends UIAbility {
       } catch (_e) {
       }
     });
+    try {
+      sweepPreviewFiles(this.context.cacheDir);
+    } catch (_e) {
+    }
     hilog.info(DOMAIN, TAG, 'Application created');
   }
 
@@ -278,6 +285,7 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     AppState.foreground = false;
     hilog.info(DOMAIN, TAG, 'onBackground');
+    InboxVM.getInstance().stopWatch();
     // Keep SSE alive when possible so Last-Event-ID resume is less lossy.
     // OS may still suspend the process; onForeground reconnects via resumeIfNeeded.
   }
@@ -288,5 +296,8 @@ export default class EntryAbility extends UIAbility {
     if (detail) {
       detail.clearExpandedState();
     }
+    dropAllPreviewMaps();
+    AgentPrefetch.getInstance().clear();
+    AgentCache.getInstance().trimMemory();
   }
 }

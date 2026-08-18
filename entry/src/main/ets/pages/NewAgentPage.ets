@@ -11,13 +11,15 @@ import {
 } from '../models/Api';
 import { Haptics } from '../utils/Haptics';
 import { motionMs } from '../utils/Motion';
-import { dropPreviewMap, maxPromptImages, pickPromptImages, previewSrc, PromptImage, toApiImages } from '../utils/ImagePicker';
+import { dropPreviewMap, maxPromptImages, pickPromptImages, previewSrc, PromptImage, toApiImages,
+  unlinkPreviewFile } from '../utils/ImagePicker';
 import { HuIconButton } from '../components/HuIconButton';
 import { PromptShell } from '../components/PromptShell';
 import { EnvVarListEditor, McpListEditor, SubagentListEditor } from '../components/CapabilityEditors';
 import { defaultEnv, envNameLabel, hasTools, serializeTools, toolsChipLabel, usesNamedEnv } from '../utils/AgentCapabilities';
-import { repoTail } from '../utils/DisplayFmt';
-import { collectRecentRepos, pairRecentRepos, RecentRepo, RecentRepoRow } from '../utils/InboxGrouping';
+import { repoIdentity, repoTail } from '../utils/DisplayFmt';
+import { collectRecentEnvs, collectRecentRepos, pairRecentRepos, RecentRepo, RecentRepoRow } from '../utils/InboxGrouping';
+import { isOriginRepo } from '../utils/GitLinks';
 import {
   buildParamRows, formatChipFromRows, formatFollowChip, findModel, groupModels, ModelParamRow,
   ModelVendorGroup, paramRowsStamp, rowsToParams, shortModelName, snapParamRows, variantLabel,
@@ -91,17 +93,19 @@ export struct NewAgentPage {
   @State moreLabel: string = '更多';
   @State showAdvanced: boolean = false;
   @State recentRepos: RecentRepo[] = [];
+  @State recentEnvs: string[] = [];
   @State reposRefreshing: boolean = false;
   @State modelsLoading: boolean = false;
   @State modelsError: string = '';
   private attachedImages: PromptImage[] = [];
   private draftTimer: number = -1;
+  private unsubBp: (() => void) | undefined = undefined;
 
   aboutToAppear(): void {
     this.topInset = this.embedded ? 8 : this.bp.safeTop();
     this.bottomInset = this.bp.composerBottom();
     this.windowW = this.bp.widthVp;
-    this.bp.onChange(() => {
+    this.unsubBp = this.bp.onChange(() => {
       this.topInset = this.embedded ? 8 : this.bp.safeTop();
       this.bottomInset = this.bp.composerBottom();
       this.windowW = this.bp.widthVp;
@@ -119,6 +123,18 @@ export struct NewAgentPage {
     this.vm.loadMeta(false).then(() => {
       this.syncFromVm();
     });
+  }
+
+  aboutToDisappear(): void {
+    if (this.unsubBp) {
+      this.unsubBp();
+      this.unsubBp = undefined;
+    }
+    for (let i = 0; i < this.attachedImages.length; i++) {
+      const src = previewSrc(this.attachedImages[i]);
+      dropPreviewMap(src);
+      unlinkPreviewFile(src);
+    }
   }
 
   private openSheet(kind: string): void {
@@ -271,6 +287,7 @@ export struct NewAgentPage {
     this.updateModelMeta();
     this.refreshCanSubmit();
     this.refreshRecentRepos();
+    this.refreshRecentEnvs();
   }
 
   private refreshRecentRepos(): void {
@@ -279,24 +296,30 @@ export struct NewAgentPage {
     const recent = collectRecentRepos(InboxVM.getInstance().source.snapshot(), 80);
     for (let i = 0; i < recent.length; i++) {
       const url = recent[i].url;
-      if (url.length === 0 || seen.indexOf(url) >= 0) {
+      const id = repoIdentity(url);
+      if (url.length === 0 || id.length === 0 || seen.indexOf(id) >= 0) {
         continue;
       }
-      seen.push(url);
+      seen.push(id);
       out.push(recent[i]);
     }
     const list = this.vm.repos;
     for (let i = 0; i < list.length; i++) {
       const url = list[i].repository;
-      if (url.length === 0 || seen.indexOf(url) >= 0) {
+      const id = repoIdentity(url);
+      if (url.length === 0 || id.length === 0 || seen.indexOf(id) >= 0) {
         continue;
       }
-      seen.push(url);
-      const name = list[i].name.length > 0 ? list[i].name : repoTail(url);
-      const item: RecentRepo = { url: url, ref: 'main', title: name };
+      seen.push(id);
+      const name = repoTail(url);
+      const item: RecentRepo = { url: url, ref: 'main', title: name.length > 0 ? name : list[i].name };
       out.push(item);
     }
     this.recentRepos = out;
+  }
+
+  private refreshRecentEnvs(): void {
+    this.recentEnvs = collectRecentEnvs(InboxVM.getInstance().source.snapshot(), 8);
   }
 
   private repoGridItems(): RecentRepo[] {
@@ -350,10 +373,42 @@ export struct NewAgentPage {
     Haptics.tick();
     this.repoMode = 'repo';
     this.vm.repoMode = 'repo';
-    this.selectedRepo = item.url;
-    this.vm.selectedRepo = item.url;
-    this.selectedBranch = item.ref.length > 0 ? item.ref : 'main';
-    this.vm.selectedBranch = this.selectedBranch;
+    this.applyRepoSelection(item.url, item.ref.length > 0 ? item.ref : 'main');
+    this.refreshCanSubmit();
+  }
+
+  private applyRepoSelection(url: string, ref?: string): void {
+    this.clearNamedEnv();
+    if (this.repoMode === 'none') {
+      this.repoMode = 'repo';
+      this.vm.repoMode = 'repo';
+    }
+    this.selectedRepo = url;
+    this.vm.selectedRepo = url;
+    if (ref !== undefined) {
+      this.selectedBranch = ref.length > 0 ? ref : 'main';
+      this.vm.selectedBranch = this.selectedBranch;
+    }
+    if (isOriginRepo(url)) {
+      this.openAsCursorGithubApp = false;
+      this.vm.openAsCursorGithubApp = false;
+    }
+  }
+
+  private clearNamedEnv(): void {
+    if (this.env.kind === 'default' && this.env.name.length === 0) {
+      return;
+    }
+    this.env = defaultEnv();
+    this.vm.env = this.env;
+  }
+
+  private pickRecentEnv(name: string): void {
+    Haptics.tick();
+    this.env = { kind: 'cloud', name: name };
+    this.vm.env = this.env;
+    this.repoMode = 'none';
+    this.vm.repoMode = 'none';
     this.refreshCanSubmit();
   }
 
@@ -481,12 +536,11 @@ export struct NewAgentPage {
   }
 
   private setRepoMode(mode: string): void {
+    if (mode !== 'none' || this.repoMode !== 'none') {
+      this.clearNamedEnv();
+    }
     this.repoMode = mode;
     this.vm.repoMode = mode;
-    if (mode === 'none') {
-      this.env = defaultEnv();
-      this.vm.env = this.env;
-    }
     this.refreshCanSubmit();
   }
 
@@ -548,6 +602,12 @@ export struct NewAgentPage {
       PrefStore.getInstance().setDefaultModel(this.selectedModel);
     }
     Haptics.success();
+    for (let i = 0; i < this.attachedImages.length; i++) {
+      const src = previewSrc(this.attachedImages[i]);
+      dropPreviewMap(src);
+      unlinkPreviewFile(src);
+    }
+    this.attachedImages = [];
     if (this.embedded) {
       this.onCreated(localId);
       return;
@@ -882,14 +942,14 @@ export struct NewAgentPage {
       .width('100%')
 
       if (this.repoMode === 'none') {
-        Text('不绑定 GitHub 仓库，适合纯问答或规划。')
+        Text(usesNamedEnv(this.env) ? `使用云环境 ${this.env.name}` : '不绑定仓库，适合纯问答或规划。')
           .fontSize(Tokens.typeCaption)
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
           .padding({ top: 12 })
       } else {
         if (this.repoMode === 'pr') {
-          TextInput({ text: this.selectedPrUrl, placeholder: 'https://github.com/org/repo/pull/123' })
+          TextInput({ text: this.selectedPrUrl, placeholder: 'GitHub 或 Origin 的 PR 链接' })
             .height(Tokens.touchMin)
             .width('100%')
             .fontSize(Tokens.typeCallout)
@@ -925,8 +985,7 @@ export struct NewAgentPage {
                 caption: r.owner,
                 selected: this.selectedRepo === r.repository,
                 onTap: () => {
-                  this.selectedRepo = r.repository;
-                  this.vm.selectedRepo = r.repository;
+                  this.applyRepoSelection(r.repository);
                   this.closeSheet();
                   this.refreshCanSubmit();
                 }
@@ -939,7 +998,7 @@ export struct NewAgentPage {
         .scrollBar(BarState.Off)
 
         Row({ space: 8 }) {
-          TextInput({ text: this.manualRepoUrl, placeholder: '或粘贴 https://github.com/org/repo' })
+          TextInput({ text: this.manualRepoUrl, placeholder: '或粘贴 GitHub / Origin 仓库 URL' })
             .layoutWeight(1)
             .height(Tokens.touchMin)
             .fontSize(Tokens.typeCallout)
@@ -957,7 +1016,7 @@ export struct NewAgentPage {
             color: $r('app.color.text_primary'),
             onTap: () => {
               this.vm.setManualRepoUrl(this.manualRepoUrl);
-              this.selectedRepo = this.vm.selectedRepo;
+              this.applyRepoSelection(this.vm.selectedRepo);
               this.closeSheet();
               this.refreshCanSubmit();
             }
@@ -1011,7 +1070,7 @@ export struct NewAgentPage {
             }
           })
             .margin({ right: 6, bottom: 6 })
-          if (this.autoCreatePR) {
+          if (this.autoCreatePR && !isOriginRepo(this.selectedRepo)) {
             HuChip({
               label: '以 Cursor App 开 PR',
               on: this.openAsCursorGithubApp,
@@ -1021,6 +1080,8 @@ export struct NewAgentPage {
               }
             })
               .margin({ right: 6, bottom: 6 })
+          }
+          if (this.autoCreatePR) {
             HuChip({
               label: '跳过自己评审',
               on: this.skipReviewerRequest,
@@ -1319,7 +1380,7 @@ export struct NewAgentPage {
       .width('100%')
       .constraintSize({ minHeight: Tokens.touchMin })
       if (this.env.kind === 'cloud') {
-        Text('填 Cursor 控制台里的环境名')
+        Text('点最近用过的，或填控制台里的环境名')
           .fontSize(Tokens.typeMicro)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
@@ -1346,8 +1407,28 @@ export struct NewAgentPage {
           .onChange((v: string) => {
             this.env = { kind: this.env.kind, name: v };
             this.vm.env = this.env;
+            if (usesNamedEnv(this.env)) {
+              this.repoMode = 'none';
+              this.vm.repoMode = 'none';
+            }
             this.refreshCanSubmit();
           })
+      }
+      if (this.env.kind === 'cloud' && this.recentEnvs.length > 0) {
+        Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
+          ForEach(this.recentEnvs, (name: string) => {
+            HuChip({
+              label: name,
+              on: this.env.name === name,
+              maxVp: 200,
+              onTap: () => {
+                this.pickRecentEnv(name);
+              }
+            })
+              .margin({ right: 6, bottom: 6 })
+          }, (name: string) => `env-${name}`)
+        }
+        .width('100%')
       }
 
       Text('MCP')

@@ -3,45 +3,57 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export DEVECO_SDK_HOME="${DEVECO_SDK_HOME:-/Applications/DevEco-Studio.app/Contents/sdk}"
-export JAVA_HOME="${JAVA_HOME:-/Applications/DevEco-Studio.app/Contents/jbr/Contents/Home}"
-export PATH="$JAVA_HOME/bin:/Applications/DevEco-Studio.app/Contents/tools/node/bin:/Applications/DevEco-Studio.app/Contents/tools/ohpm/bin:/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin:/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains:${PATH}"
-export NODE_HOME="/Applications/DevEco-Studio.app/Contents/tools/node"
+DEVECO_APP="${DEVECO_APP:-/Applications/DevEco-Studio.app/Contents}"
+export DEVECO_SDK_HOME="${DEVECO_SDK_HOME:-$DEVECO_APP/sdk}"
+export JAVA_HOME="${JAVA_HOME:-$DEVECO_APP/jbr/Contents/Home}"
+export NODE_HOME="${NODE_HOME:-$DEVECO_APP/tools/node}"
+OHPM_BIN="${OHPM_BIN:-$DEVECO_APP/tools/ohpm/bin}"
+HVIGOR_BIN="${HVIGOR_BIN:-$DEVECO_APP/tools/hvigor/bin}"
+HDC_BIN="${HDC_BIN:-$DEVECO_SDK_HOME/default/openharmony/toolchains/hdc}"
+export PATH="$JAVA_HOME/bin:$NODE_HOME/bin:$OHPM_BIN:$HVIGOR_BIN:$DEVECO_SDK_HOME/default/openharmony/toolchains:${PATH}"
+BUILD_MODE="${BUILD_MODE:-debug}"
 
 cd "$ROOT"
 
+if [[ -f "$ROOT/build-profile.local.json5" ]]; then
+  echo "==> using gitignored build-profile.local.json5"
+  cp "$ROOT/build-profile.json5" "$ROOT/build-profile.json5.committed"
+  cp "$ROOT/build-profile.local.json5" "$ROOT/build-profile.json5"
+  restore_profile() {
+    if [[ -f "$ROOT/build-profile.json5.committed" ]]; then
+      mv -f "$ROOT/build-profile.json5.committed" "$ROOT/build-profile.json5"
+    fi
+  }
+  trap restore_profile EXIT
+fi
+
 echo "==> DEVECO_SDK_HOME=$DEVECO_SDK_HOME"
-echo "==> Checking SDK components for API 24..."
+echo "==> BUILD_MODE=$BUILD_MODE"
 if [[ ! -f "$DEVECO_SDK_HOME/default/openharmony/ets/oh-uni-package.json" ]]; then
   echo "ERROR: HarmonyOS SDK missing under $DEVECO_SDK_HOME"
-  echo "Open DevEco Studio → Settings → SDK → install HarmonyOS SDK (API matching phone)."
+  echo "Set DEVECO_SDK_HOME / JAVA_HOME / NODE_HOME, or open DevEco Studio and install the SDK."
   exit 1
 fi
 
 echo "==> hdc targets:"
-HDC_BIN="$DEVECO_SDK_HOME/default/openharmony/toolchains/hdc"
 if [[ -x "$HDC_BIN" ]]; then
   "$HDC_BIN" list targets || true
 else
   echo "(hdc not found)"
 fi
 
-if [[ ! -f "$ROOT/signing/debug.p7b" ]]; then
+if [[ ! -f "$ROOT/signing/debug.p7b" && ! -f "$ROOT/build-profile.local.json5" ]]; then
   echo ""
-  echo "NOTE: Personal debug profile not found (signing/debug.p7b)."
-  echo "In DevEco Studio:"
-  echo "  1. File → Open → $ROOT"
-  echo "  2. File → Project Structure → Signing Configs → Automatically generate signature"
-  echo "  3. Sign in with Huawei developer account"
-  echo "  4. Build → Build Hap(s)/APP(s)"
+  echo "NOTE: No local signing overlay. Copy build-profile.local.json5.example"
+  echo "to build-profile.local.json5 after DevEco auto-sign, or sign in the IDE."
   echo ""
 fi
 
-echo "==> ohpm install (if needed)"
-ohpm install || true
+echo "==> ohpm install"
+ohpm install
 
-echo "==> hvigor assembleHap"
-hvigorw assembleHap --mode module -p module=entry@default -p product=default -p buildMode=debug --no-daemon
+echo "==> hvigor assembleHap ($BUILD_MODE)"
+hvigorw assembleHap --mode module -p module=entry@default -p product=default -p "buildMode=$BUILD_MODE" --no-daemon
 
 echo "==> Looking for HAP outputs..."
 mkdir -p "$ROOT/dist"
@@ -51,4 +63,4 @@ find "$ROOT/entry/build" -name "*.hap" 2>/dev/null | while read -r hap; do
 done
 ls -lh "$ROOT/dist" || true
 echo ""
-echo "Next: configure DevEco automatic signing, then ./scripts/install.sh"
+echo "Next: ./scripts/install.sh"

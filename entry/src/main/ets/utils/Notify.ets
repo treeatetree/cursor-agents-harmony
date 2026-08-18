@@ -20,9 +20,14 @@ const SUMMARY_ID = 435552;
  */
 export class Notify {
   private static enabled: boolean = true;
+  private static detail: boolean = false;
 
   static setEnabled(v: boolean): void {
     Notify.enabled = v;
+  }
+
+  static setDetailEnabled(v: boolean): void {
+    Notify.detail = v;
   }
 
   static async ensureChannel(): Promise<void> {
@@ -60,16 +65,21 @@ export class Notify {
     }
     try {
       const first = items[0];
-      const repoBit = (first.repo ?? '').length > 0 ? ` · ${first.repo}` : '';
-      const title = items.length === 1 ?
-        `${first.name}${repoBit} · ${first.statusZh}` :
-        `${items.length} 条新结果`;
+      const title = Notify.detail ?
+        (items.length === 1 ?
+          `${first.name}${(first.repo ?? '').length > 0 ? ` · ${first.repo}` : ''} · ${first.statusZh}` :
+          `${items.length} 条新结果`) :
+        (items.length === 1 ? '任务已更新' : `${items.length} 条任务已更新`);
       const lines: string[] = [];
       for (let i = 0; i < items.length && i < 8; i++) {
         const it = items[i];
-        const r = (it.repo ?? '').length > 0 ? `${it.repo} · ` : '';
-        const bit = it.snippet.length > 0 ? ` · ${it.snippet}` : '';
-        lines.push(`${it.name} ${r}${it.statusZh}${bit}`);
+        if (Notify.detail) {
+          const r = (it.repo ?? '').length > 0 ? `${it.repo} · ` : '';
+          const bit = it.snippet.length > 0 ? ` · ${it.snippet}` : '';
+          lines.push(`${it.name} ${r}${it.statusZh}${bit}`);
+        } else {
+          lines.push('任务已更新');
+        }
       }
       if (items.length > 8) {
         lines.push(`另有 ${items.length - 8} 条`);

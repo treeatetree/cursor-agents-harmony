@@ -44,6 +44,55 @@ export function requirePreviewMap(key: string): image.PixelMap {
   return previewMaps.get(key) as image.PixelMap;
 }
 
+export function dropAllPreviewMaps(): void {
+  const keys: string[] = [];
+  const it = previewMaps.keys();
+  let step = it.next();
+  while (!step.done) {
+    keys.push(step.value);
+    step = it.next();
+  }
+  for (let i = 0; i < keys.length; i++) {
+    dropPreviewMap(keys[i]);
+  }
+}
+
+export function unlinkPreviewFile(path: string): void {
+  if (!path || path.indexOf('/pv_') < 0) {
+    return;
+  }
+  try {
+    const p = path.indexOf('file://') === 0 ? path.substring(7) : path;
+    fs.unlinkSync(p);
+  } catch (_e) {
+  }
+}
+
+export function sweepPreviewFiles(cacheDir: string): void {
+  if (!cacheDir || cacheDir.length === 0) {
+    return;
+  }
+  try {
+    const names = fs.listFileSync(cacheDir);
+    const now = Date.now();
+    for (let i = 0; i < names.length; i++) {
+      const n = names[i];
+      if (n.indexOf('pv_') !== 0) {
+        continue;
+      }
+      const full = `${cacheDir}/${n}`;
+      try {
+        const st = fs.statSync(full);
+        if (now - st.mtime > 24 * 60 * 60 * 1000) {
+          fs.unlinkSync(full);
+        }
+      } catch (_e) {
+      }
+    }
+  } catch (_e) {
+  }
+}
+
 export function dropPreviewMap(key: string): void {
   if (key.length === 0) {
     return;

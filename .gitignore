@@ -3,8 +3,9 @@
 /oh_modules
 **/build/
 **/.gradle/
-**/oh-package-lock.json5
 local.properties
+build-profile.local.json5
+build-profile.json5.committed
 .hvigor/
 .idea/
 *.hap

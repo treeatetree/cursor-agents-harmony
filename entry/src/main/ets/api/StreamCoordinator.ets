@@ -19,6 +19,7 @@ export class StreamCoordinator {
   private frameHandler: FrameHandler | undefined = undefined;
   private statusHandler: StatusHandler | undefined = undefined;
   private active: boolean = false;
+  private generation: number = 0;
 
   static getInstance(): StreamCoordinator {
     if (!StreamCoordinator.instance) {
@@ -35,9 +36,15 @@ export class StreamCoordinator {
     return this.runId;
   }
 
+  currentGeneration(): number {
+    return this.generation;
+  }
+
   async acquire(agentId: string, runId: string, onFrame: FrameHandler, onStatus: StatusHandler,
     resumeId: string = ''): Promise<void> {
     this.release();
+    this.generation += 1;
+    const generation = this.generation;
     this.agentId = agentId;
     this.runId = runId;
     this.frameHandler = onFrame;
@@ -45,10 +52,11 @@ export class StreamCoordinator {
     this.lastEventId = resumeId;
     this.reconnectAttempt = 0;
     this.active = true;
-    await this.open();
+    await this.open(generation);
   }
 
   release(): void {
+    this.generation += 1;
     this.active = false;
     this.frameHandler = undefined;
     this.statusHandler = undefined;
@@ -64,37 +72,47 @@ export class StreamCoordinator {
     Log.info(TAG, 'released');
   }
 
-  private async open(): Promise<void> {
-    if (!this.active) {
+  private async open(generation: number): Promise<void> {
+    if (!this.active || this.generation !== generation) {
       return;
     }
+    const agentId = this.agentId;
+    const runId = this.runId;
+    const onFrame = this.frameHandler;
+    const onStatus = this.statusHandler;
     this.client = new RunSseClient();
-    await this.client.start(this.agentId, this.runId, this.lastEventId, (frame: SseFrame) => {
+    await this.client.start(agentId, runId, this.lastEventId, (frame: SseFrame) => {
+      if (this.generation !== generation || !this.active) {
+        return;
+      }
       this.reconnectAttempt = 0;
       if (frame.id.length > 0) {
         this.lastEventId = frame.id;
       }
-      if (this.frameHandler) {
-        this.frameHandler(frame);
+      if (onFrame) {
+        onFrame(frame);
       }
     }, (kind: string, detail: string) => {
+      if (this.generation !== generation) {
+        return;
+      }
       if (kind === 'expired' || kind === 'done') {
         this.active = false;
       }
-      if (this.statusHandler) {
-        this.statusHandler(kind, detail);
+      if (onStatus) {
+        onStatus(kind, detail);
       }
-      if (!this.active) {
+      if (!this.active || this.generation !== generation) {
         return;
       }
       if (kind === 'error' || kind === 'ended' || kind === 'stale') {
-        this.scheduleReconnect();
+        this.scheduleReconnect(generation);
       }
-    });
+    }, generation);
   }
 
-  private scheduleReconnect(): void {
-    if (!this.active) {
+  private scheduleReconnect(generation: number): void {
+    if (!this.active || this.generation !== generation) {
       return;
     }
     if (this.reconnectTimer >= 0) {
@@ -107,12 +125,15 @@ export class StreamCoordinator {
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = -1;
+      if (this.generation !== generation || !this.active) {
+        return;
+      }
       if (this.client) {
         this.lastEventId = this.client.getLastEventId() || this.lastEventId;
         this.client.stop();
         this.client = undefined;
       }
-      this.open();
+      this.open(generation);
     }, delay) as number;
   }
 }

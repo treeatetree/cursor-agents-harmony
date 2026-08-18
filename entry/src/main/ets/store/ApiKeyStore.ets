@@ -95,8 +95,15 @@ export class ApiKeyStore {
       this.present = false;
       return false;
     } catch (e) {
+      const msg = errMsg(e).toLowerCase();
+      const transient = msg.indexOf('lock') >= 0 || msg.indexOf('busy') >= 0 ||
+        msg.indexOf('unavailable') >= 0 || msg.indexOf('timeout') >= 0 ||
+        msg.indexOf('not ready') >= 0;
       Log.error(TAG, `decrypt failed: ${errMsg(e)}`);
       this.memoryKey = '';
+      if (transient) {
+        return false;
+      }
       this.present = false;
       await this.clearCipherOnly();
       return false;

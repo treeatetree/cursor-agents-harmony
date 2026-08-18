@@ -21,7 +21,7 @@ export interface DiagRec {
  * Never writes prompt text, API keys, or image payloads.
  */
 export class SessionDiag {
-  private static enabled: boolean = true;
+  private static enabled: boolean = false;
   private static path: string = '';
   private static writing: boolean = false;
   private static pending: string[] = [];
@@ -63,16 +63,16 @@ export class SessionDiag {
     bits.push(`"tag":${JSON.stringify(rec.tag)}`);
     bits.push(`"event":${JSON.stringify(rec.event)}`);
     if (rec.agentId && rec.agentId.length > 0) {
-      bits.push(`"agentId":${JSON.stringify(rec.agentId)}`);
+      bits.push(`"agentId":${JSON.stringify(hashId(rec.agentId))}`);
     }
     if (rec.runId && rec.runId.length > 0) {
-      bits.push(`"runId":${JSON.stringify(rec.runId)}`);
+      bits.push(`"runId":${JSON.stringify(hashId(rec.runId))}`);
     }
     if (rec.elapsedMs !== undefined && rec.elapsedMs >= 0) {
       bits.push(`"elapsedMs":${rec.elapsedMs}`);
     }
     if (rec.extra && rec.extra.length > 0) {
-      bits.push(`"extra":${JSON.stringify(rec.extra)}`);
+      bits.push(`"extra":${JSON.stringify(sanitizeExtra(rec.extra))}`);
     }
     const line = `{${bits.join(',')}}\n`;
     SessionDiag.pending.push(line);
@@ -140,4 +140,27 @@ export class SessionDiag {
     } catch (_e) {
     }
   }
+}
+
+function hashId(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = ((h << 5) - h) + id.charCodeAt(i);
+    h |= 0;
+  }
+  return `h${(h >>> 0).toString(16)}`;
+}
+
+export function sanitizeDiagExtra(extra: string): string {
+  let t = extra.replace(/crsr_[A-Za-z0-9_-]+/g, 'crsr_***')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***');
+  t = t.replace(/[^A-Za-z0-9_.:/=+\- ]/g, ' ');
+  if (t.length > 80) {
+    return t.substring(0, 80);
+  }
+  return t;
+}
+
+function sanitizeExtra(extra: string): string {
+  return sanitizeDiagExtra(extra);
 }

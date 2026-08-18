@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Avoid brand name "Cursor" — Huawei/卓易通 flags it as 诈骗仿冒 -->
-    <string name="app_name">Agents</string>
-</resources>

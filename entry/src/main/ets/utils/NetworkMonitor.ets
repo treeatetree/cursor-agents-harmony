@@ -36,8 +36,17 @@ export class NetworkMonitor {
     }
   }
 
-  onChange(cb: (online: boolean) => void): void {
+  onChange(cb: (online: boolean) => void): () => void {
     this.listeners.push(cb);
+    return () => {
+      const next: Array<(online: boolean) => void> = [];
+      for (let i = 0; i < this.listeners.length; i++) {
+        if (this.listeners[i] !== cb) {
+          next.push(this.listeners[i]);
+        }
+      }
+      this.listeners = next;
+    };
   }
 
   private setOnline(v: boolean): void {

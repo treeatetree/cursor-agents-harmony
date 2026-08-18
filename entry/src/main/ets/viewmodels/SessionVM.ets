@@ -7,6 +7,10 @@ import { CreateDraftStore } from '../store/CreateDraftStore';
 import { PrefStore } from '../store/PrefStore';
 import { UnreadStore } from '../store/UnreadStore';
 import { Log } from '../utils/Log';
+import { StreamCoordinator } from '../api/StreamCoordinator';
+import { InboxVM } from './InboxVM';
+import { AgentPrefetch } from '../store/AgentPrefetch';
+import { DetailVM } from './DetailVM';
 
 const TAG = 'SessionVM';
 
@@ -32,8 +36,17 @@ export class SessionVM {
   }
 
   /** Index stays visible in split NavigationMode — subscribe so Settings save/clear refreshes it. */
-  onChange(cb: () => void): void {
+  onChange(cb: () => void): () => void {
     this.listeners.push(cb);
+    return () => {
+      const next: Array<() => void> = [];
+      for (let i = 0; i < this.listeners.length; i++) {
+        if (this.listeners[i] !== cb) {
+          next.push(this.listeners[i]);
+        }
+      }
+      this.listeners = next;
+    };
   }
 
   /** Force Index (and other listeners) to re-read session after Settings pop. */
@@ -145,11 +158,18 @@ export class SessionVM {
   }
 
   async clearKey(): Promise<void> {
+    StreamCoordinator.getInstance().release();
+    InboxVM.getInstance().stopWatch();
+    AgentPrefetch.getInstance().clear();
+    const detail = DetailVM.getActive();
+    if (detail) {
+      detail.close();
+    }
     await ApiKeyStore.getInstance().clear();
     try {
       AgentCache.getInstance().clearAll();
-    } catch (_e) {
-      // ignore
+    } catch (e) {
+      Log.warn(TAG, `cache clear failed: ${JSON.stringify(e)}`);
     }
     CreateDraftStore.getInstance().clear();
     try {

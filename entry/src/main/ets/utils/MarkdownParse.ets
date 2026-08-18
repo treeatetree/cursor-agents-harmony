@@ -335,9 +335,14 @@ function findMdLink(s: string): number {
 function takeMdLink(s: string): MdLink {
   const mid = s.indexOf('](');
   const end = s.indexOf(')', mid + 2);
+  let url = s.substring(mid + 2, end).trim();
+  const low = url.toLowerCase();
+  if (low.indexOf('https://') !== 0) {
+    url = '';
+  }
   return {
     label: s.substring(1, mid),
-    url: s.substring(mid + 2, end),
+    url: url,
     consume: end + 1
   };
 }

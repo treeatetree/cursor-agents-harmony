@@ -5,29 +5,33 @@ Cursor Agents 鸿蒙原生客户端 — 验收清单（成熟产品）
   ./scripts/wifi-connect.sh connect <ip:port>
   ./scripts/build.sh && ./scripts/install.sh
 本地门禁（装机前）：
+  ./scripts/check-secrets.sh
   ./scripts/build.sh
+  BUILD_MODE=release ./scripts/build.sh
+  ./scripts/test.sh
   CURSOR_API_KEY=… python3 ./scripts/api-smoke.py
 
-[ ] 1. 冷启动有缓存时首屏有内容（非白屏长转圈）
-[ ] 2. 设置页粘贴 crsr_ Key → 验证成功显示邮箱 / Key 名；杀进程后仍在（HUKS）
-[ ] 3. 错误 Key → 明确「无效或已过期」，不清其它数据
-[ ] 4. Inbox 能列出与 cursor.com/agents 同一批 bc- Agent；下拉/点刷新更新；触底分页
-[ ] 5. 新建 Agent：必须选/粘贴仓库 + prompt → 创建成功进入详情
-[ ] 6. 详情：活跃 Run 出现流式 assistant / tool 行；CREATING 有状态文案；无整表闪烁
-[ ] 7. 运行中可取消；取消后可追问（新 Run）
-[ ] 8. 完成后 Outcome 显示摘要/时长；有 prUrl 可「查看 PR」；Artifacts 可打开
-[ ] 9. 断 Wi-Fi：出现网络条 + 缓存可读；恢复后可刷新/续流
-[ ] 10. 切后台再回前台：不崩溃；活跃任务可再跟进（Last-Event-ID）
-[ ] 11. 外屏竖屏：单栏；展开内屏或横屏：Split（左列表右详情）不崩
-[ ] 12. 详情底栏 Composer：键盘顶起不挡输入（外屏重点测）
-[ ] 13. API Key 不出现在 hilog 明文
-[ ] 14. Inbox 长按：打开 / 浏览器 / 归档 / 取消归档 / 删除（删除需二次确认）
-[ ] 15. 详情右上角 ···：浏览器 / 归档或取消归档 / 删除；usage 可见
-[ ] 16. Inbox 下拉刷新；有非终态活跃任务时约 60s 静默刷新
-[ ] 17. 新建页草稿：退出再进仍在；创建成功后清除
-[ ] 18. 详情切后台再回前台：活跃 Run 可续流
-[ ] 19. 设置：默认 AutoPR / 触觉开关 / 主题；关于有版本
-[ ] 20. 403 有引导；404 Agent 回 Inbox；401 条可进设置
+执行方式标记：A=自动化 / S=模拟器 / O=外屏真机 / I=内屏真机
 
-备注（有明确平台限制，可后置）：
-  语音输入、Push/webhook、MCP/env 配置台。
+[ ] 1. 冷启动有缓存时首屏有内容（非白屏长转圈）  S/O
+[ ] 2. 设置页粘贴 crsr_ Key → 验证成功显示邮箱 / Key 名；杀进程后仍在（HUKS）  O
+[ ] 3. 错误 Key → 明确「无效或已过期」，不清其它数据  O
+[ ] 4. Inbox 能列出与 cursor.com/agents 同一批 bc- Agent；下拉/点刷新更新；触底分页  O/I
+[ ] 5. 新建 Agent：必须选/粘贴仓库 + prompt → 创建成功进入详情  O
+[ ] 6. 详情：活跃 Run 出现流式 assistant / tool 行；CREATING 有状态文案；无整表闪烁  O
+[ ] 7. 运行中可取消；取消后可追问（新 Run）  O
+[ ] 8. 完成后 Outcome 显示摘要/时长；有 prUrl 可「查看 PR」；Artifacts 可打开  O
+[ ] 9. 断 Wi-Fi：出现网络条 + 缓存可读；恢复后可刷新/续流  O
+[ ] 10. 切后台再回前台：不崩溃；Inbox 后台不再每秒轮询；活跃任务可再跟进  O
+[ ] 11. 外屏/封面与内屏竖：固定双列，卡片高 116；仅内屏横屏 Split（左列表右详情）  O/I
+[ ] 12. 详情底栏 Composer：键盘顶起不挡输入（外屏重点测）  O
+[ ] 13. API Key 不出现在 hilog 明文；build-profile.json5 无签名口令  A
+[ ] 14. Inbox 长按：打开 / 浏览器 / 归档 / 取消归档 / 删除（删除需二次确认）  O
+[ ] 15. 详情右上角 ···：浏览器 / 归档或取消归档 / 删除；usage 可见  O
+[ ] 16. Inbox 有非终态活跃任务时前台约 8s 静默刷新，后台停止  O
+[ ] 17. 新建页草稿：退出再进仍在；创建成功后清除  O
+[ ] 18. 详情切后台再回前台：活跃 Run 可续流；切到另一会话旧 SSE 不得写入  O
+[ ] 19. 设置：默认 AutoPR / 触觉开关 / 主题 / 通知详情；关于有版本  O
+[ ] 20. 403 有引导；404 Agent 回 Inbox；401 条可进设置  S/O
+[ ] 21. 非 cursor.com 链接不进内置 WebView；Markdown 仅 https  O
+[ ] 22. 锁屏通知默认只显示「任务已更新」  O

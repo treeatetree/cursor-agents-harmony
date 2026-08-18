@@ -1,5 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { chromeTransition } from '../utils/Motion';
+import { HuIconButton } from './HuIconButton';
 import { HuTextButton } from './HuTextButton';
 
 /** Inbox / detail shared strip: info, warn, danger + optional action. */
@@ -9,7 +10,10 @@ export struct StatusBanner {
   @Prop tone: string = 'info';
   @Prop action: string = '';
   @Prop external: boolean = false;
+  @Prop dismissible: boolean = false;
   onAction: () => void = () => {
+  };
+  onDismiss: () => void = () => {
   };
 
   private ink(): Resource {
@@ -52,6 +56,16 @@ export struct StatusBanner {
             external: this.external,
             onTap: () => {
               this.onAction();
+            }
+          })
+        }
+        if (this.dismissible) {
+          HuIconButton({
+            name: 'close',
+            label: '关闭',
+            iconColor: this.ink(),
+            onTap: () => {
+              this.onDismiss();
             }
           })
         }

@@ -76,6 +76,13 @@ export class AgentPrefetch {
     this.pump();
   }
 
+  clear(): void {
+    this.queue = [];
+    this.lastAt = {};
+    this.inflight = {};
+    this.running = false;
+  }
+
   /** Top-of-inbox: skip when conversation cache is fresh enough. */
   enqueueVisible(ids: string[], reason: string): void {
     const cache = AgentCache.getInstance();

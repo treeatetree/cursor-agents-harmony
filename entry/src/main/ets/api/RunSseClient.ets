@@ -19,6 +19,7 @@ export class RunSseClient {
   private watchdogId: number = -1;
   private agentId: string = '';
   private runId: string = '';
+  private generation: number = 0;
   private onFrame: SseListener | undefined = undefined;
   private onStatus: SseStatusListener | undefined = undefined;
   private decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { ignoreBOM: true });
@@ -29,11 +30,12 @@ export class RunSseClient {
   }
 
   async start(agentId: string, runId: string, lastEventId: string, onFrame: SseListener,
-    onStatus: SseStatusListener): Promise<void> {
+    onStatus: SseStatusListener, generation: number = 0): Promise<void> {
     this.stop();
     this.closed = false;
     this.agentId = agentId;
     this.runId = runId;
+    this.generation = generation;
     this.lastEventId = lastEventId;
     this.onFrame = onFrame;
     this.onStatus = onStatus;
@@ -44,12 +46,19 @@ export class RunSseClient {
 
   stop(): void {
     this.closed = true;
+    this.onFrame = undefined;
+    this.onStatus = undefined;
     this.clearWatchdog();
     this.destroyHttp();
   }
 
+  private stillCurrent(generation: number): boolean {
+    return !this.closed && this.generation === generation;
+  }
+
   private async connect(): Promise<void> {
-    if (this.closed) {
+    const generation = this.generation;
+    if (!this.stillCurrent(generation)) {
       return;
     }
     const key = ApiKeyStore.getInstance().getKey();
@@ -74,7 +83,7 @@ export class RunSseClient {
     this.armWatchdog();
 
     this.httpReq.on('dataReceive', (data: ArrayBuffer) => {
-      if (this.closed) {
+      if (!this.stillCurrent(generation)) {
         return;
       }
       if (!this.sawData) {
@@ -86,6 +95,9 @@ export class RunSseClient {
         const text = this.decoder.decodeWithStream(new Uint8Array(data), { stream: true });
         const frames = this.parser.feed(text);
         for (let i = 0; i < frames.length; i++) {
+          if (!this.stillCurrent(generation)) {
+            return;
+          }
           const f = frames[i];
           if (f.id.length > 0) {
             this.lastEventId = f.id;
@@ -105,7 +117,7 @@ export class RunSseClient {
     });
 
     this.httpReq.on('dataEnd', () => {
-      if (!this.closed) {
+      if (this.stillCurrent(generation)) {
         this.emitStatus('ended', 'stream dataEnd');
       }
     });
@@ -120,10 +132,10 @@ export class RunSseClient {
 
     try {
       const code = await this.httpReq.requestInStream(url, options);
-      Log.info(TAG, `stream finished code=${code}`);
-      if (this.closed) {
+      if (!this.stillCurrent(generation)) {
         return;
       }
+      Log.info(TAG, `stream finished code=${code}`);
       if (code === 410) {
         this.emitStatus('expired', 'stream_expired');
         this.stop();
@@ -134,61 +146,18 @@ export class RunSseClient {
         this.emitStatus('ended', `code ${code}`);
       }
     } catch (e) {
-      if (!this.closed) {
+      if (this.stillCurrent(generation)) {
         Log.error(TAG, `stream error: ${JSON.stringify(e)}`);
-        // Fallback: buffered GET once
-        await this.bufferedFallback(url, headers);
+        this.emitStatus('error', 'SSE 连接失败');
       }
-    }
-  }
-
-  private async bufferedFallback(url: string, headers: Record<string, string>): Promise<void> {
-    try {
-      this.emitStatus('streaming', 'fallback');
-      const client = http.createHttp();
-      const resp = await client.request(url, {
-        method: http.RequestMethod.GET,
-        header: headers,
-        expectDataType: http.HttpDataType.STRING,
-        connectTimeout: 15000,
-        readTimeout: 180000,
-        usingProtocol: http.HttpProtocol.HTTP1_1
-      });
-      client.destroy();
-      if (resp.responseCode === 410) {
-        this.emitStatus('expired', 'stream_expired');
-        this.stop();
-        return;
-      }
-      if (resp.responseCode < 200 || resp.responseCode >= 300) {
-        this.emitStatus('error', `HTTP ${resp.responseCode}`);
-        this.stop();
-        return;
-      }
-      const raw = typeof resp.result === 'string' ? resp.result : '';
-      const frames = this.parser.feed(raw + '\n\n');
-      for (let i = 0; i < frames.length; i++) {
-        const f = frames[i];
-        if (f.id.length > 0) {
-          this.lastEventId = f.id;
-        }
-        if (this.onFrame) {
-          this.onFrame(f);
-        }
-      }
-      this.emitStatus('done', 'buffered');
-      this.stop();
-    } catch (e) {
-      Log.error(TAG, `fallback failed: ${JSON.stringify(e)}`);
-      this.emitStatus('error', 'SSE 连接失败');
-      this.stop();
     }
   }
 
   private armWatchdog(): void {
     this.clearWatchdog();
+    const generation = this.generation;
     this.watchdogId = setTimeout(() => {
-      if (!this.closed) {
+      if (this.stillCurrent(generation)) {
         this.emitStatus('stale', 'heartbeat timeout');
         this.destroyHttp();
       }
