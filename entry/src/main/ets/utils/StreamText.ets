@@ -56,6 +56,16 @@ export function lastNonEmptyLine(text: string, maxLen: number = 80): string {
   return '';
 }
 
+export function lastTextSummary(texts: string[], maxLen: number = 72): string {
+  for (let i = texts.length - 1; i >= 0; i--) {
+    const line = lastNonEmptyLine(texts[i], maxLen);
+    if (line.length > 0) {
+      return line;
+    }
+  }
+  return '';
+}
+
 export function lastStep(text: string): string {
   const src = text ?? '';
   const idx = src.lastIndexOf('\n\n');

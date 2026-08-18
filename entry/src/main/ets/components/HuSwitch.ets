@@ -1,6 +1,10 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
 
+/**
+ * beUI switch: 44×26 track, 20 thumb, 3 inset, 18 travel.
+ * Do not use Stack+clip or parent .animation() — both ghost/clip the thumb on device.
+ */
 @Component
 export struct HuSwitch {
   @Prop on: boolean = false;
@@ -28,18 +32,19 @@ export struct HuSwitch {
 
       Row() {
         Column()
-          .width(22)
-          .height(22)
-          .borderRadius(11)
-          .backgroundColor($r('app.color.bg1'))
-          .margin({ left: this.on ? 18 : 2 })
-          .animation({ duration: 160, curve: Curve.EaseOut })
+          .width(20)
+          .height(20)
+          .borderRadius(10)
+          .backgroundColor(this.on ? $r('app.color.accent_on') : $r('app.color.switch_knob'))
+          .margin({ left: this.on ? 21 : 3 })
       }
-      .width(46)
-      .height(28)
-      .borderRadius(14)
-      .backgroundColor(this.on ? $r('app.color.accent') : $r('app.color.bg2'))
-      .animation({ duration: 160, curve: Curve.EaseOut })
+      .width(44)
+      .height(26)
+      .justifyContent(FlexAlign.Start)
+      .alignItems(VerticalAlign.Center)
+      .borderRadius(13)
+      .backgroundColor(this.on ? $r('app.color.accent') : $r('app.color.switch_off'))
+      .flexShrink(0)
     }
     .width('100%')
     .constraintSize({ minHeight: Tokens.touchMin })

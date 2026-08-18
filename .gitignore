@@ -24,3 +24,4 @@ signing/material/
 *.iml
 .cxx/
 *.log
+.cursor/review-shots/

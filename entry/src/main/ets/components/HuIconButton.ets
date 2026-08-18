@@ -41,20 +41,21 @@ export struct HuIconButton {
       if (!this.isEnabled) {
         return;
       }
-      if (e.type === TouchType.Down) {
-        this.pressed = true;
-        Haptics.down();
-      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-        this.pressed = false;
-      }
-    })
-    .onClick(() => {
-      if (this.isEnabled) {
-        if (this.filled) {
-          Haptics.commit();
+        if (e.type === TouchType.Down) {
+          this.pressed = true;
+        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          this.pressed = false;
         }
-        this.onTap();
-      }
     })
+      .onClick(() => {
+        if (this.isEnabled) {
+          if (this.filled) {
+            Haptics.commit();
+          } else {
+            Haptics.click();
+          }
+          this.onTap();
+        }
+      })
   }
 }

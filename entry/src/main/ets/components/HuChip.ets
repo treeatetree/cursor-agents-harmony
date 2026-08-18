@@ -11,25 +11,52 @@ export struct HuChip {
   @Prop label: string = '';
   @Prop on: boolean = false;
   @Prop maxVp: number = 0;
+  /** '' | plan — plan on uses a light-blue tint. */
+  @Prop tone: string = '';
   @State private pressed: boolean = false;
   onTap: () => void = () => {
   };
+
+  private planOn(): boolean {
+    return this.on && this.tone === 'plan';
+  }
+
+  private ink(): Resource {
+    if (this.planOn()) {
+      return $r('app.color.plan_fg');
+    }
+    return this.on ? $r('app.color.text_primary') : $r('app.color.text_secondary');
+  }
+
+  private wash(): ResourceColor {
+    if (this.planOn()) {
+      return $r('app.color.plan_bg');
+    }
+    return this.on ? $r('app.color.bg2') : Color.Transparent;
+  }
+
+  private line(): Resource {
+    if (this.planOn()) {
+      return $r('app.color.plan_border');
+    }
+    return this.on ? $r('app.color.border_strong') : $r('app.color.border');
+  }
 
   build() {
     Text(this.label)
       .fontSize(Tokens.typeMicro)
       .fontWeight(this.on ? FontWeight.Medium : FontWeight.Regular)
-      .fontColor(this.on ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+      .fontColor(this.ink())
       .maxLines(1)
       .textOverflow({ overflow: TextOverflow.Ellipsis })
       .height(32)
       .padding({ left: 10, right: 10 })
       .textAlign(TextAlign.Center)
-      .backgroundColor(this.on ? $r('app.color.bg2') : Color.Transparent)
+      .backgroundColor(this.wash())
       .borderRadius(Tokens.radiusChip)
       .border({
         width: 1,
-        color: this.on ? $r('app.color.border_strong') : $r('app.color.border')
+        color: this.line()
       })
       .constraintSize({ maxWidth: this.maxVp > 0 ? this.maxVp : 280 })
       .flexShrink(0)
@@ -39,7 +66,6 @@ export struct HuChip {
       .onTouch((e: TouchEvent) => {
         if (e.type === TouchType.Down) {
           this.pressed = true;
-          Haptics.tick();
         } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
           this.pressed = false;
         }
@@ -47,6 +73,7 @@ export struct HuChip {
       .gesture(
         TapGesture()
           .onAction(() => {
+            Haptics.tick();
             this.onTap();
           })
       )

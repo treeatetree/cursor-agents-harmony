@@ -2,7 +2,8 @@
 
 给下一位 agent 做 **真机视觉 + 交互细节审查**，不是功能重写。先读本文，再对照真机，再改代码。
 
-上一轮对话：[样式交互打磨](66638a77-6915-4ad9-8b9a-f5bdb595c93f)
+当前分支工作已合进 main（会话体验 + 缓存/预取 + 真机 QA）。产品交接见 `HANDOFF.txt`。  
+上一轮样式对话：[样式交互打磨](66638a77-6915-4ad9-8b9a-f5bdb595c93f)
 
 ---
 
@@ -212,7 +213,9 @@ PATH 里没有 `hdc` 时用上面的 `$HDC`。
 
 审查截图放 `.cursor/review-shots/`（目录可自建）。用 `Read` 看 jpeg。解析 dump 时看 `text` / `description` / `bounds` / `clickable`。
 
-内屏要用户把折叠屏打开；横屏要用户转过去。外屏约 1264×1848 px（vp 约 459×672）。
+走查剧本和 Hypium 边界：`.cursor/skills/hm-device-qa/SKILL.md`。截图封装：`./scripts/device-qa.sh capture <name>`。
+
+内屏要用户把折叠屏打开；横屏要用户转过去。外屏约 1264×1848 px（vp 约 459×672）。内屏竖约 1828×2584（仍双列）；内屏横约 2584×1828（Split master 280vp，列表行 68）。
 
 ### 日志
 

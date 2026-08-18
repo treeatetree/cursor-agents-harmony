@@ -39,9 +39,16 @@ export class Notify {
   }
 
   static async setBadge(count: number): Promise<void> {
+    const n = Math.max(0, count);
     try {
-      await notificationManager.setBadgeNumber(Math.max(0, count));
+      await notificationManager.setBadgeNumber(n);
     } catch (_e) {
+    }
+    if (n === 0) {
+      try {
+        await notificationManager.cancel(SUMMARY_ID);
+      } catch (_e) {
+      }
     }
   }
 

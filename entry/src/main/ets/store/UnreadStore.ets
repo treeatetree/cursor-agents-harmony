@@ -21,6 +21,7 @@ export class UnreadStore {
   private items: UnreadItem[] = [];
   private loaded: boolean = false;
   private lastBadge: number = -1;
+  private listeners: Array<() => void> = [];
 
   static getInstance(): UnreadStore {
     if (!UnreadStore.instance) {
@@ -45,6 +46,7 @@ export class UnreadStore {
     this.items = next;
     this.loaded = true;
     this.syncBadge();
+    this.fireChange();
   }
 
   peek(): UnreadItem[] {
@@ -69,6 +71,19 @@ export class UnreadStore {
 
   first(): UnreadItem | undefined {
     return this.items.length > 0 ? this.items[0] : undefined;
+  }
+
+  onChange(cb: () => void): () => void {
+    this.listeners.push(cb);
+    return (): void => {
+      const next: Array<() => void> = [];
+      for (let i = 0; i < this.listeners.length; i++) {
+        if (this.listeners[i] !== cb) {
+          next.push(this.listeners[i]);
+        }
+      }
+      this.listeners = next;
+    };
   }
 
   isUnread(id: string): boolean {
@@ -125,6 +140,8 @@ export class UnreadStore {
       agentId: id,
       extra: `n=${this.items.length} status=${statusZh} repo=${repo}`
     });
+    this.syncBadge();
+    this.fireChange();
     await this.persist();
   }
 
@@ -157,14 +174,16 @@ export class UnreadStore {
       agentId: id,
       extra: `n=${this.items.length} lastKey=${lastKey.length > 0 ? '1' : '0'}`
     });
+    this.syncBadge();
+    this.fireChange();
     await this.persist();
   }
 
   async clearAll(): Promise<void> {
-    if (this.items.length === 0) {
-      return;
-    }
     this.items = [];
+    this.lastBadge = -1;
+    this.syncBadge();
+    this.fireChange();
     await this.persist();
   }
 
@@ -182,9 +201,14 @@ export class UnreadStore {
       });
     }
     await PrefStore.getInstance().setUnreadItems(rows);
-    this.syncBadge();
     Notify.refreshInbox(this.items).catch(() => {
     });
+  }
+
+  private fireChange(): void {
+    for (let i = 0; i < this.listeners.length; i++) {
+      this.listeners[i]();
+    }
   }
 
   syncBadge(): void {

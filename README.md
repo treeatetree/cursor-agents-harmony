@@ -29,8 +29,11 @@ Cursor Cloud Agents 的鸿蒙原生指挥台。直连 `api.cursor.com`，不走 
 ./scripts/check-secrets.sh
 ./scripts/build.sh
 
-# 真机 Hypium（需要已连接设备）
+# 真机 Hypium（需要已连接设备；走 onDeviceTest，不要用 hvigor test）
 ./scripts/test.sh
+
+# 截当前屏 + 控件树 → .cursor/review-shots/
+./scripts/device-qa.sh capture qa-inbox
 
 # 安装并启动
 ./scripts/install.sh

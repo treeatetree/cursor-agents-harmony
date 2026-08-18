@@ -4,7 +4,7 @@ import { util } from '@kit.ArkTS';
 import { Log } from './Log';
 
 const TAG = 'SessionDiag';
-const RING_MAX = 400 * 1024;
+const RING_MAX = 1536 * 1024;
 
 export interface DiagRec {
   ts?: number;
@@ -21,7 +21,7 @@ export interface DiagRec {
  * Never writes prompt text, API keys, or image payloads.
  */
 export class SessionDiag {
-  private static enabled: boolean = false;
+  private static enabled: boolean = true;
   private static path: string = '';
   private static writing: boolean = false;
   private static pending: string[] = [];
@@ -152,15 +152,15 @@ function hashId(id: string): string {
 }
 
 export function sanitizeDiagExtra(extra: string): string {
-  let t = extra.replace(/crsr_[A-Za-z0-9_-]+/g, 'crsr_***')
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***');
-  t = t.replace(/[^A-Za-z0-9_.:/=+\- ]/g, ' ');
-  if (t.length > 80) {
-    return t.substring(0, 80);
-  }
-  return t;
+  return sanitizeExtra(extra);
 }
 
 function sanitizeExtra(extra: string): string {
-  return sanitizeDiagExtra(extra);
+  let t = extra.replace(/crsr_[A-Za-z0-9_-]+/g, 'crsr_***')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***');
+  t = t.replace(/[\u0000-\u001f<>]/g, ' ');
+  if (t.length > 240) {
+    return t.substring(0, 240);
+  }
+  return t;
 }

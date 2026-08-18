@@ -30,6 +30,7 @@ import { HuTextButton } from '../components/HuTextButton';
 import { SheetPickRow } from '../components/SheetAction';
 import { ModelPicker } from '../components/ModelPicker';
 import { StatusBanner } from '../components/StatusBanner';
+import { ToastHost } from '../components/ToastHost';
 import { notifyResult } from '../utils/AppToast';
 
 @Builder
@@ -71,6 +72,8 @@ export struct NewAgentPage {
   @State loadingMeta: boolean = false;
   @State errorMsg: string = '';
   @State showSheet: boolean = false;
+  /** Outer bindSheet only when this page is not already inside Index's sheet. */
+  @State showBindSheet: boolean = false;
   @State sheetKind: string = '';
   @State repoQuery: string = '';
   @State manualRepoUrl: string = '';
@@ -140,6 +143,9 @@ export struct NewAgentPage {
   private openSheet(kind: string): void {
     this.sheetKind = kind;
     this.showSheet = true;
+    if (!this.embedded) {
+      this.showBindSheet = true;
+    }
     if (kind === 'model') {
       this.ensureModelsLoaded(this.modelGroups.length === 0);
     }
@@ -147,6 +153,7 @@ export struct NewAgentPage {
 
   private closeSheet(): void {
     this.showSheet = false;
+    this.showBindSheet = false;
   }
 
   private scheduleDraftSave(text: string): void {
@@ -361,11 +368,11 @@ export struct NewAgentPage {
     await this.vm.refreshRepos(force);
     this.syncFromVm();
     if (this.vm.errorMsg.length > 0) {
-      notifyResult(false, '', this.vm.errorMsg);
+      notifyResult(false, '', this.vm.errorMsg, 'new');
       this.vm.errorMsg = '';
       this.errorMsg = '';
     } else if (force) {
-      notifyResult(true, `已刷新 · ${this.vm.repos.length} 个仓库`);
+      notifyResult(true, `已刷新 · ${this.vm.repos.length} 个仓库`, '', 'new');
     }
   }
 
@@ -632,6 +639,23 @@ export struct NewAgentPage {
   }
 
   @Builder
+  noticeDock() {
+    Column({ space: 8 }) {
+      if (this.errorMsg.length > 0) {
+        StatusBanner({
+          text: this.errorMsg,
+          tone: 'danger'
+        })
+      }
+      ToastHost({ page: 'new' })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 16, right: 16, bottom: Tokens.toastBottom })
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
   formColumn() {
     Column() {
       if (!this.embedded) {
@@ -659,13 +683,6 @@ export struct NewAgentPage {
           right: Tokens.chromePad
         })
         .margin({ top: this.topInset })
-      }
-
-      if (this.errorMsg.length > 0) {
-        StatusBanner({
-          text: this.errorMsg,
-          tone: 'danger'
-        })
       }
 
       Column() {
@@ -754,15 +771,46 @@ export struct NewAgentPage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg0'))
-    .bindSheet($$this.showSheet, this.sheetBody(), {
-      height: this.sheetKind === 'model' ? SheetSize.MEDIUM :
-        this.sheetKind === 'branch' ? SheetSize.FIT_CONTENT :
-        SheetSize.LARGE,
+    .overlay(this.pageOverlays())
+    .bindSheet($$this.showBindSheet, this.sheetBody(), {
+      height: this.sheetKind === 'repo' ? SheetSize.LARGE : SheetSize.MEDIUM,
       dragBar: true,
       showClose: false,
       radius: LengthMetrics.vp(Tokens.radiusSheet),
       backgroundColor: $r('app.color.overlay')
     })
+  }
+
+  @Builder
+  pageOverlays() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      if (this.embedded && this.showSheet) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#99000000')
+          .onClick(() => {
+            this.closeSheet();
+          })
+        Column() {
+          this.sheetBody()
+        }
+        .width('100%')
+        .constraintSize({ maxHeight: '85%' })
+        .backgroundColor($r('app.color.overlay'))
+        .borderRadius({ topLeft: Tokens.radiusSheet, topRight: Tokens.radiusSheet })
+        .padding({
+          left: Tokens.sheetPadH,
+          right: Tokens.sheetPadH,
+          top: Tokens.sheetPadTop,
+          bottom: Tokens.sheetPadBottom
+        })
+      }
+      this.noticeDock()
+    }
+    .width('100%')
+    .height('100%')
+    .hitTestBehavior(HitTestMode.Transparent)
   }
 
   @Builder
@@ -1038,136 +1086,114 @@ export struct NewAgentPage {
 
   @Builder
   optionsSheet() {
-    Scroll() {
-      Column({ space: Tokens.sheetGap }) {
-        Text('更多')
-          .fontSize(Tokens.typeHeadline)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .width('100%')
-
-        Text('任务')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-        Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
-          HuChip({
-            label: '自动创建 PR',
-            on: this.autoCreatePR,
-            onTap: () => {
-              this.autoCreatePR = !this.autoCreatePR;
-              this.vm.autoCreatePR = this.autoCreatePR;
-              this.refreshCanSubmit();
-            }
-          })
-            .margin({ right: 6, bottom: 6 })
-          HuChip({
-            label: '推送到当前分支',
-            on: this.workOnCurrentBranch,
-            onTap: () => {
-              this.workOnCurrentBranch = !this.workOnCurrentBranch;
-              this.vm.workOnCurrentBranch = this.workOnCurrentBranch;
-            }
-          })
-            .margin({ right: 6, bottom: 6 })
-          if (this.autoCreatePR && !isOriginRepo(this.selectedRepo)) {
-            HuChip({
-              label: '以 Cursor App 开 PR',
-              on: this.openAsCursorGithubApp,
-              onTap: () => {
-                this.openAsCursorGithubApp = !this.openAsCursorGithubApp;
-                this.vm.openAsCursorGithubApp = this.openAsCursorGithubApp;
-              }
-            })
-              .margin({ right: 6, bottom: 6 })
-          }
-          if (this.autoCreatePR) {
-            HuChip({
-              label: '跳过自己评审',
-              on: this.skipReviewerRequest,
-              onTap: () => {
-                this.skipReviewerRequest = !this.skipReviewerRequest;
-                this.vm.skipReviewerRequest = this.skipReviewerRequest;
-              }
-            })
-              .margin({ right: 6, bottom: 6 })
-          }
-        }
+    Column({ space: Tokens.sheetGap }) {
+      Text('更多')
+        .fontSize(Tokens.typeHeadline)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
         .width('100%')
 
-        this.capabilityBlock()
-
-        Text('名称')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-        TextInput({ text: this.agentName, placeholder: '空着则按任务自动起名' })
-          .height(Tokens.touchMin)
-          .width('100%')
-          .fontSize(Tokens.typeCallout)
-          .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
-          .placeholderColor($r('app.color.text_placeholder'))
-          .maxLength(100)
-          .backgroundColor($r('app.color.field_bg'))
-          .borderRadius(Tokens.radiusField)
-          .onChange((v: string) => {
-            this.agentName = v;
-            this.vm.agentName = v;
-          })
-        Text('模式')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.text_secondary'))
-          .width('100%')
-        Row({ space: 6 }) {
-          HuChip({
-            label: 'Agent',
-            on: this.mode !== 'plan',
-            onTap: () => {
-              this.mode = 'agent';
-              this.vm.mode = 'agent';
-              this.refreshCanSubmit();
-            }
-          })
-          HuChip({
-            label: '规划',
-            on: this.mode === 'plan',
-            onTap: () => {
-              this.mode = 'plan';
-              this.vm.mode = 'plan';
-              this.refreshCanSubmit();
-            }
-          })
-        }
-        .width('100%')
-        .constraintSize({ minHeight: Tokens.touchMin })
-        .justifyContent(FlexAlign.Start)
-        if (!this.hideBranch) {
-          Text('分支')
+      Scroll() {
+        Column({ space: Tokens.sheetGap }) {
+          Text('任务')
             .fontSize(Tokens.typeCaption)
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
-          HuChip({
-            label: this.selectedBranch.length > 0 ? this.selectedBranch : 'main',
-            on: false,
-            maxVp: 200,
-            onTap: () => {
-              this.openSheet('branch');
+          Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Start }) {
+            HuChip({
+              label: '自动创建 PR',
+              on: this.autoCreatePR,
+              onTap: () => {
+                this.autoCreatePR = !this.autoCreatePR;
+                this.vm.autoCreatePR = this.autoCreatePR;
+                this.refreshCanSubmit();
+              }
+            })
+              .margin({ right: 6, bottom: 6 })
+            HuChip({
+              label: '推送到当前分支',
+              on: this.workOnCurrentBranch,
+              onTap: () => {
+                this.workOnCurrentBranch = !this.workOnCurrentBranch;
+                this.vm.workOnCurrentBranch = this.workOnCurrentBranch;
+              }
+            })
+              .margin({ right: 6, bottom: 6 })
+            if (this.autoCreatePR && !isOriginRepo(this.selectedRepo)) {
+              HuChip({
+                label: '以 Cursor App 开 PR',
+                on: this.openAsCursorGithubApp,
+                onTap: () => {
+                  this.openAsCursorGithubApp = !this.openAsCursorGithubApp;
+                  this.vm.openAsCursorGithubApp = this.openAsCursorGithubApp;
+                }
+              })
+                .margin({ right: 6, bottom: 6 })
             }
-          })
+            if (this.autoCreatePR) {
+              HuChip({
+                label: '跳过自己评审',
+                on: this.skipReviewerRequest,
+                onTap: () => {
+                  this.skipReviewerRequest = !this.skipReviewerRequest;
+                  this.vm.skipReviewerRequest = this.skipReviewerRequest;
+                }
+              })
+                .margin({ right: 6, bottom: 6 })
+            }
+          }
+          .width('100%')
+
+          this.capabilityBlock()
+
+          Text('名称')
+            .fontSize(Tokens.typeCaption)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+          TextInput({ text: this.agentName, placeholder: '空着则按任务自动起名' })
+            .height(Tokens.touchMin)
+            .width('100%')
+            .fontSize(Tokens.typeCallout)
+            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
+            .placeholderColor($r('app.color.text_placeholder'))
+            .maxLength(100)
+            .backgroundColor($r('app.color.field_bg'))
+            .borderRadius(Tokens.radiusField)
+            .onChange((v: string) => {
+              this.agentName = v;
+              this.vm.agentName = v;
+            })
+          if (!this.hideBranch) {
+            Text('分支')
+              .fontSize(Tokens.typeCaption)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+            HuChip({
+              label: this.selectedBranch.length > 0 ? this.selectedBranch : 'main',
+              on: false,
+              maxVp: 200,
+              onTap: () => {
+                this.openSheet('branch');
+              }
+            })
+          }
         }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .padding({
-        left: Tokens.sheetPadH,
-        right: Tokens.sheetPadH,
-        top: Tokens.sheetPadTop,
-        bottom: Tokens.sheetPadBottom
-      })
-      .alignItems(HorizontalAlign.Start)
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
     }
     .width('100%')
     .height('100%')
-    .scrollBar(BarState.Off)
+    .padding({
+      left: Tokens.sheetPadH,
+      right: Tokens.sheetPadH,
+      top: Tokens.sheetPadTop,
+      bottom: Tokens.sheetPadBottom
+    })
+    .alignItems(HorizontalAlign.Start)
     .backgroundColor($r('app.color.bg0'))
     .onDisAppear(() => {
       this.vm.mcpServers = this.mcpServers;

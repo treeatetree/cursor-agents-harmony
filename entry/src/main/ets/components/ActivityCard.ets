@@ -62,8 +62,8 @@ export struct ActivityCard {
   }
 
   build() {
-    Column({ space: 6 }) {
-      Column({ space: 6 }) {
+    Column({ space: 2 }) {
+      Column({ space: 2 }) {
         Row({ space: 6 }) {
           if (this.item.streaming === true) {
             LoadingProgress()
@@ -104,7 +104,7 @@ export struct ActivityCard {
           }
         }
         .width('100%')
-        .constraintSize({ minHeight: 36 })
+        .constraintSize({ minHeight: 24 })
         .alignItems(VerticalAlign.Center)
 
         if (!this.hasBody() && this.item.streaming !== true) {
@@ -138,7 +138,7 @@ export struct ActivityCard {
       })
 
       if (this.opened && this.hasBody()) {
-        Column({ space: 6 }) {
+        Column({ space: 2 }) {
           if (this.body.trim().length > 0) {
             MarkdownLite({
               content: this.body,
@@ -160,7 +160,7 @@ export struct ActivityCard {
       }
     }
     .width('100%')
-    .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+    .padding({ left: 8, right: 8, top: 6, bottom: 6 })
     .backgroundColor($r('app.color.bg2'))
     .borderRadius(Tokens.radiusMd)
   }

@@ -19,8 +19,8 @@ import { UnreadItem, UnreadStore } from '../store/UnreadStore';
 import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { Haptics } from '../utils/Haptics';
 import { expandTransition, fadeTransition, motionMs, runLayout } from '../utils/Motion';
-import { NetworkBanner } from '../components/NetworkBanner';
-import { StatusBanner } from '../components/StatusBanner';
+import { StatusPill } from '../components/StatusPill';
+import { ToastHost } from '../components/ToastHost';
 import { CreateDraftStore } from '../store/CreateDraftStore';
 import { HuAvatar, HuAvatarPicker } from '../components/HuAvatar';
 import { HuButton } from '../components/HuButton';
@@ -102,11 +102,13 @@ struct Index {
   @State actionKind: string = '';
   @State chromeKind: string = '';
   @State pressKey: string = '';
-  @State avatarPreset: string = 'iridescent';
-  @State avatarPhoto: string = '';
+  @StorageLink('avatarPreset') avatarPreset: string = 'iridescent';
+  @StorageLink('avatarPhoto') avatarPhoto: string = '';
   @State showAvatarEdit: boolean = false;
   @State cropUri: string = '';
   private pollTimer: number = -1;
+  private netRefreshTimer: number = -1;
+  private unreadOpenTimer: number = -1;
   private openingAgentId: string = '';
   private openingAt: number = 0;
   private inboxHidden: boolean = false;
@@ -115,6 +117,7 @@ struct Index {
   private unsubBp: (() => void) | undefined = undefined;
   private unsubInbox: (() => void) | undefined = undefined;
   private unsubSession: (() => void) | undefined = undefined;
+  private unsubUnread: (() => void) | undefined = undefined;
 
   // Inbox toolbar state
   @State query: string = '';
@@ -157,13 +160,18 @@ struct Index {
     this.unsubNet = NetworkMonitor.getInstance().onChange((v: boolean) => {
       this.online = v;
       if (v && this.hasKey && this.session.keyReady) {
-        this.inbox.refresh(true).then(() => {
-          this.pullInboxUi();
-        });
         const active = DetailVM.getActive();
         if (active) {
           active.resumeIfNeeded();
         }
+        if (this.netRefreshTimer >= 0) {
+          clearTimeout(this.netRefreshTimer);
+        }
+        const delay = (active && active.isRunActive()) ? 1500 : 0;
+        this.netRefreshTimer = setTimeout(() => {
+          this.netRefreshTimer = -1;
+          this.silentInboxRefresh();
+        }, delay) as number;
       }
     });
     this.online = NetworkMonitor.getInstance().online;
@@ -174,13 +182,17 @@ struct Index {
     this.unsubInbox = this.inbox.onChange(() => {
       this.pullInboxUi();
     });
+    this.unsubUnread = UnreadStore.getInstance().onChange(() => {
+      this.pullInboxUi();
+      this.inbox.prefetchUnread();
+    });
     this.unsubSession = this.session.onChange(() => {
       const hadKey = this.hasKey;
       this.refreshSession();
       this.pullInboxUi();
       if (this.hasKey && !hadKey && this.session.keyReady) {
         this.inbox.startWatch();
-        this.inbox.refresh(true).then(() => {
+        this.inbox.requestRefresh(true, 0).then(() => {
           this.pullInboxUi();
           this.inbox.prefetchOnShow();
         });
@@ -194,8 +206,13 @@ struct Index {
     });
     this.syncBreakpoint();
     const ctxReady = Promise.all([
-      this.session.hydrate(ctx),
-      this.inbox.bootstrap(ctx)
+      this.session.hydrate(ctx).then(() => {
+        this.refreshSession();
+        this.pullInboxUi();
+      }),
+      this.inbox.bootstrap(ctx).then(() => {
+        this.pullInboxUi();
+      })
     ]);
     ctxReady.then(async () => {
       await this.loadInboxPrefs();
@@ -206,7 +223,7 @@ struct Index {
         this.pullInboxUi();
         if (this.hasKey && this.session.keyReady) {
           this.inbox.startWatch();
-          this.inbox.refresh(true).then(() => {
+          this.inbox.requestRefresh(true, 0).then(() => {
             this.pullInboxUi();
             this.inbox.prefetchOnShow();
           });
@@ -224,6 +241,14 @@ struct Index {
 
   aboutToDisappear(): void {
     this.stopPoll();
+    if (this.netRefreshTimer >= 0) {
+      clearTimeout(this.netRefreshTimer);
+      this.netRefreshTimer = -1;
+    }
+    if (this.unreadOpenTimer >= 0) {
+      clearTimeout(this.unreadOpenTimer);
+      this.unreadOpenTimer = -1;
+    }
     if (this.unsubNet) {
       this.unsubNet();
     }
@@ -235,6 +260,9 @@ struct Index {
     }
     if (this.unsubSession) {
       this.unsubSession();
+    }
+    if (this.unsubUnread) {
+      this.unsubUnread();
     }
   }
 
@@ -250,9 +278,7 @@ struct Index {
     });
     if (this.hasKey && this.session.keyReady) {
       this.inbox.prefetchOnShow();
-      this.inbox.refresh(true).then(() => {
-        this.pullInboxUi();
-      });
+      this.silentInboxRefresh();
     }
     if (this.hasKey && this.session.keyReady) {
       this.inbox.startWatch();
@@ -276,10 +302,14 @@ struct Index {
       if (!this.inbox.shouldRefresh(30000)) {
         return;
       }
-      this.inbox.refresh(true).then(() => {
-        this.pullInboxUi();
-      });
+      this.silentInboxRefresh(30000);
     }, 8000) as number;
+  }
+
+  private silentInboxRefresh(minIntervalMs: number = 8000): void {
+    this.inbox.requestRefresh(true, minIntervalMs).then(() => {
+      this.pullInboxUi();
+    });
   }
 
   private stopPoll(): void {
@@ -298,7 +328,7 @@ struct Index {
     const ok: boolean = await this.session.saveAndValidate(this.setupKey);
     if (ok) {
       this.setupKey = '';
-      showToast('已保存');
+      showToast('已保存', 'info', 'inbox');
     } else {
       this.setupError = this.session.errorMsg.length > 0 ? this.session.errorMsg : '验证失败';
     }
@@ -368,21 +398,22 @@ struct Index {
     this.pullInboxUi();
     if (!ok) {
       const err = this.inboxError.length > 0 ? this.inboxError : '刷新失败';
-      notifyResult(false, '', err);
+      notifyResult(false, '', err, 'inbox');
       return;
     }
     if (okText.length > 0) {
       this.clearDelta();
-      notifyResult(true, okText);
+      notifyResult(true, okText, '', 'inbox');
       return;
     }
     const delta = this.inbox.lastDelta;
     if (delta.ids.length === 0) {
-      notifyResult(true, '已是最新');
+      notifyResult(true, '已是最新', '', 'inbox');
       return;
     }
     this.deltaIds = delta.ids;
     this.recomputeView();
+    notifyResult(true, `${delta.ids.length} 条更新`, '', 'inbox');
   }
 
   private clearDelta(): void {
@@ -497,15 +528,10 @@ struct Index {
     const id = normalizeAvatarId(preset);
     const uri = await resolveAvatarPhoto(photo);
     if (id === 'custom' && uri.length === 0) {
-      this.avatarPreset = 'iridescent';
-      this.avatarPhoto = '';
-      const prefs = PrefStore.getInstance();
-      prefs.setAvatarPreset('iridescent');
-      prefs.setAvatarPhoto('');
+      await PrefStore.getInstance().saveAvatar('iridescent', '');
       return;
     }
-    this.avatarPreset = id;
-    this.avatarPhoto = id === 'custom' ? uri : '';
+    await PrefStore.getInstance().saveAvatar(id, id === 'custom' ? uri : '');
   }
 
   private avatarSrc(): string {
@@ -516,8 +542,7 @@ struct Index {
   }
 
   private pickAvatar(id: string): void {
-    this.avatarPreset = normalizeAvatarId(id);
-    PrefStore.getInstance().setAvatarPreset(this.avatarPreset);
+    PrefStore.getInstance().saveAvatar(normalizeAvatarId(id), '');
   }
 
   private async pickAvatarPhoto(): Promise<void> {
@@ -528,18 +553,15 @@ struct Index {
     const ctx = getContext(this) as common.UIAbilityContext;
     const local = await materializeForCrop(uri, ctx.cacheDir);
     if (local.length === 0) {
-      showToast('这张图读不了');
+      showToast('这张图读不了', 'info', 'inbox');
       return;
     }
     this.cropUri = toFileUri(local);
   }
 
   private applyCroppedAvatar(path: string): void {
-    this.avatarPhoto = toFileUri(path);
-    this.avatarPreset = 'custom';
     this.cropUri = '';
-    PrefStore.getInstance().setAvatarPreset('custom');
-    PrefStore.getInstance().setAvatarPhoto(toFileUri(path));
+    PrefStore.getInstance().saveAvatar('custom', toFileUri(path));
   }
 
   private persistInboxChrome(): void {
@@ -707,10 +729,21 @@ struct Index {
 
   private openUnreadSheet(): void {
     this.pullInboxUi();
-    if (this.unreadItems.length === 0) {
+    if (this.unreadOpenTimer >= 0) {
+      clearTimeout(this.unreadOpenTimer);
+      this.unreadOpenTimer = -1;
+    }
+    const reopen = this.showChromeSheet && this.chromeKind !== 'unread';
+    this.chromeKind = 'unread';
+    if (reopen) {
+      this.showChromeSheet = false;
+      this.unreadOpenTimer = setTimeout(() => {
+        this.unreadOpenTimer = -1;
+        this.chromeKind = 'unread';
+        this.showChromeSheet = true;
+      }, 80) as number;
       return;
     }
-    this.chromeKind = 'unread';
     this.showChromeSheet = true;
   }
 
@@ -765,7 +798,7 @@ struct Index {
     Haptics.click();
     this.selectedId = id;
     const active = DetailVM.getActive();
-    if (active && active.agentId === id) {
+    if (active && active.agentId === id && active.isViewing()) {
       active.resumeIfNeeded();
       return;
     }
@@ -789,10 +822,11 @@ struct Index {
       }
     }
     this.unreadIds = nextUnread;
-    UnreadStore.getInstance().markSeen(id).then(() => {
-      this.pullInboxUi();
-    }).catch(() => {
+    UnreadStore.getInstance().markSeen(id).catch(() => {
     });
+    this.unreadItems = UnreadStore.getInstance().peek();
+    this.unreadCount = UnreadStore.getInstance().count();
+    this.unreadLine = UnreadStore.getInstance().headline();
     this.recomputeView();
   }
 
@@ -802,10 +836,6 @@ struct Index {
 
   private showSkeleton(): boolean {
     return this.inboxLoading && this.agentCount === 0 && !this.loadedOnce;
-  }
-
-  private showRefreshBar(): boolean {
-    return this.inboxRefreshing && this.agentCount > 0;
   }
 
   @Builder
@@ -826,22 +856,16 @@ struct Index {
       Column() {
         if (!this.hasKey) {
           this.topBar()
-          NetworkBanner({
-            online: this.online,
-            onRetry: () => {
-              this.runInboxRefresh();
-            }
-          })
         }
 
-        if (!this.ready) {
+        if (!this.ready && !this.loadedOnce) {
           Column() {
             SkeletonList({ rows: 6 })
           }
           .layoutWeight(1)
           .width('100%')
           .padding({ top: this.hasKey ? this.topInset : 0 })
-        } else if (!this.hasKey) {
+        } else if (this.ready && !this.hasKey) {
           this.emptyNoKey()
         } else {
           this.inboxBody()
@@ -851,6 +875,7 @@ struct Index {
       .height('100%')
       .backgroundColor($r('app.color.bg0'))
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      .overlay(this.homeDock(), { align: Alignment.Bottom })
       .bindSheet($$this.showNewSheet, this.newAgentSheet(), {
         height: this.newSheetHeight(),
         detents: [SheetSize.LARGE],
@@ -1060,12 +1085,12 @@ struct Index {
           .backgroundColor(Color.Transparent)
           .onClick(async (_e: ClickEvent, result: PasteButtonOnClickResult) => {
             if (result !== PasteButtonOnClickResult.SUCCESS) {
-              showToast('未授权读取剪贴板');
+              showToast('未授权读取剪贴板', 'info', 'inbox');
               return;
             }
             const text = (await readClipboardText()).trim();
             if (text.length === 0) {
-              showToast('剪贴板是空的');
+              showToast('剪贴板是空的', 'info', 'inbox');
               return;
             }
             this.setupKey = text;
@@ -1161,20 +1186,129 @@ struct Index {
   }
 
   @Builder
+  homeDock() {
+    Column({ space: 8 }) {
+      this.inboxActionPill()
+      if (!this.hasKey) {
+        ToastHost({ page: 'inbox' })
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 16, right: 16, bottom: Tokens.toastBottom })
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  inboxActionPill() {
+    if (this.keyReady && (this.authExpired || (this.errorMsg.length > 0 && this.errorMsg.indexOf('API Key') >= 0))) {
+      StatusPill({
+        text: this.authExpired ? 'API Key 失效，请重新粘贴' : this.errorMsg,
+        tone: 'danger',
+        action: '去设置',
+        onAction: () => {
+          this.navStack.pushPath({ name: 'Settings' });
+        }
+      })
+    } else if (this.errorMsg.length > 0) {
+      StatusPill({
+        text: this.errorMsg,
+        tone: 'danger',
+        action: '去设置',
+        onAction: () => {
+          this.navStack.pushPath({ name: 'Settings' });
+        }
+      })
+    } else if (this.needsPlanUpgrade) {
+      StatusPill({
+        text: '套餐不足，打开 Dashboard 升级',
+        tone: 'warn',
+        action: '升级',
+        onAction: () => {
+          this.openBrowser('https://cursor.com/dashboard', 'Dashboard');
+        }
+      })
+    } else if (this.actionBanner.length > 0) {
+      StatusPill({
+        text: this.actionBanner,
+        tone: 'danger',
+        action: this.actionKind === 'retry-create' ? '重试' : '',
+        dismissible: true,
+        onAction: () => {
+          this.retryCreateFromBanner();
+        },
+        onDismiss: () => {
+          this.inbox.clearActionBanner();
+        }
+      })
+    } else if (this.inboxError.length > 0 && !this.authExpired) {
+      StatusPill({
+        text: this.inboxError,
+        tone: 'warn',
+        action: '重试',
+        onAction: () => {
+          this.runInboxRefresh();
+        }
+      })
+    } else if (!this.online) {
+      StatusPill({
+        text: '网络已断开 · 显示缓存内容',
+        tone: 'warn',
+        action: '重试',
+        onAction: () => {
+          this.runInboxRefresh();
+        }
+      })
+    }
+  }
+
+  @Builder
+  inboxFloatChrome() {
+    Column({ space: 8 }) {
+      if (this.inboxRefreshing) {
+        StatusPill({
+          text: '刷新中…',
+          loading: true
+        })
+      }
+      this.inboxUnreadStrip()
+      ToastHost({ page: 'inbox' })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+    .padding({ top: 8 })
+    .position({ x: 0, y: 0 })
+    .hitTestBehavior(HitTestMode.None)
+    .zIndex(12)
+  }
+
+  @Builder
+  inboxUnreadStrip() {
+    if (this.hasKey && this.unreadCount > 0) {
+      StatusPill({
+        text: this.unreadItems.length > 0 ? this.unreadItems[0].name : `${this.unreadCount} 条未读`,
+        count: `${this.unreadCount}`,
+        action: '清空',
+        onTap: () => {
+          this.openUnreadSheet();
+        },
+        onAction: () => {
+          this.clearUnread();
+        }
+      })
+    } else {
+      Column()
+        .width(0)
+        .height(0)
+    }
+  }
+
+  @Builder
   inboxBody() {
     if (this.useSplit && !this.inboxOpen) {
       this.inboxRail()
     } else {
     Column() {
-        if (this.showRefreshBar()) {
-          Progress({ value: 0, total: 100, type: ProgressType.Linear })
-            .width('100%')
-            .height(2)
-            .color($r('app.color.accent'))
-            .style({ strokeWidth: 2, enableSmoothEffect: true })
-        }
-
-        // Filter bar — always visible once we have data (or once first load finished)
         InboxFilterBar({
           query: this.query,
           filter: this.filterMode,
@@ -1189,8 +1323,6 @@ struct Index {
           topInset: this.topInset,
           compact: this.useSplit,
           hideSearch: this.bpStore.bp === 'sm',
-          avatarPreset: this.avatarPreset,
-          avatarPhoto: this.avatarSrc(),
           onQuery: (s: string) => {
             this.query = s;
             this.recomputeView();
@@ -1241,78 +1373,6 @@ struct Index {
             this.setInboxOpen(false);
           }
         })
-        if (this.keyReady && (this.authExpired || (this.errorMsg.length > 0 && this.errorMsg.indexOf('API Key') >= 0))) {
-          StatusBanner({
-            text: this.authExpired ? 'API Key 失效，请重新粘贴' : this.errorMsg,
-            tone: 'danger',
-            action: '去设置',
-            onAction: () => {
-              this.navStack.pushPath({ name: 'Settings' });
-            }
-          })
-        } else if (this.errorMsg.length > 0) {
-          StatusBanner({
-            text: this.errorMsg,
-            tone: 'danger',
-            action: '去设置',
-            onAction: () => {
-              this.navStack.pushPath({ name: 'Settings' });
-            }
-          })
-        }
-
-        if (this.needsPlanUpgrade) {
-          StatusBanner({
-            text: '套餐不足，打开 Dashboard 升级',
-            tone: 'warn',
-            action: '升级',
-            external: true,
-            onAction: () => {
-              this.openBrowser('https://cursor.com/dashboard', 'Dashboard');
-            }
-          })
-        }
-
-        if (this.inboxError.length > 0 && !this.authExpired && !this.needsPlanUpgrade) {
-          StatusBanner({
-            text: this.inboxError,
-            tone: 'warn',
-            action: '重试',
-            onAction: () => {
-              this.runInboxRefresh();
-            }
-          })
-        }
-
-        if (this.actionBanner.length > 0) {
-          StatusBanner({
-            text: this.actionBanner,
-            tone: 'danger',
-            action: this.actionKind === 'retry-create' ? '重试' : '',
-            dismissible: true,
-            onAction: () => {
-              this.retryCreateFromBanner();
-            },
-            onDismiss: () => {
-              this.inbox.clearActionBanner();
-            }
-          })
-        }
-
-        if (!this.online) {
-          StatusBanner({
-            text: '网络已断开 · 显示缓存内容',
-            tone: 'warn',
-            action: '重试',
-            onAction: () => {
-              this.runInboxRefresh();
-            }
-          })
-        }
-
-        if (this.unreadCount > 0) {
-          this.unreadBanner()
-        }
 
         if (this.showPrFilter) {
           Row({ space: 8 }) {
@@ -1354,46 +1414,61 @@ struct Index {
           .padding({ left: this.pagePad, right: this.pagePad, top: 4, bottom: 8 })
         }
 
-        if (this.showSkeleton()) {
+        Stack({ alignContent: Alignment.Top }) {
           Column() {
-            SkeletonList({ rows: 6 })
-          }
-          .layoutWeight(1)
-          .width('100%')
-        } else if (this.agentCount === 0 && !this.inboxLoading) {
-          Column() {
-            EmptyState({
-              title: '还没有任务',
-              subtitle: '点右上角 +，写一句要做的事。',
-              actionLabel: '新建任务',
-              onAction: () => {
-                this.openNew();
+            if (this.showSkeleton()) {
+              Column() {
+                SkeletonList({ rows: 6 })
               }
-            })
-          }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-          .width('100%')
-        } else if (this.filteredCount === 0) {
-          Column() {
-            EmptyState({
-              title: '没有匹配的任务',
-              subtitle: '试试调整筛选，或点右上角 + 新建。',
-              actionLabel: '查看全部',
-              onAction: () => {
-                this.query = '';
-                this.filterMode = 'all';
-                this.sortMode = 'updated';
-                this.recomputeView();
+              .width('100%')
+              .height('100%')
+            } else if (this.agentCount === 0 && !this.inboxLoading) {
+              Column() {
+                EmptyState({
+                  title: '还没有任务',
+                  subtitle: '点右上角 +，写一句要做的事。',
+                  actionLabel: '新建任务',
+                  onAction: () => {
+                    this.openNew();
+                  }
+                })
               }
-            })
+              .width('100%')
+              .height('100%')
+              .justifyContent(FlexAlign.Center)
+            } else if (this.filteredCount === 0) {
+              Column() {
+                EmptyState({
+                  title: '没有匹配的任务',
+                  subtitle: '试试调整筛选，或点右上角 + 新建。',
+                  actionLabel: '查看全部',
+                  onAction: () => {
+                    this.query = '';
+                    this.filterMode = 'all';
+                    this.sortMode = 'updated';
+                    this.recomputeView();
+                  }
+                })
+              }
+              .width('100%')
+              .height('100%')
+              .justifyContent(FlexAlign.Center)
+            } else {
+              Column() {
+                this.renderView()
+              }
+              .width('100%')
+              .height('100%')
+            }
           }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
           .width('100%')
-        } else {
-          this.renderView()
+          .height('100%')
+
+          this.inboxFloatChrome()
         }
+        .width('100%')
+        .layoutWeight(1)
+        .clip(false)
     }
     .width('100%')
     .layoutWeight(1)
@@ -1440,27 +1515,28 @@ struct Index {
         }
       }
       .width('100%')
+      .height('100%')
       .padding({ top: Tokens.space2 })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .cachedCount(8)
-      .sticky(StickyStyle.Header)
       .onReachEnd(() => {
         this.inbox.loadMore().then((ok: boolean) => {
           this.pullInboxUi();
           if (!ok) {
             const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '加载更多失败';
-            notifyResult(false, '', err);
+            notifyResult(false, '', err, 'inbox');
           }
         });
       })
     }
-    .layoutWeight(1)
+    .width('100%')
+    .height('100%')
     .onRefreshing(async () => {
       Haptics.tick();
-      this.isRefreshing = true;
-      await this.runInboxRefresh();
       this.isRefreshing = false;
+      this.inboxRefreshing = true;
+      await this.runInboxRefresh();
     })
   }
 
@@ -1472,7 +1548,7 @@ struct Index {
       AgentCard({
         agent: row.agent,
         showRepo: this.groupMode !== 'repo',
-        preview: AgentCache.getInstance().peekSummary(row.agent.id),
+        preview: AgentCache.getInstance().peekMemSummary(row.agent.id),
         list: true,
         pinned: isPinnedId(row.agent.id, this.pinnedIds),
         unread: this.isFresh(row.agent.id),
@@ -1512,27 +1588,28 @@ struct Index {
         }
       }
       .width('100%')
+      .height('100%')
       .padding({ top: Tokens.space2 })
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
       .cachedCount(6)
-      .sticky(StickyStyle.Header)
       .onReachEnd(() => {
         this.inbox.loadMore().then((ok: boolean) => {
           this.pullInboxUi();
           if (!ok) {
             const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '加载更多失败';
-            notifyResult(false, '', err);
+            notifyResult(false, '', err, 'inbox');
           }
         });
       })
     }
-    .layoutWeight(1)
+    .width('100%')
+    .height('100%')
     .onRefreshing(async () => {
       Haptics.tick();
-      this.isRefreshing = true;
-      await this.runInboxRefresh();
       this.isRefreshing = false;
+      this.inboxRefreshing = true;
+      await this.runInboxRefresh();
     })
   }
 
@@ -1592,17 +1669,12 @@ struct Index {
 
   @Builder
   cardPairRow(pair: CardPair) {
-    Flex({
-      direction: FlexDirection.Row,
-      justifyContent: FlexAlign.SpaceBetween,
-      alignItems: ItemAlign.Stretch
-    }) {
+    Row({ space: Tokens.space2 }) {
       Column() {
         this.gridCard(pair.left)
       }
       .layoutWeight(1)
       .constraintSize({ minWidth: 0 })
-      .margin({ right: pair.hasRight ? Tokens.space2 : 0 })
       if (pair.hasRight) {
         Column() {
           this.gridCard(pair.right)
@@ -1616,6 +1688,7 @@ struct Index {
       }
     }
     .width('100%')
+    .alignItems(VerticalAlign.Top)
     .padding({
       left: this.pagePad,
       right: this.pagePad,
@@ -1628,7 +1701,7 @@ struct Index {
     AgentCard({
       agent: item,
       showRepo: this.groupMode !== 'repo',
-      preview: AgentCache.getInstance().peekSummary(item.id),
+      preview: AgentCache.getInstance().peekMemSummary(item.id),
       pinned: isPinnedId(item.id, this.pinnedIds),
       unread: this.isFresh(item.id),
       onOpen: (id: string) => {
@@ -1672,64 +1745,6 @@ struct Index {
     } else {
       this.agentMenuSheet()
     }
-  }
-
-  @Builder
-  unreadBanner() {
-    Row({ space: 8 }) {
-      Column({ space: 2 }) {
-        Text(this.unreadItems.length > 0 ? this.unreadItems[0].name : this.unreadLine)
-          .fontSize(Tokens.typeCallout)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .width('100%')
-        if (this.unreadItems.length > 0 && this.unreadItems[0].repo.length > 0) {
-          Text(this.unreadItems[0].repo)
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.text_tertiary'))
-            .maxLines(1)
-        }
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      .constraintSize({ minHeight: Tokens.touchMin })
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        const id = UnreadStore.getInstance().firstId();
-        if (id.length > 0) {
-          this.openAgent(id);
-        }
-      })
-      Text(`${this.unreadCount}`)
-        .fontSize(Tokens.typeMicro)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.primary_on'))
-        .textAlign(TextAlign.Center)
-        .constraintSize({ minWidth: 22, minHeight: 22 })
-        .padding({ left: 6, right: 6 })
-        .backgroundColor($r('app.color.accent'))
-        .borderRadius(Tokens.radiusPill)
-        .onClick(() => {
-          const id = UnreadStore.getInstance().firstId();
-          if (id.length > 0) {
-            this.openAgent(id);
-          }
-        })
-      HuTextButton({
-        label: '全部',
-        color: $r('app.color.text_secondary'),
-        onTap: () => {
-          this.openUnreadSheet();
-        }
-      })
-    }
-    .width('100%')
-    .constraintSize({ minHeight: Tokens.touchMin })
-    .padding({ left: this.pagePad, right: Tokens.space2, top: 8, bottom: 8 })
-    .backgroundColor($r('app.color.bg2'))
-    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -1789,15 +1804,15 @@ struct Index {
     this.showChromeSheet = false;
     this.recomputeView();
     Haptics.success();
-    showToast('已保存本地名称');
+    showToast('已保存本地名称', 'info', 'inbox');
   }
 
   @Builder
   unreadSheet() {
-    Column({ space: Tokens.sheetGap }) {
+    Column({ space: Tokens.space2 }) {
       Row() {
         Text(this.unreadItems.length > 0 ? `${this.unreadItems.length} 条新结果` : '没有新结果')
-          .fontSize(Tokens.typeBody)
+          .fontSize(Tokens.typeCallout)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .layoutWeight(1)
@@ -1805,6 +1820,7 @@ struct Index {
           HuTextButton({
             label: '清空',
             color: $r('app.color.accent'),
+            compact: true,
             onTap: () => {
               this.clearUnread();
             }
@@ -1812,14 +1828,22 @@ struct Index {
         }
       }
       .width('100%')
+      .height(32)
       .alignItems(VerticalAlign.Center)
 
       if (this.unreadItems.length === 0) {
-        Text('全部已读')
+        Text('没有未读结果。若桌面图标还带红点，点下面清掉。')
           .fontSize(Tokens.typeCaption)
           .fontColor($r('app.color.text_tertiary'))
           .width('100%')
-          .padding({ top: 12, bottom: 12 })
+          .padding({ top: 8, bottom: 8 })
+        HuTextButton({
+          label: '清除图标红点',
+          color: $r('app.color.accent'),
+          onTap: () => {
+            this.clearUnread();
+          }
+        })
       } else {
         List({ space: 8 }) {
           ForEach(this.unreadItems, (it: UnreadItem) => {
@@ -1923,6 +1947,41 @@ struct Index {
       }
       .width('100%')
       .padding({ bottom: 4 })
+      .alignItems(VerticalAlign.Center)
+
+      Row() {
+        Row({ space: 4 }) {
+          Text(this.unreadCount > 0 ? `${this.unreadCount} 条未读` : '桌面图标红点')
+            .fontSize(Tokens.typeCaption)
+            .fontColor($r('app.color.text_secondary'))
+            .layoutWeight(1)
+          if (this.unreadCount > 0) {
+            HuIcon({
+              name: 'chevronRight',
+              iconSize: 16,
+              tint: $r('app.color.text_tertiary')
+            })
+          }
+        }
+        .layoutWeight(1)
+        .constraintSize({ minHeight: Tokens.touchMin })
+        .alignItems(VerticalAlign.Center)
+        .onClick(() => {
+          if (this.unreadCount > 0) {
+            Haptics.tick();
+            this.openUnreadSheet();
+          }
+        })
+        HuTextButton({
+          label: this.unreadCount > 0 ? '全部已读' : '清除',
+          color: $r('app.color.accent'),
+          onTap: () => {
+            this.clearUnread();
+          }
+        })
+      }
+      .width('100%')
+      .constraintSize({ minHeight: Tokens.touchMin })
       .alignItems(VerticalAlign.Center)
 
       if (this.cropUri.length > 0) {
@@ -2093,7 +2152,7 @@ struct Index {
             await this.togglePin(this.menuAgentId);
             this.showChromeSheet = false;
             Haptics.success();
-            showToast(wasPinned ? '已取消置顶' : '已置顶');
+            showToast(wasPinned ? '已取消置顶' : '已置顶', 'info', 'inbox');
           }
         })
           .layoutWeight(1)
@@ -2137,11 +2196,11 @@ struct Index {
               this.pullInboxUi();
               if (ok) {
                 Haptics.success();
-                showToast('已取消归档');
+                showToast('已取消归档', 'info', 'inbox');
               } else {
                 Haptics.fail();
                 const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '取消归档失败';
-                showToast(err);
+                showToast(err, 'danger', 'inbox');
               }
             } else {
               const ok = await this.inbox.archive(this.menuAgentId);
@@ -2152,12 +2211,12 @@ struct Index {
                 }
                 this.pullInboxUi();
                 Haptics.success();
-                showToast('已归档');
+                showToast('已归档', 'info', 'inbox');
               } else {
                 this.pullInboxUi();
                 Haptics.fail();
                 const err = this.inbox.errorMsg.length > 0 ? this.inbox.errorMsg : '归档失败';
-                showToast(err);
+                showToast(err, 'danger', 'inbox');
               }
             }
           }
@@ -2176,7 +2235,7 @@ struct Index {
                 this.pullInboxUi();
                 if (ok) {
                   Haptics.success();
-                  showToast('已删除');
+                  showToast('已删除', 'info', 'inbox');
                 } else {
                   Haptics.fail();
                 }

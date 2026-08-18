@@ -53,18 +53,18 @@ export struct ToolCallRow {
   }
 
   build() {
-    Column({ space: 6 }) {
-      Row({ space: 8 }) {
+    Column({ space: 2 }) {
+      Row({ space: 6 }) {
         if (this.running()) {
           Column()
-            .width(8)
-            .height(8)
-            .borderRadius(4)
+            .width(6)
+            .height(6)
+            .borderRadius(3)
             .backgroundColor($r('app.color.accent'))
         } else {
           HuIcon({
             name: 'check',
-            iconSize: 14,
+            iconSize: 12,
             tint: $r('app.color.text_secondary')
           })
         }
@@ -72,12 +72,12 @@ export struct ToolCallRow {
           Text('子任务')
             .fontSize(Tokens.typeMicro)
             .fontColor($r('app.color.accent'))
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .backgroundColor($r('app.color.bg2'))
+            .padding({ left: 4, right: 4, top: 1, bottom: 1 })
+            .backgroundColor($r('app.color.bg1'))
             .borderRadius(Tokens.radiusSm)
         }
         Text(this.item.text ?? this.item.tool?.name ?? 'tool')
-          .fontSize(Tokens.typeCaption)
+          .fontSize(Tokens.typeMicro)
           .fontColor(this.isSub() ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
           .layoutWeight(1)
           .maxLines(this.isSub() ? 2 : 1)
@@ -86,18 +86,18 @@ export struct ToolCallRow {
           Column() {
             HuIcon({
               name: 'chevronRight',
-              iconSize: 16,
-              tint: $r('app.color.text_secondary')
+              iconSize: 12,
+              tint: $r('app.color.text_tertiary')
             })
           }
-          .width(16)
-          .height(16)
+          .width(12)
+          .height(12)
           .rotate({ angle: this.opened ? 90 : 0 })
           .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
         }
       }
       .width('100%')
-      .constraintSize({ minHeight: Tokens.touchMin })
+      .constraintSize({ minHeight: 20 })
       .alignItems(VerticalAlign.Center)
       .onClick(() => {
         if (this.canExpand()) {
@@ -109,13 +109,13 @@ export struct ToolCallRow {
       })
 
       if (!this.folded() && this.canExpand()) {
-        Column({ space: 4 }) {
+        Column({ space: 2 }) {
           if (this.item.tool?.truncatedArgs || this.item.tool?.truncatedResult) {
             Text('内容过大，已截断')
               .fontSize(Tokens.typeMicro)
               .fontColor($r('app.color.warn'))
               .width('100%')
-              .padding({ left: 22 })
+              .padding({ left: 18 })
           }
           if (this.item.tool?.argsText) {
             Text(this.item.tool.argsText)
@@ -123,8 +123,8 @@ export struct ToolCallRow {
               .fontColor($r('app.color.text_secondary'))
               .fontFamily(Tokens.fontMono)
               .width('100%')
-              .padding({ left: 22 })
-              .maxLines(16)
+              .padding({ left: 18 })
+              .maxLines(12)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
           if (this.item.tool?.resultText) {
@@ -133,8 +133,8 @@ export struct ToolCallRow {
               .fontColor($r('app.color.text_primary'))
               .fontFamily(Tokens.fontMono)
               .width('100%')
-              .padding({ left: 22 })
-              .maxLines(28)
+              .padding({ left: 18 })
+              .maxLines(20)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
           }
           if (!this.item.tool?.argsText && !this.item.tool?.resultText) {
@@ -142,7 +142,7 @@ export struct ToolCallRow {
               .fontSize(Tokens.typeMicro)
               .fontColor($r('app.color.text_tertiary'))
               .width('100%')
-              .padding({ left: 22 })
+              .padding({ left: 18 })
           }
         }
         .width('100%')
@@ -151,8 +151,6 @@ export struct ToolCallRow {
       }
     }
     .width('100%')
-    .padding({ left: 10, right: 10, top: 7, bottom: 7 })
-    .backgroundColor(this.isSub() ? $r('app.color.accent_soft') : $r('app.color.bg2'))
-    .borderRadius(Tokens.radiusMd)
+    .padding({ left: 0, right: 0, top: 3, bottom: 3 })
   }
 }

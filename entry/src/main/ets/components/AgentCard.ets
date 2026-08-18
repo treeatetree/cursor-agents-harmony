@@ -23,7 +23,7 @@ export struct AgentCard {
   @Prop preview: string = '';
   @Prop list: boolean = false;
   @Prop pinned: boolean = false;
-  @Prop unread: boolean = false;
+  @Prop @Watch('onUnread') unread: boolean = false;
   @Prop active: boolean = false;
   @StorageLink('aliasRev') aliasRev: number = 0;
   @State private pressed: boolean = false;
@@ -43,6 +43,12 @@ export struct AgentCard {
 
   onAgent(_name: string): void {
     this.armTick();
+  }
+
+  onUnread(_name: string): void {
+    if (this.running()) {
+      this.armTick();
+    }
   }
 
   aboutToDisappear(): void {
@@ -166,11 +172,31 @@ export struct AgentCard {
   }
 
   private hasCorner(): boolean {
-    return this.running() || this.unread;
+    return this.running();
   }
 
   private sidePad(): number {
-    return (this.list ? 14 : Tokens.cardPad) + (this.hasCorner() ? 10 : 0);
+    return (this.list ? 14 : Tokens.cardPad) + (this.hasCorner() ? 12 : 0);
+  }
+
+  private cardStrokeW(): number {
+    if (this.unread) {
+      return 2;
+    }
+    if (this.running()) {
+      return 1.5;
+    }
+    return 1;
+  }
+
+  private cardStroke(): Resource {
+    if (this.running()) {
+      return $r('app.color.accent');
+    }
+    if (this.unread) {
+      return $r('app.color.unread_ring');
+    }
+    return $r('app.color.border');
   }
 
   build() {
@@ -182,10 +208,10 @@ export struct AgentCard {
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .lineHeight(Tokens.lineBody)
-        .maxLines(this.list ? 1 : 2)
+        .maxLines(1)
         .constraintSize({
           minHeight: Tokens.lineBody,
-          maxHeight: this.list ? Tokens.lineBody : Tokens.lineBody * 2
+          maxHeight: Tokens.lineBody
         })
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
@@ -272,8 +298,8 @@ export struct AgentCard {
     })
     .backgroundColor(this.active ? $r('app.color.bg2') : (this.pressed ? $r('app.color.bg_hover') : $r('app.color.bg1')))
     .border({
-      width: 1,
-      color: $r('app.color.border')
+      width: this.cardStrokeW(),
+      color: this.cardStroke()
     })
     .borderRadius(this.list ? 12 : Tokens.radiusCard)
     .scale({ x: pressScaleOf(this.pressed), y: pressScaleOf(this.pressed) })
@@ -302,15 +328,6 @@ export struct AgentCard {
     )
       if (this.running()) {
         WaveDots({ tint: $r('app.color.text_tertiary') })
-          .margin({ top: 8, right: 8 })
-          .hitTestBehavior(HitTestMode.Transparent)
-      } else if (this.unread) {
-        Column()
-          .width(7)
-          .height(7)
-          .borderRadius(3.5)
-          .backgroundColor($r('app.color.accent'))
-          .border({ width: 1.5, color: this.active ? $r('app.color.bg2') : $r('app.color.bg1') })
           .margin({ top: 8, right: 8 })
           .hitTestBehavior(HitTestMode.Transparent)
       }

@@ -17,6 +17,7 @@ import { normalizeAvatarId } from '../utils/AvatarPresets';
 import { SessionVM } from '../viewmodels/SessionVM';
 import { confirmDanger } from '../utils/AppDialog';
 import { notifyResult, showToast } from '../utils/AppToast';
+import { ToastHost } from '../components/ToastHost';
 import { readClipboardText } from '../utils/Clipboard';
 import { pushInAppBrowser, WebLinks } from '../utils/WebLinks';
 
@@ -42,7 +43,7 @@ struct SettingsPage {
   @State hapticsEnabled: boolean = true;
   @State soundsEnabled: boolean = true;
   @State notifyEnabled: boolean = true;
-  @State diagEnabled: boolean = false;
+  @State diagEnabled: boolean = true;
   @State defaultModel: string = '';
   @State appVersion: string = '1.0.0';
   @State topInset: number = 0;
@@ -51,8 +52,8 @@ struct SettingsPage {
   @State typePref: string = 'default';
   @State densityCompact: boolean = false;
   @State pressKey: string = '';
-  @State avatarPreset: string = 'iridescent';
-  @State avatarPhoto: string = '';
+  @StorageLink('avatarPreset') avatarPreset: string = 'iridescent';
+  @StorageLink('avatarPhoto') avatarPhoto: string = '';
   @State showAvatarEdit: boolean = false;
   @State cropUri: string = '';
   @State notifyDetail: boolean = false;
@@ -91,13 +92,9 @@ struct SettingsPage {
     const preset = normalizeAvatarId(await prefs.getAvatarPreset());
     const photo = await resolveAvatarPhoto(await prefs.getAvatarPhoto());
     if (preset === 'custom' && photo.length === 0) {
-      this.avatarPreset = 'iridescent';
-      this.avatarPhoto = '';
-      prefs.setAvatarPreset('iridescent');
-      prefs.setAvatarPhoto('');
+      await prefs.saveAvatar('iridescent', '');
     } else {
-      this.avatarPreset = preset;
-      this.avatarPhoto = preset === 'custom' ? photo : '';
+      await prefs.saveAvatar(preset, preset === 'custom' ? photo : '');
     }
     const read = ReadPrefStore.getInstance();
     this.typePref = read.typePref;
@@ -124,6 +121,13 @@ struct SettingsPage {
       return this.defaultModel;
     }
     return s.charAt(0).toUpperCase() + s.substring(1);
+  }
+
+  private avatarSrc(): string {
+    if (this.avatarPreset !== 'custom' || this.avatarPhoto.length === 0) {
+      return '';
+    }
+    return this.avatarPhoto;
   }
 
   build() {
@@ -161,7 +165,7 @@ struct SettingsPage {
               Row({ space: 12 }) {
                 HuAvatar({
                   preset: this.avatarPreset,
-                  photoUri: this.avatarPreset === 'custom' ? this.avatarPhoto : '',
+                  photoUri: this.avatarSrc(),
                   box: Tokens.touchMin,
                   onTap: () => {
                     this.showAvatarEdit = !this.showAvatarEdit;
@@ -182,20 +186,16 @@ struct SettingsPage {
                     this.cropUri = '';
                   },
                   onDone: async (path: string) => {
-                    this.avatarPhoto = toFileUri(path);
-                    this.avatarPreset = 'custom';
                     this.cropUri = '';
-                    await PrefStore.getInstance().setAvatarPreset('custom');
-                    await PrefStore.getInstance().setAvatarPhoto(toFileUri(path));
+                    await PrefStore.getInstance().saveAvatar('custom', toFileUri(path));
                   }
                 })
               } else if (this.showAvatarEdit) {
                 HuAvatarPicker({
                   selected: this.avatarPreset,
-                  photoUri: this.avatarPreset === 'custom' ? this.avatarPhoto : '',
+                  photoUri: this.avatarSrc(),
                   onPick: async (id: string) => {
-                    this.avatarPreset = normalizeAvatarId(id);
-                    await PrefStore.getInstance().setAvatarPreset(this.avatarPreset);
+                    await PrefStore.getInstance().saveAvatar(normalizeAvatarId(id), '');
                   },
                   onPhoto: async () => {
                     const uri = await pickOneImageUri();
@@ -205,7 +205,7 @@ struct SettingsPage {
                     const ctx = getContext(this) as common.UIAbilityContext;
                     const local = await materializeForCrop(uri, ctx.cacheDir);
                     if (local.length === 0) {
-                      showToast('这张图读不了');
+                      showToast('这张图读不了', 'info', 'settings');
                       return;
                     }
                     this.cropUri = toFileUri(local);
@@ -237,14 +237,14 @@ struct SettingsPage {
                   const ok = await this.session.validateExisting();
                   this.pull();
                   notifyResult(ok, '验证通过', this.session.errorMsg.length > 0 ?
-                    this.session.errorMsg : '验证失败');
+                    this.session.errorMsg : '验证失败', 'settings');
                 })
                 this.actionRow('清除 Key', $r('app.color.err'), false, () => {
                   confirmDanger('清除 API Key', '清除后需要重新粘贴才能同步任务。', '清除', () => {
                     this.session.clearKey().then(() => {
                       this.inputKey = '';
                       this.pull();
-                      showToast('已清除');
+                      showToast('已清除', 'info', 'settings');
                     });
                   });
                 })
@@ -315,7 +315,7 @@ struct SettingsPage {
               HuSwitch({
                 on: this.diagEnabled,
                 label: '诊断日志',
-                hint: '写入本机文件，不含正文和密钥',
+                hint: '默认开启。写入本机文件，不含正文和密钥',
                 onToggle: async () => {
                   this.diagEnabled = !this.diagEnabled;
                   await PrefStore.getInstance().setDiagEnabled(this.diagEnabled);
@@ -423,12 +423,24 @@ struct SettingsPage {
       }
       .width('100%')
       .height('100%')
+      .overlay(this.noticeDock(), { align: Alignment.Bottom })
       .backgroundColor($r('app.color.bg0'))
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
     }
     .hideTitleBar(true)
     .backgroundColor($r('app.color.bg0'))
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
+  }
+
+  @Builder
+  noticeDock() {
+    Column() {
+      ToastHost({ page: 'settings' })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 16, right: 16, bottom: Tokens.toastBottom })
+    .hitTestBehavior(HitTestMode.Transparent)
   }
 
   @Builder
@@ -570,12 +582,12 @@ struct SettingsPage {
           .backgroundColor(Color.Transparent)
           .onClick(async (_e: ClickEvent, result: PasteButtonOnClickResult) => {
             if (result !== PasteButtonOnClickResult.SUCCESS) {
-              showToast('未授权读取剪贴板');
+              showToast('未授权读取剪贴板', 'info', 'settings');
               return;
             }
             const text = (await readClipboardText()).trim();
             if (text.length === 0) {
-              showToast('剪贴板是空的');
+              showToast('剪贴板是空的', 'info', 'settings');
               return;
             }
             this.inputKey = text;
@@ -602,11 +614,11 @@ struct SettingsPage {
           if (ok) {
             this.inputKey = '';
             this.showReplace = false;
-            showToast('已保存');
+            showToast('已保存', 'info', 'inbox');
             this.navStack.pop();
           } else {
             notifyResult(false, '', this.session.errorMsg.length > 0 ?
-              this.session.errorMsg : '验证失败');
+              this.session.errorMsg : '验证失败', 'settings');
           }
         }
       })

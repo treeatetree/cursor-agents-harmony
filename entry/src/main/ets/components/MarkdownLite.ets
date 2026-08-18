@@ -27,6 +27,7 @@ export struct MarkdownLite {
   @Prop inBubble: boolean = false;
   /** Pixel cap so quotes / code cannot inflate the bubble past the feed. */
   @Prop capWidth: number = 0;
+  @Prop toastPage: string = 'detail';
   onQuote: (text: string) => void = (_text: string) => {
   };
 
@@ -202,6 +203,13 @@ export struct MarkdownLite {
             .color($r('app.color.border'))
             .width('100%')
             .margin({ top: 16, bottom: 16 })
+        } else if (b.kind === 'image' && b.url.length > 0 && isSafeHttpsUrl(b.url)) {
+          Image(b.url)
+            .width('100%')
+            .constraintSize({ maxHeight: 200 })
+            .objectFit(ImageFit.Contain)
+            .borderRadius(Tokens.radiusSm)
+            .margin({ top: 6, bottom: 8 })
         } else {
           Column() {
             this.renderInline(b.text, this.proseSize(), this.bodyColor(), FontWeight.Regular,
@@ -319,7 +327,7 @@ export struct MarkdownLite {
           .onClick(() => {
             Haptics.click();
             copyToClipboard(b.text).then((ok: boolean) => {
-              showToast(ok ? '已复制' : '复制失败');
+              showToast(ok ? '已复制' : '复制失败', ok ? 'info' : 'danger', this.toastPage);
             });
           })
       }

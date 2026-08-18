@@ -1,12 +1,12 @@
 import { ApiException, AgentDetail, AgentSummary, ArtifactInfo, ConversationMessage,
-  GitBranch, McpServerDef, Run, RunStatus, RunUsage } from '../models/Api';
+  ConversationResponse, GitBranch, McpServerDef, Run, RunStatus, RunUsage } from '../models/Api';
 import { SseFrame, ToolCallEvent } from '../models/Sse';
 import { TimelineItem } from '../models/Timeline';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { StreamCoordinator } from '../api/StreamCoordinator';
 import { unwrapUsageRuns, unwrapAgentDetail, unwrapCreateAgent } from '../api/ApiUnwrap';
 import { TimelineSource } from '../datasource/TimelineSource';
-import { AgentCache } from '../store/AgentCache';
+import { AgentCache, CachedAgentPayload } from '../store/AgentCache';
 import { AgentPrefetch } from '../store/AgentPrefetch';
 import { CreateDraftStore } from '../store/CreateDraftStore';
 import { InboxVM } from './InboxVM';
@@ -22,14 +22,20 @@ import { Log } from '../utils/Log';
 import { formatTokenShort } from '../utils/DisplayFmt';
 import { toApiMcp } from '../utils/AgentCapabilities';
 import { countSteps, dropLastStep, isProgressText, lastNonEmptyLine, lastStep } from '../utils/StreamText';
-import { usedToolFromEvent } from '../utils/TimelineCopy';
+import { meaningfulStepTitle, usedToolFromEvent } from '../utils/TimelineCopy';
 import { gitCompareUrl, isOriginRepo } from '../utils/GitLinks';
 import { PromptImage, toApiImages } from '../utils/ImagePicker';
 import { formatModelSent, modelSentJson, modelSentTags } from '../utils/ModelGroups';
-import { convFingerprint, keepPendingTurns, mergeCachedActivity, restoreUserSentTags } from '../utils/TimelineMerge';
+import { convFingerprint, keepPendingTurns, lastMessageStamp, mergeCachedActivity, restoreUserSentTags } from '../utils/TimelineMerge';
 import { SessionDiag } from '../utils/SessionDiag';
 import { capTimeline } from '../utils/CacheLimit';
+import { cacheCoversConversation, cacheCoversDetail } from '../utils/CachePolicy';
+import { isRunInFlight } from '../utils/InboxGrouping';
 import { countNewContent, findUnreadAnchor, lastContentKey, visibleTimeline } from '../utils/TimelineView';
+import {
+  extraImageUrls, imageUrlsFromMessage, imageUrlsFromPrompt, isLiveWaitItem,
+  pickMessageTime, waitingKey
+} from '../utils/TimelineMedia';
 import { canApplyRunStatus, isNewerIso, isTerminalStatus } from '../utils/RunState';
 import { OpIdStore } from '../store/OpIdStore';
 import { RunStateMachine } from './RunStateMachine';
@@ -40,7 +46,15 @@ import { canFlushQueue } from './FollowUpQueue';
 const TAG = 'DetailVM';
 
 export class DetailVM {
+  private static instance: DetailVM | undefined = undefined;
   private static activeInstance: DetailVM | undefined = undefined;
+
+  static getInstance(): DetailVM {
+    if (!DetailVM.instance) {
+      DetailVM.instance = new DetailVM();
+    }
+    return DetailVM.instance;
+  }
 
   static getActive(): DetailVM | undefined {
     return DetailVM.activeInstance;
@@ -103,6 +117,9 @@ export class DetailVM {
   private queueTimer: number = -1;
   private connectNoticeTimer: number = -1;
   private cancelNoticeTimer: number = -1;
+  private idleWaitTimer: number = -1;
+  private quietConvTimer: number = -1;
+  private lastQuietConvAt: number = 0;
   private pendingConnectNotice: boolean = false;
   private queueRetries: number = 0;
   private convKey: string = '';
@@ -120,6 +137,7 @@ export class DetailVM {
   private artifactsSvc: ArtifactService = new ArtifactService();
   private streamSessionHandle: StreamSession = new StreamSession();
   private onUi: (() => void) | undefined = undefined;
+  private viewing: boolean = false;
 
   constructor() {
     this.uiFlush = new Throttle(100, () => {
@@ -137,8 +155,50 @@ export class DetailVM {
     });
   }
 
-  setUiListener(cb: () => void): void {
+  setUiListener(cb: (() => void) | undefined): void {
     this.onUi = cb;
+  }
+
+  isViewing(agentId?: string): boolean {
+    if (!this.viewing) {
+      return false;
+    }
+    if (agentId !== undefined && agentId.length > 0) {
+      return this.agentId === agentId;
+    }
+    return true;
+  }
+
+  canReattach(agentId: string): boolean {
+    return agentId.length > 0 && this.agentId === agentId && this.source.totalCount() > 0;
+  }
+
+  attachView(): void {
+    this.viewing = true;
+    DetailVM.activeInstance = this;
+    if (this.agentId.length > 0) {
+      AppStorage.setOrCreate('watchingAgentId', this.agentId);
+    }
+    if (this.isRunActive()) {
+      ThemeStore.getInstance().setKeepScreenOn(true);
+    }
+    this.notify();
+    this.uiFlush.flush();
+  }
+
+  detachView(): void {
+    this.viewing = false;
+    this.onUi = undefined;
+    AppStorage.setOrCreate('watchingAgentId', '');
+    ThemeStore.getInstance().setKeepScreenOn(false);
+    this.persistTimeline(true);
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'detach',
+      agentId: this.agentId,
+      runId: this.activeRunId,
+      extra: `live=${this.isRunActive() ? 1 : 0}`
+    });
   }
 
   private notify(): void {
@@ -185,6 +245,7 @@ export class DetailVM {
     }
     DetailVM.activeInstance = this;
     this.agentId = agentId;
+    this.viewing = true;
     AppStorage.setOrCreate('watchingAgentId', agentId);
     this.errorMsg = '';
     this.convError = '';
@@ -221,7 +282,8 @@ export class DetailVM {
     if (cached?.messages && cached.messages.length > 0) {
       this.buildConversation(cached.messages);
       this.applyMergedActivity(cached.timeline);
-      this.convKey = convFingerprint(cached.messages);
+      this.convKey = convFingerprint(cached.messages, cached.detail?.latestRunId ?? '',
+        lastMessageStamp(cached.messages));
       painted = true;
       cacheHit = cacheHit === 'none' ? 'messages' : `${cacheHit}+messages`;
     } else if (cached?.timeline && cached.timeline.length > 0) {
@@ -232,6 +294,7 @@ export class DetailVM {
     if (liveKeep.length > 0) {
       this.applyMergedActivity(liveKeep);
     }
+    this.applyCachedExtras(cached);
     if (keepRunId.length > 0 && liveActive) {
       this.activeRunId = keepRunId;
       this.streamRunId = keepStreamId;
@@ -240,7 +303,7 @@ export class DetailVM {
     }
     this.applyUnreadScroll();
     this.loading = !painted;
-    this.syncing = true;
+    this.syncing = !painted;
     const cacheAgeMs = cached && cached.fetchedAt > 0 ? Date.now() - cached.fetchedAt : -1;
     const prefetchHit = AgentPrefetch.getInstance().isFresh(agentId);
     SessionDiag.emit({
@@ -252,38 +315,107 @@ export class DetailVM {
     this.notify();
     this.uiFlush.flush();
 
+    const inboxRow = InboxVM.getInstance().peek(agentId);
+    const inboxRunId = inboxRow?.latestRunId ?? '';
+    const inboxRunStatus = `${inboxRow?.latestRunStatus ?? ''}`;
+    const cachedMsgs = cached?.messages ?? [];
+    const unreadCacheHit = this.openWasUnread && cachedMsgs.length > 0 &&
+      cacheCoversConversation(cached, inboxRunId) &&
+      (inboxRunStatus.length === 0 || !isRunInFlight(inboxRunStatus));
+    if (cacheCoversDetail(cached, inboxRunId, inboxRunStatus) || unreadCacheHit) {
+      this.applyCachedExtras(cached);
+      this.loading = false;
+      this.syncing = false;
+      this.rememberSeen();
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'open_done',
+        agentId: agentId,
+        extra: `cache_only=1 n=${this.source.totalCount()}`
+      });
+      this.notify();
+      this.uiFlush.flush();
+      if (!cached || cached.extrasFetched !== true) {
+        this.loadArtifactsAndUsage();
+      }
+      return;
+    }
+
     try {
       const client = CursorApiClient.getInstance();
-      const settled = await Promise.all([
-        client.getAgent(agentId),
-        client.getRuns(agentId, 20)
-      ]);
-      if (this.openGen !== gen) {
-        return;
-      }
-      const detail = unwrapAgentDetail(settled[0] as object);
-      this.applyDetail(detail);
-
-      const runs = extractRuns(settled[1] as object);
-      this.applyLatestRunMeta(runs);
-
-      const convStarted = Date.now();
+      const prefetch = AgentPrefetch.getInstance();
+      let detail: AgentDetail | undefined = undefined;
+      let runs: Run[] = [];
       let messages: ConversationMessage[] = [];
       let convOk = false;
+      let convFromPrefetch = false;
+      const convStarted = Date.now();
+
+      if (prefetch.isInflight(agentId)) {
+        const hit = await prefetch.awaitInflight(agentId);
+        if (this.openGen !== gen) {
+          return;
+        }
+        if (hit && hit.ok && hit.detail) {
+          detail = hit.detail;
+          runs = hit.runs ?? [];
+          messages = hit.messages ?? [];
+          convOk = messages.length > 0;
+          convFromPrefetch = convOk;
+        }
+      }
+
+      if (!detail) {
+        if (inboxRunId.length > 0 && cacheCoversConversation(cached, inboxRunId) &&
+          cached?.detail) {
+          detail = cached.detail;
+          runs = cached.runs ?? [];
+          messages = cached.messages ?? [];
+          convOk = messages.length > 0;
+          convFromPrefetch = convOk;
+          SessionDiag.emit({
+            tag: TAG,
+            event: 'conv',
+            agentId: agentId,
+            elapsedMs: 0,
+            extra: `ok=1 n=${messages.length} cache=1 skip=1 local=1`
+          });
+        } else {
+          const settled = await Promise.all([
+            client.getAgent(agentId),
+            client.getRuns(agentId, 20)
+          ]);
+          if (this.openGen !== gen) {
+            return;
+          }
+          detail = unwrapAgentDetail(settled[0] as object);
+          runs = extractRuns(settled[1] as object);
+        }
+      }
+
+      if (!detail) {
+        return;
+      }
+      this.applyDetail(detail);
+      this.applyLatestRunMeta(runs);
+
       const latestId = detail.latestRunId ?? this.activeRunId;
       const cachedLatest = cached?.detail?.latestRunId ?? '';
-      const cachedMsgs = cached?.messages ?? [];
-      const skipConv = prefetchHit && cachedMsgs.length > 0 && latestId.length > 0 && latestId === cachedLatest;
+      const skipConv = convFromPrefetch ||
+        cacheCoversConversation(cached, latestId) ||
+        (prefetchHit && cachedMsgs.length > 0 && latestId.length > 0 && latestId === cachedLatest);
       if (skipConv) {
-        messages = cachedMsgs;
-        convOk = true;
+        if (!convFromPrefetch) {
+          messages = cachedMsgs;
+          convOk = true;
+        }
         this.convError = '';
         SessionDiag.emit({
           tag: TAG,
           event: 'conv',
           agentId: agentId,
-          elapsedMs: 0,
-          extra: `ok=1 n=${messages.length} cache=1 skip=1 prefetch=1`
+          elapsedMs: convFromPrefetch ? Date.now() - convStarted : 0,
+          extra: `ok=1 n=${messages.length} cache=1 skip=1 prefetch=${convFromPrefetch ? 'inflight' : '1'}`
         });
       } else {
         try {
@@ -298,16 +430,15 @@ export class DetailVM {
         if (this.openGen !== gen) {
           return;
         }
-        const convMs = Date.now() - convStarted;
         SessionDiag.emit({
           tag: TAG,
           event: 'conv',
           agentId: agentId,
-          elapsedMs: convMs,
+          elapsedMs: Date.now() - convStarted,
           extra: `ok=${convOk ? 1 : 0} n=${messages.length} cache=${painted ? 1 : 0} prefetch=${prefetchHit ? 1 : 0}`
         });
       }
-      const nextKey = convFingerprint(messages);
+      const nextKey = convFingerprint(messages, latestId, lastMessageStamp(messages));
       const empty = this.source.totalCount() === 0;
       if (convOk && messages.length > 0 && (nextKey !== this.convKey || empty)) {
         const live = this.source.snapshot();
@@ -337,7 +468,7 @@ export class DetailVM {
         this.runStatus = keepStatus;
         this.activeThinkingKey = keepThinkKey;
       }
-      if (this.activeRunId.length > 0) {
+      if (this.activeRunId.length > 0 && this.isRunActive()) {
         const run = await client.getRun(agentId, this.activeRunId);
         this.applyRunSnapshot(run);
         if (this.isRunActive()) {
@@ -352,7 +483,11 @@ export class DetailVM {
         }
       }
 
-      this.loadArtifactsAndUsage();
+      if (cached?.extrasFetched !== true || this.isRunActive()) {
+        this.loadArtifactsAndUsage();
+      } else {
+        this.applyCachedExtras(cached);
+      }
       this.bumpInbox();
     } catch (e) {
       if (this.openGen !== gen) {
@@ -425,7 +560,7 @@ export class DetailVM {
         elapsedMs: Date.now() - started,
         extra: `n=${messages.length}`
       });
-      const nextKey = convFingerprint(messages);
+      const nextKey = convFingerprint(messages, this.activeRunId, lastMessageStamp(messages));
       if (messages.length > 0 && nextKey !== this.convKey) {
         const live = this.source.snapshot();
         this.buildConversation(messages);
@@ -458,13 +593,14 @@ export class DetailVM {
     this.releaseRuntime();
     DetailVM.activeInstance = this;
     this.agentId = localId;
+    this.viewing = true;
     AppStorage.setOrCreate('watchingAgentId', localId);
     this.errorMsg = '';
     this.deleted = false;
     this.needsPlanUpgrade = false;
     this.convKey = '';
     this.loading = false;
-    this.syncing = true;
+    this.syncing = false;
     this.runStatus = 'CREATING';
     this.streamNotice = '';
     this.createRetryable = false;
@@ -481,7 +617,8 @@ export class DetailVM {
         runId: 'pending',
         text: prompt,
         usageShort: formatModelSent(createModel),
-        sentTags: modelSentTags(createModel)
+        sentTags: modelSentTags(createModel),
+        localAt: new Date().toISOString()
       },
       {
         key: 'seed-think',
@@ -594,9 +731,11 @@ export class DetailVM {
 
   private releaseRuntime(): void {
     StreamCoordinator.getInstance().release();
+    AppStorage.setOrCreate('streamingAgentId', '');
     this.clearPoll();
     this.clearQueueTimer();
     this.clearNoticeTimers();
+    this.clearIdleTimers();
     this.eventIdFlush.flush();
     this.timelineFlush.flush();
     this.persistTimeline();
@@ -652,11 +791,35 @@ export class DetailVM {
     if (!this.stillSession(gen, agentId)) {
       return;
     }
-    this.artifacts = bundle.artifacts;
-    this.usageLabel = bundle.usageLabel;
-    this.usageRuns = bundle.usageRuns;
-    this.applyUsageToHeaders();
+    if (bundle.artifactsOk) {
+      this.artifacts = bundle.artifacts;
+    }
+    if (bundle.usageOk) {
+      this.usageLabel = bundle.usageLabel;
+      this.usageRuns = bundle.usageRuns;
+      this.applyUsageToHeaders();
+    }
+    if (bundle.artifactsOk || bundle.usageOk) {
+      AgentCache.getInstance().saveArtifacts(agentId, this.artifacts, this.usageLabel, this.usageRuns,
+        bundle.artifactsOk && bundle.usageOk);
+    }
     this.notify();
+  }
+
+  private applyCachedExtras(cached: CachedAgentPayload | undefined): void {
+    if (!cached) {
+      return;
+    }
+    if (cached.artifacts) {
+      this.artifacts = cached.artifacts;
+    }
+    if (cached.usageLabel !== undefined) {
+      this.usageLabel = cached.usageLabel;
+    }
+    if (cached.usageRuns) {
+      this.usageRuns = cached.usageRuns;
+      this.applyUsageToHeaders();
+    }
   }
 
   private applyUsageToHeaders(): void {
@@ -699,10 +862,12 @@ export class DetailVM {
 
   close(): void {
     this.openGen++;
+    this.viewing = false;
     if (DetailVM.activeInstance === this) {
       DetailVM.activeInstance = undefined;
       AppStorage.setOrCreate('watchingAgentId', '');
     }
+    AppStorage.setOrCreate('streamingAgentId', '');
     this.streamSessionHandle.release();
     StreamCoordinator.getInstance().release();
     this.clearPoll();
@@ -737,6 +902,7 @@ export class DetailVM {
     this.compareUrl = '';
     this.clearQueueTimer();
     this.clearNoticeTimers();
+    this.clearIdleTimers();
     ThemeStore.getInstance().setKeepScreenOn(false);
   }
 
@@ -876,9 +1042,11 @@ export class DetailVM {
       key: tempKey,
       kind: 'userPrompt',
       runId: 'pending',
-      text: images.length > 0 ? `${prompt}\n（${images.length} 张图）` : prompt,
+      text: prompt,
       usageShort: formatModelSent(followModel),
-      sentTags: modelSentTags(followModel)
+      sentTags: modelSentTags(followModel),
+      localAt: new Date().toISOString(),
+      imageUrls: imageUrlsFromPrompt(images)
     });
     this.source.append({
       key: `thinking-${tempKey}`,
@@ -956,12 +1124,12 @@ export class DetailVM {
       const thinkIdx = this.source.findIndexByKey(`thinking-${tempKey}`);
       if (thinkIdx >= 0) {
         const think = this.source.getData(thinkIdx);
-        think.key = `thinking-${run.id}`;
+        think.key = waitingKey(run.id);
         think.runId = run.id;
         think.streaming = true;
         think.collapsed = false;
+        think.text = '';
         this.source.updateAt(thinkIdx, think);
-        this.activeThinkingKey = think.key;
       }
       this.source.append({
         key: `run-${run.id}`,
@@ -983,37 +1151,44 @@ export class DetailVM {
       if (!this.stillSession(gen, agentId)) {
         return false;
       }
-      const idx = this.source.findIndexByKey(tempKey);
-      if (idx >= 0) {
-        const item = this.source.getData(idx);
-        item.failed = true;
-        this.source.updateAt(idx, item);
-      }
       const thinkIdx = this.source.findIndexByKey(`thinking-${tempKey}`);
       if (thinkIdx >= 0) {
         this.source.removeAt(thinkIdx);
       }
-      this.lastFailedPrompt = prompt;
-      this.lastFailedImages = images;
+      const apiCode = e instanceof ApiException ? e.apiCode : '';
+      const apiN = e instanceof ApiException ? e.code : -1;
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'follow',
+        agentId: this.agentId,
+        elapsedMs: Date.now() - this.followStartedAt,
+        extra: `fail code=${apiN} api=${apiCode}`
+      });
       if (e instanceof ApiException && (e.code === 409 || e.apiCode === 'agent_busy')) {
+        this.removeTimelineKey(tempKey);
+        this.lastFailedPrompt = '';
+        this.lastFailedImages = [];
         this.queuedFollowUp = prompt;
         this.queuedImages = images;
         this.persistQueue();
-        this.streamNotice = 'Agent 忙碌，稍后自动发送';
+        this.streamNotice = '';
         this.scheduleFlushQueue(800 * Math.max(1, this.queueRetries + 1));
         Haptics.warn();
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'follow',
-          agentId: this.agentId,
-          elapsedMs: Date.now() - this.followStartedAt,
-          extra: 'busy'
-        });
         return true;
       }
-      if (e instanceof ApiException && (e.apiCode === 'network' || e.code === 0)) {
+      const unknown = e instanceof ApiException && (e.apiCode === 'network' || e.code === 0);
+      if (unknown) {
         this.errorMsg = '提交结果未知，请先确认是否已发出，不要直接重发';
-      } else if (e instanceof ApiException) {
+        if (!NetworkMonitor.getInstance().online) {
+          this.errorMsg = '网络断开，恢复后可重发';
+        }
+        Haptics.fail();
+        return true;
+      }
+      this.removeTimelineKey(tempKey);
+      this.lastFailedPrompt = '';
+      this.lastFailedImages = [];
+      if (e instanceof ApiException) {
         this.errorMsg = e.message;
       } else {
         this.errorMsg = '追问失败';
@@ -1021,13 +1196,6 @@ export class DetailVM {
       if (!NetworkMonitor.getInstance().online) {
         this.errorMsg = '网络断开，恢复后可重发';
       }
-      SessionDiag.emit({
-        tag: TAG,
-        event: 'follow',
-        agentId: this.agentId,
-        elapsedMs: Date.now() - this.followStartedAt,
-        extra: 'fail'
-      });
       Haptics.fail();
       return false;
     } finally {
@@ -1160,7 +1328,7 @@ export class DetailVM {
     const snippet = clipNotice(raw.length > 0 ? raw : this.resultText, 72);
     AppStorage.setOrCreate('pendingNotice',
       snippet.length > 0 ? `${this.name} ${zh} · ${snippet}` : `${this.name} ${zh}`);
-    if (DetailVM.activeInstance !== this) {
+    if (DetailVM.activeInstance !== this || !this.viewing) {
       UnreadStore.getInstance().markFinished(this.agentId, this.name, zh, snippet, this.repoLabel)
         .catch(() => {
         });
@@ -1169,6 +1337,7 @@ export class DetailVM {
 
   private afterRunSettled(): void {
     ThemeStore.getInstance().setKeepScreenOn(false);
+    AppStorage.setOrCreate('streamingAgentId', '');
     LiveIsland.finish(runStatusZh(this.runStatus), this.agentId).catch(() => {
     });
     if (this.streamRunId === this.activeRunId) {
@@ -1223,8 +1392,9 @@ export class DetailVM {
     try {
       await CursorApiClient.getInstance().cancelRun(this.agentId, this.activeRunId);
       this.runStatus = 'CANCELLED';
-      this.streamNotice = '已取消';
+      this.streamNotice = '';
       this.armCancelNoticeClear();
+      this.dropWaitingItems(this.activeRunId);
       this.finishStreamingItems();
       this.settleLive(this.activeRunId, 'CANCELLED');
       StreamCoordinator.getInstance().release();
@@ -1259,6 +1429,8 @@ export class DetailVM {
   }
 
   private settleLive(runId: string, status: string): void {
+    this.dropWaitingItems(runId);
+    this.clearIdleTimers();
     if (status.length > 0) {
       this.runStatus = status;
     }
@@ -1301,11 +1473,15 @@ export class DetailVM {
   private freezeLiveOverlay(): void {
     const snap = this.source.snapshot();
     for (let i = 0; i < snap.length; i++) {
-      if (snap[i].streaming === true) {
-        this.source.mutateAt(i, (item: TimelineItem) => {
-          item.streaming = false;
-        });
+      if (snap[i].streaming !== true) {
+        continue;
       }
+      if (isLiveWaitItem(snap[i])) {
+        continue;
+      }
+      this.source.mutateAt(i, (item: TimelineItem) => {
+        item.streaming = false;
+      });
     }
   }
 
@@ -1314,11 +1490,21 @@ export class DetailVM {
     if (!this.isRunActive()) {
       return;
     }
+    Log.info(TAG, `resume stream ${this.activeRunId} status=${this.runStatus}`);
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'resume',
+      agentId: this.agentId,
+      runId: this.activeRunId,
+      extra: `status=${this.runStatus}`
+    });
+    this.reviveWaitingThink();
     if (StreamCoordinator.getInstance().isActive() &&
       StreamCoordinator.getInstance().currentRunId() === this.activeRunId) {
+      this.clearPoll();
+      this.armPoll(this.activeRunId, this.openGen, this.agentId);
       return;
     }
-    Log.info(TAG, `resume stream ${this.activeRunId}`);
     await this.startStream(this.activeRunId, true);
   }
 
@@ -1330,6 +1516,7 @@ export class DetailVM {
     } else {
       this.errorMsg = InboxVM.getInstance().errorMsg.length > 0 ?
         InboxVM.getInstance().errorMsg : '归档失败';
+      Haptics.fail();
       this.notify();
     }
     return ok;
@@ -1384,7 +1571,10 @@ export class DetailVM {
       this.streamNotice = '';
     }
     this.armConnectNotice();
-    ThemeStore.getInstance().setKeepScreenOn(true);
+    if (this.viewing) {
+      ThemeStore.getInstance().setKeepScreenOn(true);
+    }
+    AppStorage.setOrCreate('streamingAgentId', agentId);
     LiveIsland.start(this.agentId, this.name, runStatusZh(this.runStatus.length > 0 ? this.runStatus : 'RUNNING'))
       .catch(() => {
       });
@@ -1413,7 +1603,7 @@ export class DetailVM {
 
   private armPoll(runId: string, gen: number, agentId: string): void {
     this.clearPoll();
-    const pollMs = this.runStatus === 'CREATING' ? 5000 : 8000;
+    const pollMs = 3000;
     const tick = async () => {
       if (!this.stillSession(gen, agentId, runId)) {
         return;
@@ -1427,18 +1617,29 @@ export class DetailVM {
         if (!this.stillSession(gen, agentId, runId)) {
           return;
         }
+        Log.debug(TAG, `poll ${runId} status=${run.status}`);
+        SessionDiag.emit({
+          tag: TAG,
+          event: 'poll',
+          agentId: agentId,
+          runId: runId,
+          extra: `status=${run.status}`
+        });
         this.applyRunSnapshot(run);
         if (isTerminal(run.status)) {
+          this.dropWaitingItems(run.id);
           this.finishStreamingItems();
           this.ensureOutcomeItem(run);
           StreamCoordinator.getInstance().release();
           this.streamNotice = '';
           this.clearPoll();
+          this.clearIdleTimers();
           Haptics.success();
           this.announceFinished(run.status, run.result ?? this.resultText);
           this.settleLive(run.id, run.status);
           return;
         }
+        this.reviveWaitingThink();
       } catch (e) {
         Log.warn(TAG, `poll failed: ${JSON.stringify(e)}`);
       }
@@ -1450,7 +1651,7 @@ export class DetailVM {
     };
     this.pollTimer = setTimeout(() => {
       tick();
-    }, pollMs) as number;
+    }, 400) as number;
   }
 
   private onStreamStatus(kind: string, detail: string): void {
@@ -1468,6 +1669,27 @@ export class DetailVM {
       this.freezeLiveOverlay();
       this.reviveWaitingThink();
       this.streamNotice = '连接已断开，正在重连…';
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'sse_reconnect',
+        agentId: this.agentId,
+        runId: this.activeRunId,
+        extra: detail
+      });
+      if (this.viewing) {
+        Haptics.warn();
+      }
+    } else if (kind === 'stale') {
+      this.freezeLiveOverlay();
+      this.reviveWaitingThink();
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'sse_stale',
+        agentId: this.agentId,
+        runId: this.activeRunId,
+        extra: detail
+      });
+      Log.info(TAG, `sse stale ${detail}`);
     } else if (kind === 'expired') {
       this.pendingConnectNotice = false;
       this.clearConnectNoticeTimer();
@@ -1510,9 +1732,30 @@ export class DetailVM {
     const agentId = this.agentId;
     const runId = this.activeRunId;
     try {
-      const run = await CursorApiClient.getInstance().getRun(agentId, runId);
+      const client = CursorApiClient.getInstance();
+      const convP = client.getConversation(agentId).catch((_e: Object) => {
+        const empty: ConversationResponse = {
+          messages: []
+        };
+        return empty;
+      });
+      const run = await client.getRun(agentId, runId);
       if (!this.stillSession(gen, agentId)) {
         return;
+      }
+      const conv = await convP;
+      if (!this.stillSession(gen, agentId)) {
+        return;
+      }
+      const convMsgs = conv.messages ?? [];
+      if (convMsgs.length > 0) {
+        const nextKey = convFingerprint(convMsgs, runId, lastMessageStamp(convMsgs));
+        if (nextKey !== this.convKey) {
+          const live = this.source.snapshot();
+          this.buildConversation(convMsgs);
+          this.applyMergedActivity(live);
+          this.convKey = nextKey;
+        }
       }
       this.applyRunSnapshot(run);
       this.streamNotice = '';
@@ -1554,9 +1797,17 @@ export class DetailVM {
     if (kind === 'step-started' || kind === 'step-completed') {
       const sid = Number(st['stepId'] ?? 0);
       const named = `${st['title'] ?? st['name'] ?? st['text'] ?? ''}`.trim();
-      const label = named.length > 0 ? named : (sid > 0 ? `步骤 ${sid}` : '步骤');
-      const key = sid > 0 ? `step-${this.activeRunId}-${sid}` : `step-${this.activeRunId}-${label}`;
       const done = kind === 'step-completed';
+      const label = meaningfulStepTitle(named);
+      if (label.length === 0) {
+        Log.debug(TAG, `step ${kind} sid=${sid} opaque`);
+        if (!done) {
+          this.reviveWaitingThink();
+        }
+        this.notify();
+        return;
+      }
+      const key = sid > 0 ? `step-${this.activeRunId}-${sid}` : `step-${this.activeRunId}-${label}`;
       const idx = this.source.findIndexByKey(key);
       if (idx >= 0) {
         this.source.mutateAt(idx, (item: TimelineItem) => {
@@ -1603,6 +1854,7 @@ export class DetailVM {
       return;
     }
     this.streamFrames += 1;
+    this.noteStreamActivity();
     if (!this.followFirstFrame && this.followStartedAt > 0) {
       this.followFirstFrame = true;
       SessionDiag.emit({
@@ -1752,6 +2004,7 @@ export class DetailVM {
   }
 
   private appendAssistant(delta: string): void {
+    this.dropWaitingItems(this.activeRunId);
     if (this.activeAssistantKey.length > 0) {
       const idx = this.source.findIndexByKey(this.activeAssistantKey);
       if (idx >= 0) {
@@ -1897,6 +2150,7 @@ export class DetailVM {
   }
 
   private startAssistant(text: string): void {
+    this.dropWaitingItems(this.activeRunId);
     this.collapseActivity(this.activeRunId);
     const key = `assistant-${this.activeRunId}-${Date.now()}`;
     this.activeAssistantKey = key;
@@ -1993,6 +2247,8 @@ export class DetailVM {
   }
 
   private finishStreamingItems(): void {
+    this.dropWaitingItems(this.activeRunId);
+    this.clearIdleTimers();
     if (!this.hasAssistantForRun(this.activeRunId) && this.activeProgressKey.length > 0 &&
       !this.hasActivityKeepers(this.activeRunId)) {
       const idx = this.source.findIndexByKey(this.activeProgressKey);
@@ -2094,9 +2350,6 @@ export class DetailVM {
     if (this.agentId.length === 0 || this.agentId.indexOf('local-') === 0) {
       return;
     }
-    if (!force && this.isRunActive()) {
-      return;
-    }
     const snap = this.source.snapshot();
     const toolRuns: Record<string, boolean> = {};
     for (let i = 0; i < snap.length; i++) {
@@ -2109,6 +2362,9 @@ export class DetailVM {
       const it = snap[i];
       const k = it.kind;
       if (k === 'streamNotice') {
+        continue;
+      }
+      if (isLiveWaitItem(it)) {
         continue;
       }
       if (k === 'thinking' || k === 'progress' || k === 'step') {
@@ -2132,7 +2388,9 @@ export class DetailVM {
           streaming: it.streaming === true,
           stepCount: it.stepCount,
           usageShort: it.usageShort,
-          sentTags: it.sentTags
+          sentTags: it.sentTags,
+          localAt: it.localAt,
+          imageUrls: it.imageUrls
         });
       }
     }
@@ -2151,7 +2409,7 @@ export class DetailVM {
         }
       }
       AgentCache.getInstance().saveTimelineMeta(this.agentId, summary, this.pendingEventId,
-        this.activeRunId);
+        this.activeRunId, this.runStatus);
     }
   }
 
@@ -2169,39 +2427,29 @@ export class DetailVM {
 
   private reviveWaitingThink(): void {
     if (!this.isRunActive()) {
+      this.dropWaitingItems(this.activeRunId);
       return;
     }
     const runId = this.activeRunId;
-    if (runId.length === 0) {
+    if (runId.length === 0 || this.assistantIsStreaming()) {
+      this.dropWaitingItems(runId);
       return;
     }
-    if (this.hasAssistantForRun(runId)) {
-      return;
-    }
-    const snap = this.source.snapshot();
-    for (let i = snap.length - 1; i >= 0; i--) {
-      const it = snap[i];
-      if (it.kind !== 'thinking') {
-        continue;
-      }
-      if (it.runId !== runId && it.runId !== 'pending') {
-        continue;
-      }
-      if ((it.text ?? '').trim().length > 0) {
-        return;
-      }
-      this.source.mutateAt(i, (item: TimelineItem) => {
+    const key = waitingKey(runId);
+    const idx = this.source.findIndexByKey(key);
+    if (idx >= 0) {
+      this.source.mutateAt(idx, (item: TimelineItem) => {
         item.streaming = true;
         item.collapsed = false;
-        if (item.runId === 'pending') {
-          item.runId = runId;
-        }
+        item.runId = runId;
+        item.text = '';
       });
-      this.activeThinkingKey = this.source.getData(i).key;
-      return;
-    }
-    const key = `thinking-${runId}`;
-    if (this.source.findIndexByKey(key) >= 0) {
+      const last = this.source.totalCount() - 1;
+      if (idx !== last && last >= 0) {
+        const item = this.source.getData(idx);
+        this.source.removeAt(idx);
+        this.source.append(item);
+      }
       return;
     }
     this.source.append({
@@ -2212,7 +2460,32 @@ export class DetailVM {
       collapsed: false,
       streaming: true
     });
-    this.activeThinkingKey = key;
+  }
+
+  private dropWaitingItems(runId: string): void {
+    if (runId.length === 0) {
+      return;
+    }
+    const key = waitingKey(runId);
+    const idx = this.source.findIndexByKey(key);
+    if (idx >= 0) {
+      this.source.removeAt(idx);
+    }
+    const snap = this.source.snapshot();
+    for (let i = snap.length - 1; i >= 0; i--) {
+      if (isLiveWaitItem(snap[i]) && (snap[i].runId === runId || snap[i].runId === 'pending')) {
+        if (snap[i].key !== key) {
+          this.source.removeAt(i);
+        }
+      }
+    }
+  }
+
+  private removeTimelineKey(key: string): void {
+    const idx = this.source.findIndexByKey(key);
+    if (idx >= 0) {
+      this.source.removeAt(idx);
+    }
   }
 
   private buildConversation(messages: ConversationMessage[]): void {
@@ -2259,7 +2532,10 @@ export class DetailVM {
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       const text = (m.text ?? '').trim();
-      if (text.length === 0) {
+      const allImgs = imageUrlsFromMessage(m);
+      const extraImgs = extraImageUrls(m);
+      const at = pickMessageTime(m);
+      if (text.length === 0 && allImgs.length === 0) {
         continue;
       }
       const mid = m.id && m.id.length > 0 ? m.id : `i${i}`;
@@ -2269,7 +2545,9 @@ export class DetailVM {
           key: `user-${mid}`,
           kind: 'userPrompt',
           runId: 'history',
-          text: text
+          text: text,
+          localAt: at.length > 0 ? at : undefined,
+          imageUrls: allImgs.length > 0 ? allImgs : undefined
         });
       } else if (m.type === 'assistant_message') {
         const last = i === messages.length - 1;
@@ -2291,7 +2569,9 @@ export class DetailVM {
               key: `asst-${mid}-${assistantIdx}`,
               kind: 'assistant',
               runId: 'history',
-              text: text
+              text: text,
+              localAt: at.length > 0 ? at : undefined,
+              imageUrls: extraImgs.length > 0 ? extraImgs : undefined
             });
             assistantIdx++;
           }
@@ -2301,7 +2581,9 @@ export class DetailVM {
             key: `asst-${mid}-${assistantIdx}`,
             kind: 'assistant',
             runId: 'history',
-            text: text
+            text: text,
+            localAt: at.length > 0 ? at : undefined,
+            imageUrls: extraImgs.length > 0 ? extraImgs : undefined
           });
           assistantIdx++;
         }
@@ -2523,6 +2805,65 @@ export class DetailVM {
       this.cancelNoticeTimer = -1;
     }
     this.pendingConnectNotice = false;
+  }
+
+  private clearIdleTimers(): void {
+    if (this.idleWaitTimer >= 0) {
+      clearTimeout(this.idleWaitTimer);
+      this.idleWaitTimer = -1;
+    }
+    if (this.quietConvTimer >= 0) {
+      clearTimeout(this.quietConvTimer);
+      this.quietConvTimer = -1;
+    }
+  }
+
+  private assistantIsStreaming(): boolean {
+    if (this.activeAssistantKey.length === 0) {
+      return false;
+    }
+    const idx = this.source.findIndexByKey(this.activeAssistantKey);
+    if (idx < 0) {
+      return false;
+    }
+    return this.source.getData(idx).streaming === true;
+  }
+
+  private noteStreamActivity(): void {
+    this.clearIdleTimers();
+    if (!this.isRunActive()) {
+      return;
+    }
+    this.idleWaitTimer = setTimeout(() => {
+      this.idleWaitTimer = -1;
+      if (!this.isRunActive() || this.assistantIsStreaming()) {
+        return;
+      }
+      this.reviveWaitingThink();
+      this.notify();
+    }, 1600) as number;
+    this.quietConvTimer = setTimeout(() => {
+      this.quietConvTimer = -1;
+      if (!this.isRunActive()) {
+        return;
+      }
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'waiting_gap',
+        agentId: this.agentId,
+        runId: this.activeRunId,
+        extra: `frames=${this.streamFrames}`
+      });
+      Log.debug(TAG, `waiting_gap run=${this.activeRunId} frames=${this.streamFrames}`);
+      this.reviveWaitingThink();
+      this.notify();
+      const now = Date.now();
+      if (this.streamFrames === 0 && now - this.lastQuietConvAt > 20000) {
+        this.lastQuietConvAt = now;
+        this.retryConversation().catch(() => {
+        });
+      }
+    }, 12000) as number;
   }
 
   /** Fast connects stay quiet; slow ones show 连接中. */

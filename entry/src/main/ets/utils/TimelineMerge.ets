@@ -6,7 +6,8 @@ import { TimelineItem } from '../models/Timeline';
  * { id, type: user_message|assistant_message, text }.
  * Message ids are not a stable fingerprint (Cursor has regenerated them).
  */
-export function convFingerprint(messages: ConversationMessage[]): string {
+export function convFingerprint(messages: ConversationMessage[], lastRunId: string = '',
+  updatedAt: string = ''): string {
   if (!messages || messages.length === 0) {
     return '';
   }
@@ -16,7 +17,14 @@ export function convFingerprint(messages: ConversationMessage[]): string {
   const lastText = last.text ?? '';
   const firstBit = firstText.length > 24 ? firstText.substring(0, 24) : firstText;
   const lastBit = lastText.length > 24 ? lastText.substring(0, 24) : lastText;
-  return `${messages.length}|${first.type}|${firstText.length}|${firstBit}|${last.type}|${lastText.length}|${lastBit}`;
+  return `${messages.length}|${first.type}|${firstText.length}|${firstBit}|${last.type}|${lastText.length}|${lastBit}|${lastRunId}|${updatedAt}`;
+}
+
+export function lastMessageStamp(messages: ConversationMessage[]): string {
+  if (!messages || messages.length === 0) {
+    return '';
+  }
+  return messages[messages.length - 1].createdAt ?? '';
 }
 
 function isActivity(kind: string): boolean {
@@ -48,7 +56,9 @@ function copyItem(src: TimelineItem): TimelineItem {
     streaming: src.streaming === true,
     stepCount: src.stepCount,
     usageShort: src.usageShort,
-    sentTags: src.sentTags
+    sentTags: src.sentTags,
+    localAt: src.localAt,
+    imageUrls: src.imageUrls
   };
 }
 
@@ -345,7 +355,9 @@ export function restoreUserSentTags(conv: TimelineItem[], cached: TimelineItem[]
       streaming: it.streaming,
       stepCount: it.stepCount,
       usageShort: it.usageShort,
-      sentTags: it.sentTags
+      sentTags: it.sentTags,
+      localAt: it.localAt,
+      imageUrls: it.imageUrls
     };
     if (take.sentTags && take.sentTags.length > 0) {
       copy.sentTags = take.sentTags;

@@ -1,5 +1,5 @@
 export interface MdBlock {
-  kind: string; // text | code | h1 | h2 | h3 | li | ol | quote | hr | table
+  kind: string; // text | code | h1 | h2 | h3 | li | ol | quote | hr | table | image
   text: string;
   url: string;
   lang: string;
@@ -138,6 +138,14 @@ function pushStructured(text: string, out: MdBlock[]): void {
     } else if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
       flushPara();
       out.push(blockOf('hr', '', '', '', 0));
+    } else if (isMdImageLine(trimmed)) {
+      flushPara();
+      olCounter = 0;
+      const mid = trimmed.indexOf('](');
+      const end = trimmed.lastIndexOf(')');
+      const alt = trimmed.substring(2, mid);
+      const url = trimmed.substring(mid + 2, end).trim();
+      out.push(blockOf('image', alt, url, '', 0));
     } else if (trimmed.length === 0) {
       flushPara();
     } else {
@@ -150,6 +158,15 @@ function pushStructured(text: string, out: MdBlock[]): void {
 
 function isBullet(trimmed: string): boolean {
   return trimmed.startsWith('- ') || trimmed.startsWith('* ');
+}
+
+function isMdImageLine(trimmed: string): boolean {
+  if (!trimmed.startsWith('![')) {
+    return false;
+  }
+  const mid = trimmed.indexOf('](');
+  const end = trimmed.lastIndexOf(')');
+  return mid > 1 && end > mid + 2;
 }
 
 function isTaskLine(trimmed: string): boolean {

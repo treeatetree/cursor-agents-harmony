@@ -275,10 +275,23 @@ export default class EntryAbility extends UIAbility {
       detail.resumeIfNeeded().catch(() => {
       });
     }
+    UnreadStore.getInstance().load().then(() => {
+      UnreadStore.getInstance().syncBadge();
+    }).catch(() => {
+      UnreadStore.getInstance().syncBadge();
+    });
     if (ApiKeyStore.getInstance().isUnlocked()) {
       InboxVM.getInstance().startWatch();
-      InboxVM.getInstance().refresh(true).catch(() => {
-      });
+      const delay = (detail && detail.isRunActive()) ? 1500 : 0;
+      if (delay > 0) {
+        setTimeout(() => {
+          InboxVM.getInstance().requestRefresh(true, 8000).catch(() => {
+          });
+        }, delay);
+      } else {
+        InboxVM.getInstance().requestRefresh(true, 8000).catch(() => {
+        });
+      }
     }
   }
 
@@ -297,7 +310,7 @@ export default class EntryAbility extends UIAbility {
       detail.clearExpandedState();
     }
     dropAllPreviewMaps();
-    AgentPrefetch.getInstance().clear();
+    AgentPrefetch.getInstance().trimIdle();
     AgentCache.getInstance().trimMemory();
   }
 }

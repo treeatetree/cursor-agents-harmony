@@ -18,7 +18,7 @@ export class Tokens {
   static chromePad: number = 12;
   static cardPad: number = 12;
   static sec: number = 12;
-  /** Unified inbox card height (title up to 2 + preview up to 2 + footer). */
+  /** Unified inbox card height (title 1 + preview up to 2 + footer). */
   static cardH: number = 116;
   /** Split master list row. */
   static listCardH: number = 68;
@@ -78,6 +78,8 @@ export class Tokens {
   static readonly safeTopFallback: number = 48;
   static readonly shadowRadius: number = 0;
   static readonly shadowY: number = 0;
+  /** Harmony toast slot — pills float here, not in the page flow. */
+  static readonly toastBottom: number = 80;
 
   static applyReadPref(type: string, density: string): void {
     let k = 1.0;

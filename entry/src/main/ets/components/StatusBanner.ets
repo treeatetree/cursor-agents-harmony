@@ -1,9 +1,6 @@
-import { Tokens } from '../theme/Tokens';
-import { chromeTransition } from '../utils/Motion';
-import { HuIconButton } from './HuIconButton';
-import { HuTextButton } from './HuTextButton';
+import { StatusPill } from './StatusPill';
 
-/** Inbox / detail shared strip: info, warn, danger + optional action. */
+/** Back-compat strip: same props as before, now a centered StatusPill. */
 @Component
 export struct StatusBanner {
   @Prop text: string = '';
@@ -16,66 +13,22 @@ export struct StatusBanner {
   onDismiss: () => void = () => {
   };
 
-  private ink(): Resource {
-    if (this.tone === 'danger') {
-      return $r('app.color.err');
-    }
-    if (this.tone === 'warn') {
-      return $r('app.color.warn');
-    }
-    return $r('app.color.text_primary');
-  }
-
-  private wash(): Resource {
-    if (this.tone === 'danger') {
-      return $r('app.color.banner_error_bg');
-    }
-    if (this.tone === 'warn') {
-      return $r('app.color.banner_offline_bg');
-    }
-    return $r('app.color.bg2');
-  }
-
   build() {
     if (this.text.length === 0) {
-      Column().width('100%').height(0)
+      Column().width(0).height(0)
     } else {
-      Row({ space: 8 }) {
-        Text(this.text)
-          .fontSize(Tokens.typeCaption)
-          .fontFamily(Tokens.fontUi)
-          .fontColor(this.ink())
-          .lineHeight(Tokens.lineCaption)
-          .maxLines(3)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-        if (this.action.length > 0) {
-          HuTextButton({
-            label: this.action,
-            color: this.tone === 'danger' ? $r('app.color.err') : $r('app.color.accent'),
-            external: this.external,
-            onTap: () => {
-              this.onAction();
-            }
-          })
+      StatusPill({
+        text: this.text,
+        tone: this.tone,
+        action: this.action,
+        dismissible: this.dismissible,
+        onAction: () => {
+          this.onAction();
+        },
+        onDismiss: () => {
+          this.onDismiss();
         }
-        if (this.dismissible) {
-          HuIconButton({
-            name: 'close',
-            label: '关闭',
-            iconColor: this.ink(),
-            onTap: () => {
-              this.onDismiss();
-            }
-          })
-        }
-      }
-      .width('100%')
-      .constraintSize({ minHeight: Tokens.touchMin })
-      .padding({ left: Tokens.pagePad, right: Tokens.space2, top: 8, bottom: 8 })
-      .backgroundColor(this.wash())
-      .alignItems(VerticalAlign.Center)
-      .transition(chromeTransition())
+      })
     }
   }
 }

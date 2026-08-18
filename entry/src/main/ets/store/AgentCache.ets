@@ -1,16 +1,16 @@
 import { common } from '@kit.AbilityKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
-import { AgentDetail, AgentSummary, ConversationMessage, RepoInfo, ModelInfo, Run } from '../models/Api';
+import { AgentDetail, AgentSummary, ArtifactInfo, ConversationMessage, RepoInfo, ModelInfo, Run,
+  RunUsage } from '../models/Api';
 import { TimelineItem } from '../models/Timeline';
 import { Log } from '../utils/Log';
 import { CacheCrypto } from './CacheCrypto';
 import { capMessages, capTimeline, clipText, CACHE_SUMMARY_MAX } from '../utils/CacheLimit';
 
 const TAG = 'AgentCache';
-const LRU_MAX = 20;
-const DISK_SOFT_MAX = 80;
-const DISK_HARD_MAX = 120;
+const LRU_MAX = 80;
+const DISK_HARD_MAX = 2000;
 const STALE_24H_MS = 24 * 60 * 60 * 1000;
 
 interface InboxFile {
@@ -41,6 +41,10 @@ export interface CachedAgentPayload {
   timelineSummary?: string;
   eventIdWatermark?: string;
   timelineRunId?: string;
+  artifacts?: ArtifactInfo[];
+  usageLabel?: string;
+  usageRuns?: RunUsage[];
+  extrasFetched?: boolean;
 }
 
 interface SummariesFile {
@@ -243,9 +247,21 @@ export class AgentCache {
     return data;
   }
 
-  /** Memory-only preview — never hits disk (Inbox cards). */
+  /** Memory-only preview — never hits agent_*.json (Inbox cards). */
   peekMemSummary(agentId: string): string {
-    return this.peekSummary(agentId);
+    if (!agentId || agentId.length === 0) {
+      return '';
+    }
+    const hit = this.memGet(agentId);
+    if (hit && hit.timelineSummary && hit.timelineSummary.length > 0) {
+      return hit.timelineSummary;
+    }
+    this.ensureSummaries();
+    return this.summaries[agentId] ?? '';
+  }
+
+  hydrateSummaries(): void {
+    this.ensureSummaries();
   }
 
   peekSummary(agentId: string): string {
@@ -306,6 +322,7 @@ export class AgentCache {
     if (prev?.timelineRunId && prev.timelineRunId.length > 0) {
       payload.timelineRunId = prev.timelineRunId;
     }
+    copyExtras(prev, payload);
     if (timelineSummary !== undefined) {
       payload.timelineSummary = clipText(timelineSummary, CACHE_SUMMARY_MAX);
     } else if (prev?.timelineSummary !== undefined) {
@@ -349,12 +366,14 @@ export class AgentCache {
     if (prev?.timelineRunId && prev.timelineRunId.length > 0) {
       payload.timelineRunId = prev.timelineRunId;
     }
+    copyExtras(prev, payload);
     this.memPut(agentId, payload);
     this.writeJson(this.agentFileName(agentId), payload);
     this.touchLru(agentId);
   }
 
-  saveTimelineMeta(agentId: string, summary: string, eventId: string, runId: string): void {
+  saveTimelineMeta(agentId: string, summary: string, eventId: string, runId: string,
+    runStatus: string = ''): void {
     if (!agentId || agentId.length === 0) {
       return;
     }
@@ -373,6 +392,34 @@ export class AgentCache {
     }
     if (runId.length > 0) {
       prev.timelineRunId = runId;
+    }
+    if (runStatus.length > 0 && prev.detail) {
+      prev.detail.latestRunStatus = runStatus;
+      if (runId.length > 0) {
+        prev.detail.latestRunId = runId;
+      }
+      if (runStatus !== 'RUNNING' && runStatus !== 'CREATING') {
+        prev.fetchedAt = Date.now();
+      }
+    }
+    this.memPut(agentId, prev);
+    this.writeJson(this.agentFileName(agentId), prev);
+  }
+
+  saveArtifacts(agentId: string, artifacts: ArtifactInfo[], usageLabel: string,
+    usageRuns: RunUsage[], fetched: boolean = true): void {
+    if (!agentId || agentId.length === 0) {
+      return;
+    }
+    const prev = this.loadAgent(agentId);
+    if (!prev) {
+      return;
+    }
+    prev.artifacts = artifacts;
+    prev.usageLabel = usageLabel;
+    prev.usageRuns = usageRuns;
+    if (fetched) {
+      prev.extrasFetched = true;
     }
     this.memPut(agentId, prev);
     this.writeJson(this.agentFileName(agentId), prev);
@@ -477,6 +524,9 @@ export class AgentCache {
     let keepId = '';
     try {
       keepId = `${AppStorage.get<string>('watchingAgentId') ?? ''}`;
+      if (keepId.length === 0) {
+        keepId = `${AppStorage.get<string>('streamingAgentId') ?? ''}`;
+      }
     } catch (_e) {
       keepId = '';
     }
@@ -520,25 +570,16 @@ export class AgentCache {
       }
     }
     this.writeJson('index.json', { schema: 1, order: next } as CacheIndex);
-    this.pruneDiskSoft(next);
+    this.pruneDisk(next);
   }
 
-  private pruneDiskSoft(order: string[]): void {
-    if (order.length <= DISK_SOFT_MAX) {
+  private pruneDisk(order: string[]): void {
+    if (order.length <= DISK_HARD_MAX) {
       return;
     }
     const drop: string[] = [];
-    for (let i = order.length - 1; i >= 0 && drop.length < order.length - DISK_SOFT_MAX; i--) {
-      const id = order[i];
-      const data = this.readJson<CachedAgentPayload>(this.agentFileName(id));
-      const hasTimeline = data?.timeline && data.timeline.length > 0;
-      if (!hasTimeline || order.length > DISK_HARD_MAX) {
-        drop.push(id);
-      } else if (data) {
-        data.timeline = undefined;
-        data.messages = undefined;
-        this.writeJson(this.agentFileName(id), data);
-      }
+    for (let i = order.length - 1; i >= 0 && drop.length < order.length - DISK_HARD_MAX; i--) {
+      drop.push(order[i]);
     }
     if (drop.length === 0) {
       return;
@@ -685,5 +726,23 @@ export class AgentCache {
     } catch (_e) {
       // ignore
     }
+  }
+}
+
+function copyExtras(prev: CachedAgentPayload | undefined, payload: CachedAgentPayload): void {
+  if (!prev) {
+    return;
+  }
+  if (prev.artifacts) {
+    payload.artifacts = prev.artifacts;
+  }
+  if (prev.usageLabel !== undefined) {
+    payload.usageLabel = prev.usageLabel;
+  }
+  if (prev.usageRuns) {
+    payload.usageRuns = prev.usageRuns;
+  }
+  if (prev.extrasFetched === true) {
+    payload.extrasFetched = true;
   }
 }

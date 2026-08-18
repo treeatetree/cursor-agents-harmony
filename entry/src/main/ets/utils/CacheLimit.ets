@@ -36,7 +36,9 @@ export function capTimeline(items: TimelineItem[]): TimelineItem[] {
         streaming: it.streaming,
         stepCount: it.stepCount,
         usageShort: it.usageShort,
-        sentTags: it.sentTags
+        sentTags: it.sentTags,
+        localAt: it.localAt,
+        imageUrls: it.imageUrls
       });
     } else {
       out.push(it);
@@ -56,7 +58,9 @@ export function capMessages(items: ConversationMessage[]): ConversationMessage[]
     out.push({
       id: m.id,
       type: m.type,
-      text: clipText(m.text)
+      text: clipText(m.text),
+      createdAt: m.createdAt,
+      images: m.images
     });
   }
   return out;

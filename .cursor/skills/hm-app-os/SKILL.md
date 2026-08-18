@@ -22,6 +22,7 @@ description: >-
 - 设计大改：`designs/` HTML → 用户点头 → ArkTS。预览 `python3 -m http.server 4311 --directory designs`。
 - 坑：单节点一个 `bindSheet`；`@Builder` 后不链式 `.layoutWeight`。
 - 真机命令、hdc 路径：`dev-os` 的 `environment.md` + `.cursor/HANDOFF-REVIEW.md`。
+- 真机走查 / Hypium：`.cursor/skills/hm-device-qa/SKILL.md`，`./scripts/device-qa.sh` + `./scripts/test.sh`（`onDeviceTest`，不要 hvigor `test`）。
 - 默认不 commit。不要改 `.cursor/plans/`。
 
 详细审查顺序和刚回滚项：`.cursor/HANDOFF-REVIEW.md`。

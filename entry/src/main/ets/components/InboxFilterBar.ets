@@ -27,8 +27,8 @@ export struct InboxFilterBar {
   @Prop compact: boolean = false;
   /** Cover: no search icon (plan: 外屏不要搜索). */
   @Prop hideSearch: boolean = false;
-  @Prop avatarPreset: string = 'iridescent';
-  @Prop avatarPhoto: string = '';
+  @StorageLink('avatarPreset') avatarPreset: string = 'iridescent';
+  @StorageLink('avatarPhoto') avatarPhoto: string = '';
   @State private showSearch: boolean = false;
   onQuery: (s: string) => void = () => {
   };
@@ -189,7 +189,7 @@ export struct InboxFilterBar {
   avatarBtn() {
     HuAvatar({
       preset: this.avatarPreset,
-      photoUri: this.avatarPhoto,
+      photoUri: this.avatarPreset === 'custom' ? this.avatarPhoto : '',
       box: Tokens.touchMin,
       onTap: () => {
         this.onAvatar();

@@ -18,5 +18,8 @@ source "$ROOT/scripts/signing-overlay.sh"
 apply_signing_overlay
 trap restore_signing_overlay EXIT
 
-echo "==> hvigor entry@ohosTest"
-hvigorw --mode module -p module=entry@ohosTest -p product=default test --no-daemon
+# `test` on entry@ohosTest runs GenerateUnitTestResult → local Previewer and
+# hangs after printing "Darwin" when Previewer never writes stdout.
+# Hypium on a phone is onDeviceTest (installs test HAP, aa test).
+echo "==> hvigor entry onDeviceTest"
+hvigorw --mode module -p module=entry -p product=default onDeviceTest --no-daemon

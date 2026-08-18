@@ -1,17 +1,18 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { gitCompareUrl, isOriginRepo, normalizeCreateRepoUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
-import { applyInboxQuery, collectRecentEnvs, groupAgents, mergeInboxLists, recencyMs } from '../main/ets/utils/InboxGrouping';
+import { applyInboxQuery, collectRecentEnvs, diffInboxAgents, groupAgents, inboxDeltaLabel, mergeInboxLists, recencyMs, sortByRecency } from '../main/ets/utils/InboxGrouping';
 import { unwrapAgentsList } from '../main/ets/api/ApiUnwrap';
-import { agentIdFromLaunch, noticeTextFromLaunch } from '../main/ets/utils/WantParse';
+import { agentIdFromLaunch, noticeTextFromLaunch, showUnreadFromLaunch } from '../main/ets/utils/WantParse';
 import { citationQuote, clipNotice, isCitationFence, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
 import { AgentSummary, ConversationMessage, ModelInfo, ModelParamValue, ModelVariant, ModelVariantParam } from '../main/ets/models/Api';
 import { fileNameOf, isImagePath, isVideoPath } from '../main/ets/utils/DisplayFmt';
 import { sniffMime } from '../main/ets/utils/ImagePicker';
-import { isSubagentTool, subagentDetail } from '../main/ets/utils/StreamText';
+import { isSubagentTool, lastTextSummary, subagentDetail } from '../main/ets/utils/StreamText';
 import { unwrapUsageRuns } from '../main/ets/api/ApiUnwrap';
-import { isWaitingThink, nextUserJumpAt, visibleTimeline } from '../main/ets/utils/TimelineView';
+import { findUnreadAnchor, countNewContent, isWaitingThink, nextUserJumpAt, visibleKeySig, visibleRowSig, visibleTimeline } from '../main/ets/utils/TimelineView';
 import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, usedToolLine, waitingThinkLabel } from '../main/ets/utils/TimelineCopy';
-import { convFingerprint, keepPendingTurns, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
+import { convFingerprint, keepPendingTurns, lastMessageStamp, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
+import { cacheCoversConversation, cacheCoversDetail } from '../main/ets/utils/CachePolicy';
 import {
   buildParamRows, coerceParamsToVariant, formatModelSent, ModelParamRow, modelSentTags, rowsToParams, snapParamRows
 } from '../main/ets/utils/ModelGroups';
@@ -164,6 +165,14 @@ export default function webAlignTest() {
       expect(out[0].id).assertEqual('a');
     });
 
+    it('follow-up recency lifts the agent to the top', 0, () => {
+      const older = agent({ id: 'old', updatedAt: '2026-08-01T00:00:00.000Z' });
+      const newer = agent({ id: 'new', updatedAt: '2026-08-01T01:00:00.000Z' });
+      older.lastUserAt = '2026-08-18T12:00:00.000Z';
+      const out = sortByRecency([newer, older]);
+      expect(out[0].id).assertEqual('old');
+    });
+
     it('searches repo and name', 0, () => {
       const items = [
         agent({ id: 'a', name: 'Auth', repo: 'https://github.com/acme/app' }),
@@ -171,6 +180,13 @@ export default function webAlignTest() {
       ];
       expect(applyInboxQuery(items, 'auth', 'all', 'name').length).assertEqual(1);
       expect(applyInboxQuery(items, 'web', 'all', 'name')[0].id).assertEqual('b');
+      const mixed = [
+        agent({ id: 'run', latestRunStatus: 'RUNNING', name: 'Live' }),
+        agent({ id: 'err', latestRunStatus: 'ERROR', name: 'Boom' }),
+        agent({ id: 'done', latestRunStatus: 'FINISHED', name: 'Ok' })
+      ];
+      expect(applyInboxQuery(mixed, '', 'error', 'name')[0].id).assertEqual('err');
+      expect(applyInboxQuery(mixed, '', 'done', 'name')[0].id).assertEqual('done');
     });
 
     it('sorts by last user message newest first', 0, () => {
@@ -406,6 +422,19 @@ export default function webAlignTest() {
       expect(out[0].latestRunId).assertEqual('run-new');
       expect(out[0].latestRunStatus).assertEqual('CREATING');
     });
+
+    it('diffInboxAgents counts added and updated', 0, () => {
+      const prev = [agent({ id: 'a', name: 'A', latestRunStatus: 'RUNNING' })];
+      const next = [
+        agent({ id: 'a', name: 'A', latestRunStatus: 'FINISHED' }),
+        agent({ id: 'b', name: 'B', latestRunStatus: 'CREATING' })
+      ];
+      const d = diffInboxAgents(prev, next);
+      expect(d.added).assertEqual(1);
+      expect(d.updated).assertEqual(1);
+      expect(inboxDeltaLabel(d).indexOf('更新') >= 0).assertTrue();
+      expect(inboxDeltaLabel(diffInboxAgents(prev, prev))).assertEqual('已是最新');
+    });
   });
 
   describe('WantParse', () => {
@@ -413,6 +442,9 @@ export default function webAlignTest() {
       expect(agentIdFromLaunch({ agentId: 'bc-9' }, '')).assertEqual('bc-9');
       expect(agentIdFromLaunch(undefined, 'cursoragent://open/bc-8')).assertEqual('bc-8');
       expect(noticeTextFromLaunch({ noticeText: '已完成' })).assertEqual('');
+      expect(showUnreadFromLaunch({ showUnread: '1' })).assertTrue();
+      expect(showUnreadFromLaunch({ showUnread: 'true' })).assertTrue();
+      expect(showUnreadFromLaunch(undefined)).assertFalse();
     });
   });
 
@@ -556,6 +588,19 @@ export default function webAlignTest() {
       expect(isWaitingThink(out[4], false)).assertTrue();
     });
 
+    it('keeps a trailing live wait after assistant', 0, () => {
+      const items: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'r1', text: 'hi' },
+        { key: 't', kind: 'thinking', runId: 'r1', text: 'reason' },
+        { key: 'a', kind: 'assistant', runId: 'r1', text: 'partial' },
+        { key: 'waiting-r1', kind: 'thinking', runId: 'r1', text: '', streaming: true }
+      ];
+      const out = visibleTimeline(items);
+      expect(out.length).assertEqual(4);
+      expect(out[3].key).assertEqual('waiting-r1');
+      expect(isWaitingThink(out[3], true)).assertTrue();
+    });
+
     it('shows a turn divider from the second run', 0, () => {
       const items: TimelineItem[] = [
         { key: 'u1', kind: 'userPrompt', runId: 'r1', text: 'one' },
@@ -612,6 +657,44 @@ export default function webAlignTest() {
       expect(nextUserJumpAt(keys, idxs, 'u3', 1, 0, 4)).assertEqual(2);
       expect(nextUserJumpAt(keys, idxs, 'u0', -1, 0, 2)).assertEqual(-1);
     });
+
+    it('unread anchor lands on the next user prompt', 0, () => {
+      const items: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'r1', text: 'one' },
+        { key: 'a1', kind: 'assistant', runId: 'r1', text: 'ok' },
+        { key: 'u2', kind: 'userPrompt', runId: 'r2', text: 'two' },
+        { key: 'a2', kind: 'assistant', runId: 'r2', text: 'later' }
+      ];
+      expect(findUnreadAnchor(items, 'a1')).assertEqual('u2');
+      expect(countNewContent(items, 'a1') > 0).assertTrue();
+      expect(findUnreadAnchor(items, '')).assertEqual('u2');
+    });
+
+    it('visible key sig changes only when structure changes', 0, () => {
+      const a: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', text: 'hi' },
+        { key: 'a', kind: 'assistant', text: 'one', streaming: true }
+      ];
+      const b: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', text: 'hi' },
+        { key: 'a', kind: 'assistant', text: 'one two', streaming: true }
+      ];
+      const c: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', text: 'hi' },
+        { key: 'a', kind: 'assistant', text: 'one two', streaming: true },
+        { key: 't', kind: 'thinking', text: '', streaming: true }
+      ];
+      expect(visibleKeySig(a)).assertEqual(visibleKeySig(b));
+      expect(visibleKeySig(a) === visibleKeySig(c)).assertFalse();
+      expect(visibleRowSig(a[1]) === visibleRowSig(b[1])).assertFalse();
+    });
+  });
+
+  describe('StreamText summary', () => {
+    it('uses the last non-empty message line for inbox preview', 0, () => {
+      expect(lastTextSummary(['hello', '', 'line1\nDone here'])).assertEqual('Done here');
+      expect(lastTextSummary(['', '  '])).assertEqual('');
+    });
   });
 
   describe('TimelineMerge', () => {
@@ -643,6 +726,16 @@ export default function webAlignTest() {
         { id: '2', type: 'assistant_message', text: 'CCCCCCCC' }
       ];
       expect(convFingerprint(a) === convFingerprint(b)).assertFalse();
+    });
+
+    it('fingerprint changes when last run id or stamp changes', 0, () => {
+      const msgs: ConversationMessage[] = [
+        { id: '1', type: 'user_message', text: 'Add a README', createdAt: '2026-08-01T00:00:00.000Z' },
+        { id: '2', type: 'assistant_message', text: 'Created README', createdAt: '2026-08-01T00:01:00.000Z' }
+      ];
+      expect(convFingerprint(msgs, 'run-a', lastMessageStamp(msgs)) ===
+        convFingerprint(msgs, 'run-b', lastMessageStamp(msgs))).assertFalse();
+      expect(lastMessageStamp(msgs)).assertEqual('2026-08-01T00:01:00.000Z');
     });
 
     it('merge keeps tools when conversation fingerprint is unchanged', 0, () => {
@@ -857,6 +950,13 @@ export default function webAlignTest() {
       expect(blocks[0].text.indexOf('product/') >= 0).assertTrue();
     });
 
+    it('parses a standalone markdown image as an image block', 0, () => {
+      const blocks = parseMarkdown('![shot](https://cursor.com/a.png)\n\nsee above');
+      expect(blocks[0].kind).assertEqual('image');
+      expect(blocks[0].url).assertEqual('https://cursor.com/a.png');
+      expect(blocks[0].text).assertEqual('shot');
+    });
+
     it('clips notice without raw markdown', 0, () => {
       const s = clipNotice('## 结论\n修好了 [Inbox](https://example.com) 排序', 40);
       expect(s.indexOf('http') < 0).assertTrue();
@@ -894,9 +994,9 @@ export default function webAlignTest() {
       expect(processLiveTitle(false, '', false, '')).assertEqual('在想下一步');
       expect(processDoneTitle(false, '1s')).assertEqual('思考了 1s');
       expect(processDoneTitle(true, '1m 18s')).assertEqual('用了 1m 18s');
-      expect(waitingThinkLabel(0)).assertEqual('思考中.');
-      expect(waitingThinkLabel(1)).assertEqual('思考中..');
-      expect(waitingThinkLabel(2)).assertEqual('思考中…');
+      expect(waitingThinkLabel(0)).assertEqual('在想下一步.');
+      expect(waitingThinkLabel(1)).assertEqual('在想下一步..');
+      expect(waitingThinkLabel(2)).assertEqual('在想下一步…');
     });
 
     it('keeps run headers as quiet verbs', 0, () => {
@@ -917,6 +1017,40 @@ export default function webAlignTest() {
       expect(runs.length).assertEqual(1);
       expect(runs[0].usage.inputTokens).assertEqual(10);
       expect(runs[0].usage.totalTokens).assertEqual(14);
+    });
+  });
+
+  describe('CachePolicy', () => {
+    const finished = {
+      detail: { latestRunId: 'run-1', latestRunStatus: 'FINISHED' },
+      messages: [{}]
+    };
+
+    it('covers a settled Inbox row from local cache', 0, () => {
+      expect(cacheCoversDetail(finished, 'run-1', 'FINISHED')).assertTrue();
+      expect(cacheCoversConversation(finished, 'run-1')).assertTrue();
+    });
+
+    it('does not cover a newer Inbox run', 0, () => {
+      expect(cacheCoversDetail(finished, 'run-2', 'FINISHED')).assertFalse();
+      expect(cacheCoversConversation(finished, 'run-2')).assertFalse();
+    });
+
+    it('does not cover an in-flight Inbox row as a full detail hit', 0, () => {
+      expect(cacheCoversDetail(finished, 'run-1', 'RUNNING')).assertFalse();
+      expect(cacheCoversConversation(finished, 'run-1')).assertTrue();
+    });
+
+    it('needs an Inbox signal before treating disk as enough', 0, () => {
+      expect(cacheCoversDetail(finished, '', '')).assertFalse();
+    });
+
+    it('does not cover a mid-run cache after Inbox has settled', 0, () => {
+      const mid = {
+        detail: { latestRunId: 'run-1', latestRunStatus: 'RUNNING' },
+        messages: [{}]
+      };
+      expect(cacheCoversDetail(mid, 'run-1', 'FINISHED')).assertFalse();
     });
   });
 }

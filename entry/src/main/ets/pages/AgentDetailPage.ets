@@ -8,7 +8,8 @@ import {
 } from '../models/Api';
 import { NewAgentVM } from '../viewmodels/NewAgentVM';
 import { ModelPicker } from '../components/ModelPicker';
-import { StatusBanner } from '../components/StatusBanner';
+import { StatusPill } from '../components/StatusPill';
+import { ToastHost } from '../components/ToastHost';
 import {
   buildParamRows, formatChipFromRows, formatFollowChip, findModel, groupModels, isAutoModel,
   ModelParamRow, ModelVendorGroup, paramRowsStamp, rowsToParams, snapParamRows, variantLabel,
@@ -38,8 +39,12 @@ import { copyToClipboard } from '../utils/Clipboard';
 import { confirmDanger } from '../utils/AppDialog';
 import { showToast } from '../utils/AppToast';
 import { Haptics } from '../utils/Haptics';
-import { isWaitingThink, nextUserJumpAt, visibleTimeline } from '../utils/TimelineView';
-import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, waitingThinkLabel } from '../utils/TimelineCopy';
+import { NetworkMonitor } from '../utils/NetworkMonitor';
+import { relativeTime } from '../utils/TimeFmt';
+import { isShowableImageUrl, isOpaqueStepLabel } from '../utils/TimelineMedia';
+import { isWaitingThink, nextUserJumpAt, visibleKeySig, visibleRowSig, visibleTimeline } from '../utils/TimelineView';
+import { meaningfulStepTitle, processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug,
+  waitingThinkLabel } from '../utils/TimelineCopy';
 import { makeQuoteEditMenu } from '../utils/TextSelectMenu';
 
 function fmtTk(n: number | undefined): string {
@@ -57,7 +62,7 @@ export function AgentDetailPageBuilder() {
 @Component
 struct AgentDetailPage {
   @Consume('navPathStack') navStack: NavPathStack;
-  private vm: DetailVM = new DetailVM();
+  private vm: DetailVM = DetailVM.getInstance();
   private modelVm: NewAgentVM = new NewAgentVM();
   private bp: BreakpointStore = BreakpointStore.getInstance();
   private listScroller: Scroller = new Scroller();
@@ -91,12 +96,13 @@ struct AgentDetailPage {
   @State needsPlanUpgrade: boolean = false;
   @State artifacts: ArtifactInfo[] = [];
   @State usageRuns: RunUsage[] = [];
-  @State copyHint: string = '';
   @State topInset: number = 0;
   @State bottomInset: number = 0;
   @State queuedFollowUp: string = '';
   @State feed: TimelineItem[] = [];
   private visibleSource: TimelineSource = new TimelineSource();
+  private feedKeySig: string = '';
+  private feedRowSigs: string[] = [];
   private unsubBp: (() => void) | undefined = undefined;
   @State followUpMode: string = 'agent';
   @State followModelLabel: string = '';
@@ -131,6 +137,7 @@ struct AgentDetailPage {
   @State showJumpHint: boolean = false;
   @State quoteText: string = '';
   @State bubbleMax: number = 280;
+  @State online: boolean = true;
   private tickTimer: number = -1;
   private mdTimer: number = -1;
   private runStartMs: number = 0;
@@ -144,6 +151,7 @@ struct AgentDetailPage {
   private lastJumpedKey: string = '';
   private feedViewStart: number = 0;
   private feedViewEnd: number = -1;
+  private unsubNet: (() => void) | undefined = undefined;
 
   aboutToDisappear(): void {
     try {
@@ -163,10 +171,14 @@ struct AgentDetailPage {
       clearTimeout(this.jumpHintTimer);
       this.jumpHintTimer = -1;
     }
-    this.vm.close();
+    this.vm.detachView();
     if (this.unsubBp) {
       this.unsubBp();
       this.unsubBp = undefined;
+    }
+    if (this.unsubNet) {
+      this.unsubNet();
+      this.unsubNet = undefined;
     }
   }
 
@@ -198,6 +210,8 @@ struct AgentDetailPage {
       this.agentId = this.vm.agentId;
       this.lastUserKey = '';
       this.feedViewEnd = -1;
+      this.feedKeySig = '';
+      this.feedRowSigs = [];
     }
     this.name = this.vm.name;
     this.status = this.vm.status;
@@ -356,7 +370,7 @@ struct AgentDetailPage {
 
   private feedFollowSig(): string {
     const last = this.feed.length > 0 ? this.feed[this.feed.length - 1].key : '';
-    return `${this.runActive ? 1 : 0}:${this.feed.length}:${last}:${this.queuedFollowUp.length}`;
+    return `${this.runActive ? 1 : 0}:${this.feed.length}:${last}:${this.queuedFollowUp.length}:${this.processFoot()}`;
   }
 
   private pinFeedToComposer(delayMs: number = 16, force: boolean = true): void {
@@ -408,6 +422,25 @@ struct AgentDetailPage {
       }
       next.push(rows[i]);
     }
+    const keys = visibleKeySig(next);
+    if (keys === this.feedKeySig && next.length === this.feed.length &&
+      next.length === this.feedRowSigs.length && next.length > 0) {
+      for (let i = 0; i < next.length; i++) {
+        const sig = visibleRowSig(next[i]);
+        if (this.feedRowSigs[i] !== sig) {
+          this.feedRowSigs[i] = sig;
+          this.feed[i] = next[i];
+          this.visibleSource.updateAt(i, next[i]);
+        }
+      }
+      return;
+    }
+    const rowSigs: string[] = [];
+    for (let i = 0; i < next.length; i++) {
+      rowSigs.push(visibleRowSig(next[i]));
+    }
+    this.feedKeySig = keys;
+    this.feedRowSigs = rowSigs;
     this.feed = next;
     this.visibleSource.replaceAll(next);
   }
@@ -447,10 +480,7 @@ struct AgentDetailPage {
   private async attachImages(): Promise<void> {
     const remain = maxPromptImages() - this.attachedImages.length;
     if (remain <= 0) {
-      this.copyHint = '最多 5 张图';
-      setTimeout(() => {
-        this.copyHint = '';
-      }, 2000);
+      showToast('最多 5 张图', 'info', 'detail');
       return;
     }
     try {
@@ -461,10 +491,7 @@ struct AgentDetailPage {
         this.syncImageUris();
       }
     } catch (_e) {
-      this.copyHint = '选图取消或失败';
-      setTimeout(() => {
-        this.copyHint = '';
-      }, 2000);
+      showToast('选图取消或失败', 'warn', 'detail');
     }
   }
 
@@ -539,21 +566,40 @@ struct AgentDetailPage {
       e.indexOf('失效') >= 0;
   }
 
-  private showStreamNotice(): boolean {
+  private processFoot(): string {
+    const n = this.streamNotice;
+    if (n === '正在提交…' || n === '连接中…') {
+      return n;
+    }
+    if (n.indexOf('重连') >= 0 || n.indexOf('流已过期') >= 0 || n.indexOf('正在加载最终') >= 0) {
+      return n;
+    }
+    if (this.sending) {
+      return '正在提交…';
+    }
+    if (this.loading || this.syncing) {
+      return '同步对话…';
+    }
+    return '';
+  }
+
+  private processFootRetry(): boolean {
+    return this.processFoot().indexOf('重连') >= 0;
+  }
+
+  private streamFailNotice(): boolean {
     const n = this.streamNotice;
     if (n.length === 0) {
       return false;
     }
-    if (n === '结束后发送' || n.indexOf('结束后') >= 0 || n.indexOf('稍后自动') >= 0) {
+    if (this.processFoot() === n) {
+      return false;
+    }
+    if (n === '结束后发送' || n.indexOf('结束后') >= 0 || n.indexOf('稍后自动') >= 0 ||
+      n === '已取消') {
       return false;
     }
     return true;
-  }
-
-  private streamBusy(): boolean {
-    const n = this.streamNotice;
-    return n.indexOf('连接') >= 0 || n.indexOf('重连') >= 0 || n.indexOf('过期') >= 0 ||
-      n.indexOf('提交') >= 0;
   }
 
   private retryLabel(): string {
@@ -735,20 +781,6 @@ struct AgentDetailPage {
     this.sync();
   }
 
-  private isFollowUpUser(item: TimelineItem): boolean {
-    let seen = 0;
-    for (let i = 0; i < this.feed.length; i++) {
-      if (this.feed[i].kind !== 'userPrompt') {
-        continue;
-      }
-      if (this.feed[i].key === item.key) {
-        return seen > 0;
-      }
-      seen += 1;
-    }
-    return false;
-  }
-
   private shortRepo(): string {
     if (this.vm.repoUrl.length > 0) {
       return repoTail(this.vm.repoUrl);
@@ -844,8 +876,32 @@ struct AgentDetailPage {
     if (!live) {
       return processDoneTitle(tools.length > 0, elapsed);
     }
+    const slug = this.liveToolSlug(tools);
+    if (slug.length > 0) {
+      return processLiveTitle(false, slug, true, elapsed);
+    }
+    const named = this.latestStepTitle(item.runId);
+    if (named.length > 0) {
+      return elapsed.length > 0 ? `${named} · ${elapsed}` : named;
+    }
     const connecting = item.runId === 'pending' || (item.text ?? '').trim().length === 0;
-    return processLiveTitle(connecting, this.liveToolSlug(tools), tools.length > 0, elapsed);
+    return processLiveTitle(connecting, '', tools.length > 0, elapsed);
+  }
+
+  private latestStepTitle(runId: string): string {
+    let last = '';
+    const total = this.vm.source.totalCount();
+    for (let i = 0; i < total; i++) {
+      const it = this.vm.source.getData(i);
+      if (it.runId !== runId || it.kind !== 'step') {
+        continue;
+      }
+      const t = meaningfulStepTitle(it.text ?? '');
+      if (t.length > 0) {
+        last = t;
+      }
+    }
+    return last;
   }
 
   private elapsedForCard(runId: string, live: boolean): string {
@@ -936,15 +992,10 @@ struct AgentDetailPage {
     Haptics.click();
     copyToClipboard(text).then((ok: boolean) => {
       if (ok) {
-        this.copyHint = '已复制';
-        showToast('已复制');
+        showToast('已复制', 'info', 'detail');
       } else {
-        this.copyHint = text.length > 48 ? `${text.substring(0, 48)}…` : text;
-        showToast(this.copyHint);
+        showToast(text.length > 48 ? `${text.substring(0, 48)}…` : text, 'warn', 'detail');
       }
-      setTimeout(() => {
-        this.copyHint = '';
-      }, 2500);
     });
   }
 
@@ -1013,7 +1064,6 @@ struct AgentDetailPage {
               name: 'back',
               label: '返回',
               onTap: () => {
-                this.vm.close();
                 this.navStack.pop();
               }
             })
@@ -1058,66 +1108,6 @@ struct AgentDetailPage {
           top: this.topInset
         })
 
-        if (this.convError.length > 0) {
-          StatusBanner({
-            text: this.convError,
-            tone: 'warn',
-            action: '重试',
-            onAction: () => {
-              this.vm.retryConversation().then(() => {
-                this.sync();
-              });
-            }
-          })
-        }
-
-        if (this.showStreamNotice()) {
-          StatusBanner({
-            text: this.streamNotice,
-            tone: 'info',
-            action: this.retryLabel() === '重连' ? '重连' : '',
-            onAction: () => {
-              this.runRetry();
-            }
-          })
-        }
-
-        if (this.needsPlanUpgrade) {
-          StatusBanner({
-            text: '套餐不足，打开 Dashboard 升级',
-            tone: 'warn',
-            action: '升级',
-            external: true,
-            onAction: () => {
-              this.openLink('https://cursor.com/dashboard');
-            }
-          })
-        }
-
-        if (this.failed() || this.errorMsg.length > 0) {
-          StatusBanner({
-            text: this.errorMsg.length > 0 ? this.errorMsg : '失败',
-            tone: 'danger',
-            action: this.authFail() ? '去设置' : this.retryLabel(),
-            onAction: () => {
-              if (this.authFail()) {
-                this.navStack.pushPath({ name: 'Settings' });
-              } else {
-                this.runRetry();
-              }
-            }
-          })
-        }
-
-        if (this.copyHint.length > 0) {
-          Text(this.copyHint)
-            .fontSize(Tokens.typeMicro)
-            .fontColor($r('app.color.ok'))
-            .width('100%')
-            .textAlign(TextAlign.Center)
-            .padding({ bottom: 4 })
-        }
-
         if (this.isHover) {
           FolderStack({ upperItems: ['hoverTimeline'] }) {
             Column() {
@@ -1140,6 +1130,7 @@ struct AgentDetailPage {
       }
       .width('100%')
       .height('100%')
+      .overlay(this.detailDock(), { align: Alignment.Bottom })
       .backgroundColor($r('app.color.bg0'))
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
     }
@@ -1172,6 +1163,11 @@ struct AgentDetailPage {
         });
         this.onKeyboardChrome();
       });
+      NetworkMonitor.getInstance().start();
+      this.online = NetworkMonitor.getInstance().online;
+      this.unsubNet = NetworkMonitor.getInstance().onChange((v: boolean) => {
+        this.online = v;
+      });
       const p = ctx.pathInfo.param as Record<string, Object>;
       if (p && p['agentId']) {
         this.agentId = `${p['agentId']}`;
@@ -1179,7 +1175,16 @@ struct AgentDetailPage {
           this.sync();
         });
         const seeded = `${p['seed'] ?? ''}` === '1' || this.agentId.indexOf('local-') === 0;
-        const opened = seeded ? this.vm.openFromCreate(this.agentId) : this.vm.open(this.agentId);
+        let opened: Promise<void> = Promise.resolve();
+        if (seeded) {
+          opened = this.vm.openFromCreate(this.agentId);
+        } else if (this.vm.canReattach(this.agentId)) {
+          this.vm.attachView();
+          opened = this.vm.resumeIfNeeded();
+          this.sync();
+        } else {
+          opened = this.vm.open(this.agentId);
+        }
         opened.then(() => {
           this.vm.restoreQueue().then(() => {
             this.sync();
@@ -1217,97 +1222,156 @@ struct AgentDetailPage {
         this.getUIContext().getFocusController().clearFocus();
       } catch (_e) {
       }
-      this.vm.close();
+      this.vm.detachView();
       return false;
     })
   }
 
   @Builder
-  timelinePane() {
-    if (this.loading && this.vm.source.totalCount() === 0) {
-      Column() {
-        LoadingProgress().width(32).height(32).color($r('app.color.accent'))
-        Text('加载对话…')
-          .fontSize(Tokens.typeCaption)
-          .fontColor($r('app.color.text_tertiary'))
-          .margin({ top: 12 })
-      }
-      .layoutWeight(1)
-      .justifyContent(FlexAlign.Center)
-      .width('100%')
-    } else {
-      Column() {
-        if (this.syncing) {
-          Row({ space: 8 }) {
-            Progress({ value: 0, total: 100, type: ProgressType.Linear })
-              .layoutWeight(1)
-              .height(2)
-              .color($r('app.color.accent'))
-              .style({ strokeWidth: 2, enableSmoothEffect: true })
-            Text('同步对话…')
-              .fontSize(Tokens.typeMicro)
-              .fontColor($r('app.color.text_tertiary'))
-          }
-          .width('100%')
-          .padding({ left: this.pagePad, right: this.pagePad, top: 6, bottom: 4 })
-          .alignItems(VerticalAlign.Center)
+  detailDock() {
+    Column({ space: 8 }) {
+      this.detailActionPill()
+      ToastHost({ page: 'detail' })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Center)
+    .padding({ left: 16, right: 16, bottom: Tokens.toastBottom })
+    .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  detailActionPill() {
+    if (this.authFail()) {
+      StatusPill({
+        text: this.errorMsg.length > 0 ? this.errorMsg : 'API Key 失效，请重新粘贴',
+        tone: 'danger',
+        action: '去设置',
+        onAction: () => {
+          this.navStack.pushPath({ name: 'Settings' });
         }
-        Stack() {
-          List({ space: Tokens.sec, scroller: this.listScroller }) {
-            LazyForEach(this.visibleSource, (item: TimelineItem) => {
-              ListItem() {
-                this.timelineItem(item)
-              }
-            }, (item: TimelineItem) => this.rowKey(item))
+      })
+    } else if (this.needsPlanUpgrade) {
+      StatusPill({
+        text: '套餐不足，打开 Dashboard 升级',
+        tone: 'warn',
+        action: '升级',
+        onAction: () => {
+          this.openLink('https://cursor.com/dashboard');
+        }
+      })
+    } else if (this.convError.length > 0) {
+      StatusPill({
+        text: this.convError,
+        tone: 'warn',
+        action: '重试',
+        onAction: () => {
+          this.vm.retryConversation().then(() => {
+            this.sync();
+          });
+        }
+      })
+    } else if (this.failed() || this.errorMsg.length > 0) {
+      StatusPill({
+        text: this.errorMsg.length > 0 ? this.errorMsg : '失败',
+        tone: 'danger',
+        action: this.retryLabel(),
+        onAction: () => {
+          this.runRetry();
+        }
+      })
+    } else if (this.streamFailNotice()) {
+      StatusPill({
+        text: this.streamNotice,
+        tone: 'warn',
+        action: this.retryLabel() === '重连' ? '重连' : '重试',
+        onAction: () => {
+          this.runRetry();
+        }
+      })
+    } else if (!this.online) {
+      StatusPill({
+        text: '网络已断开',
+        tone: 'warn',
+        action: '重试',
+        onAction: () => {
+          this.vm.retryConversation().then(() => {
+            this.sync();
+          });
+        }
+      })
+    } else if (this.showJump) {
+      StatusPill({
+        text: '最新',
+        onTap: () => {
+          this.vm.stickToBottom = true;
+          this.showJump = false;
+          this.listScroller.scrollEdge(Edge.Bottom);
+        }
+      })
+    } else if (this.unreadPill > 0 && this.unreadAnchorKey.length > 0 && !this.vm.stickToBottom) {
+      StatusPill({
+        text: `${this.unreadPill} 条新消息`,
+        onTap: () => {
+          this.vm.stickToBottom = false;
+          this.scrollToKey(this.unreadAnchorKey);
+          this.unreadPill = 0;
+        }
+      })
+    }
+  }
+
+  @Builder
+  timelinePane() {
+    Column() {
+      Stack() {
+        List({ space: Tokens.sec, scroller: this.listScroller }) {
+          LazyForEach(this.visibleSource, (item: TimelineItem) => {
+            ListItem() {
+              this.timelineItem(item)
+            }
+          }, (item: TimelineItem) => this.rowKey(item))
+          if (this.processFoot().length > 0) {
+            ListItem() {
+              Text(this.processFoot())
+                .fontSize(Tokens.typeCaption)
+                .fontFamily(Tokens.fontUi)
+                .fontColor($r('app.color.text_tertiary'))
+                .padding({ top: 8, bottom: 4 })
+                .onClick(() => {
+                  if (this.processFootRetry()) {
+                    this.runRetry();
+                  }
+                })
+            }
           }
-          .width('100%')
-          .height('100%')
-          .padding({ left: this.pagePad, right: this.pagePad, bottom: Tokens.sec + 8 })
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
-          .cachedCount(18)
-          .focusable(true)
-          .defaultFocus(false)
-          .onScrollIndex((start: number, end: number) => {
-            this.feedViewStart = start;
-            this.feedViewEnd = end;
-            const nearBottom = this.feed.length === 0 || end >= this.feed.length - 2;
-            this.vm.stickToBottom = nearBottom;
-            this.showJump = !nearBottom && this.runActive;
-          })
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ left: this.pagePad, right: this.pagePad, bottom: Tokens.sec + 8 })
+        .scrollBar(BarState.Off)
+        .edgeEffect(EdgeEffect.Spring)
+        .cachedCount(18)
+        .focusable(true)
+        .defaultFocus(false)
+        .onScrollIndex((start: number, end: number) => {
+          this.feedViewStart = start;
+          this.feedViewEnd = end;
+          const extra = this.processFoot().length > 0 ? 1 : 0;
+          const nearBottom = this.feed.length === 0 || end >= this.feed.length + extra - 2;
+          this.vm.stickToBottom = nearBottom;
+          this.showJump = !nearBottom && this.runActive;
+        })
 
           Column() {
             Blank()
               .layoutWeight(1)
               .hitTestBehavior(HitTestMode.Transparent)
-            if (this.showJump) {
-              Text('最新')
-                .fontSize(Tokens.typeMicro)
-                .fontColor($r('app.color.primary_on'))
-                .constraintSize({ minHeight: Tokens.touchMin })
-                .padding({ left: 14, right: 14 })
-                .backgroundColor($r('app.color.primary'))
-                .borderRadius(Tokens.radiusChip)
-                .textAlign(TextAlign.Center)
-                .margin({ bottom: 8 })
-                .onClick(() => {
-                  this.vm.stickToBottom = true;
-                  this.showJump = false;
-                  this.listScroller.scrollEdge(Edge.Bottom);
-                })
-            }
             if (this.hasUserPrompts()) {
               Column({ space: 6 }) {
                 if (this.showJumpHint) {
-                  Text(`${this.jumpIndex} / ${this.jumpTotal}`)
-                    .fontSize(Tokens.typeMicro)
-                    .fontColor($r('app.color.text_primary'))
-                    .constraintSize({ minHeight: 28 })
-                    .padding({ left: 10, right: 10 })
-                    .backgroundColor($r('app.color.bg1'))
-                    .border({ width: 1, color: $r('app.color.border') })
-                    .borderRadius(Tokens.radiusPill)
-                    .textAlign(TextAlign.Center)
+                  StatusPill({
+                    text: `${this.jumpIndex} / ${this.jumpTotal}`
+                  })
                 }
                 this.jumpCluster()
               }
@@ -1345,7 +1409,6 @@ struct AgentDetailPage {
       }
       .layoutWeight(1)
       .width('100%')
-    }
   }
 
   @Builder
@@ -1384,12 +1447,12 @@ struct AgentDetailPage {
     .onTouch((e: TouchEvent) => {
       if (e.type === TouchType.Down) {
         this.pressKey = `jump:${dir}`;
-        Haptics.click();
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressKey = '';
       }
     })
     .onClick(() => {
+      Haptics.click();
       this.jumpUser(dir);
     })
   }
@@ -1412,28 +1475,6 @@ struct AgentDetailPage {
       }
       .width('100%')
       .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 4 })
-    }
-
-    if (this.unreadPill > 0 && this.unreadAnchorKey.length > 0) {
-      Row() {
-        Text(`${this.unreadPill} 条新消息`)
-          .fontSize(Tokens.typeMicro)
-          .fontColor($r('app.color.text_primary'))
-          .constraintSize({ minHeight: 32 })
-          .padding({ left: 12, right: 12 })
-          .backgroundColor($r('app.color.bg1'))
-          .border({ width: 1, color: $r('app.color.border') })
-          .borderRadius(Tokens.radiusPill)
-          .textAlign(TextAlign.Center)
-          .onClick(() => {
-            this.vm.stickToBottom = false;
-            this.scrollToKey(this.unreadAnchorKey);
-            this.unreadPill = 0;
-          })
-      }
-      .width('100%')
-      .justifyContent(FlexAlign.Center)
-      .padding({ bottom: 6 })
     }
 
     PromptShell({
@@ -1584,7 +1625,7 @@ struct AgentDetailPage {
             this.name = this.vm.name;
             this.closeSheet();
             Haptics.success();
-            showToast('已保存本地名称');
+            showToast('已保存本地名称', 'info', 'detail');
           })
       }
       .width('100%')
@@ -1796,11 +1837,8 @@ struct AgentDetailPage {
                   this.openLink(url, title);
                 },
                 onFail: (msg: string) => {
-                  this.copyHint = msg;
-                  showToast(msg);
-                  setTimeout(() => {
-                    this.copyHint = '';
-                  }, 2500);
+                  this.closeSheet();
+                  showToast(msg, 'warn', 'detail');
                 }
               })
             }
@@ -1969,7 +2007,7 @@ struct AgentDetailPage {
               await this.togglePin();
               this.closeSheet();
               Haptics.success();
-              showToast(wasPinned ? '已取消置顶' : '已置顶');
+              showToast(wasPinned ? '已取消置顶' : '已置顶', 'info', 'detail');
             }
           })
           SheetActionRow({
@@ -2013,14 +2051,11 @@ struct AgentDetailPage {
                 this.closeSheet();
                 if (ok) {
                   Haptics.success();
-                  showToast('已归档');
+                  showToast('已归档', 'info', 'inbox');
                   this.vm.close();
                   this.navStack.pop();
                 } else {
-                  Haptics.fail();
                   this.sync();
-                  const err = this.vm.errorMsg.length > 0 ? this.vm.errorMsg : '归档失败';
-                  showToast(err);
                 }
               }
             })
@@ -2037,7 +2072,7 @@ struct AgentDetailPage {
                 this.vm.deleteRemote().then((ok: boolean) => {
                   if (ok) {
                     Haptics.success();
-                    showToast('已删除');
+                    showToast('已删除', 'info', 'inbox');
                     InboxVM.getInstance().removeLocal(id);
                     this.vm.close();
                     this.navStack.pop();
@@ -2091,11 +2126,11 @@ struct AgentDetailPage {
 
   private activityTitle(item: TimelineItem): string {
     if (item.kind === 'step') {
-      const title = (item.text ?? '').trim();
+      const title = meaningfulStepTitle(item.text ?? '');
       if (this.runActive && item.streaming === true) {
         return title.length > 0 ? title : '在想下一步';
       }
-      return title.length > 0 ? title : '步骤';
+      return title.length > 0 ? title : '过程';
     }
     const tools = this.toolsForRun(item.runId);
     const elapsed = this.elapsedForCard(item.runId, item.streaming === true && this.runActive);
@@ -2128,7 +2163,11 @@ struct AgentDetailPage {
     if (!isWaitingThink(item, this.toolsForRun(item.runId).length > 0)) {
       return false;
     }
-    return this.processBodyForRun(item.runId).trim().length === 0;
+    if (this.toolsForRun(item.runId).length > 0 && this.isLeadProcess(item)) {
+      return false;
+    }
+    return this.processBodyForRun(item.runId).trim().length === 0 ||
+      (item.key.indexOf('waiting-') === 0);
   }
 
   private waitingLine(): string {
@@ -2141,13 +2180,14 @@ struct AgentDetailPage {
     const total = this.vm.source.totalCount();
     for (let i = 0; i < total; i++) {
       const it = this.vm.source.getData(i);
-      if (it.runId !== runId || !this.isProcessKind(it.kind)) {
+      if (it.runId !== runId || !this.isProcessKind(it.kind) || it.kind === 'step') {
         continue;
       }
       const t = (it.text ?? '').trim();
-      if (t.length > 0) {
-        bits.push(t);
+      if (t.length === 0 || isOpaqueStepLabel(t)) {
+        continue;
       }
+      bits.push(t);
     }
     return bits.join('\n\n');
   }
@@ -2231,6 +2271,32 @@ struct AgentDetailPage {
     return this.bubbleMax > 48 ? this.bubbleMax - 24 : this.bubbleMax;
   }
 
+  private bubbleTime(item: TimelineItem): string {
+    return relativeTime(item.localAt ?? '');
+  }
+
+  private showableImages(item: TimelineItem): string[] {
+    const src = item.imageUrls ?? [];
+    const out: string[] = [];
+    for (let i = 0; i < src.length; i++) {
+      if (isShowableImageUrl(src[i])) {
+        out.push(src[i]);
+      }
+    }
+    return out;
+  }
+
+  @Builder
+  bubbleImages(item: TimelineItem) {
+    ForEach(this.showableImages(item), (src: string) => {
+      Image(src)
+        .width('100%')
+        .constraintSize({ maxWidth: this.bubbleMax, maxHeight: 180 })
+        .objectFit(ImageFit.Cover)
+        .borderRadius(Tokens.radiusSm)
+    }, (src: string) => src)
+  }
+
   @Builder
   tagRow(tags: string[]) {
     Row({ space: 4 }) {
@@ -2252,34 +2318,17 @@ struct AgentDetailPage {
   timelineItem(item: TimelineItem) {
     if (item.kind === 'userPrompt') {
       Column({ space: 4 }) {
-        if (this.isFollowUpUser(item)) {
-          Row({ space: 8 }) {
-            Divider()
-              .color($r('app.color.border'))
-              .layoutWeight(1)
-            Text('追问')
-              .fontSize(Tokens.typeMicro)
-              .fontColor($r('app.color.text_tertiary'))
-            Divider()
-              .color($r('app.color.border'))
-              .layoutWeight(1)
-          }
-          .width('100%')
-          .padding({ top: 12, bottom: 4 })
-          .alignItems(VerticalAlign.Center)
-          .transition(chromeTransition())
-        }
         Row() {
           Blank()
             .layoutWeight(1)
           Column({ space: 4 }) {
-            Column() {
+            Row() {
               if (this.isPlainUser(item.text ?? '')) {
                 Text(item.text ?? '')
                   .fontSize(Tokens.typeProse)
                   .fontFamily(Tokens.fontUi)
                   .fontColor($r('app.color.text_primary'))
-                  .lineHeight(Tokens.lineProse)
+                  .lineHeight(Tokens.typeProse + 4)
                   .maxLines(6)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                   .wordBreak(WordBreak.BREAK_WORD)
@@ -2302,7 +2351,8 @@ struct AgentDetailPage {
                 })
               }
             }
-            .constraintSize({ maxWidth: this.bubbleMax, minHeight: 44 })
+            .alignItems(VerticalAlign.Center)
+            .constraintSize({ maxWidth: this.bubbleMax })
             .padding({ left: 12, right: 12, top: 10, bottom: 10 })
             .backgroundColor(item.failed ? $r('app.color.banner_error_bg') : $r('app.color.user_bubble'))
             .border({
@@ -2310,6 +2360,13 @@ struct AgentDetailPage {
               color: $r('app.color.border')
             })
             .borderRadius(Tokens.radiusMd)
+            this.bubbleImages(item)
+            if (this.bubbleTime(item).length > 0) {
+              Text(this.bubbleTime(item))
+                .fontSize(Tokens.typeMicro)
+                .fontFamily(Tokens.fontUi)
+                .fontColor($r('app.color.text_tertiary'))
+            }
             if (this.modelTagsOf(item).length > 0) {
               this.tagRow(this.modelTagsOf(item))
             }
@@ -2394,6 +2451,13 @@ struct AgentDetailPage {
               this.applyQuote(t);
             }
           })
+        }
+        this.bubbleImages(item)
+        if (this.bubbleTime(item).length > 0) {
+          Text(this.bubbleTime(item))
+            .fontSize(Tokens.typeMicro)
+            .fontFamily(Tokens.fontUi)
+            .fontColor($r('app.color.text_tertiary'))
         }
       }
       .width('100%')

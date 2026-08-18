@@ -52,17 +52,17 @@ export struct HuTextButton {
       }
       if (e.type === TouchType.Down) {
         this.pressed = true;
-        if (this.active) {
-          Haptics.click();
-        } else {
-          Haptics.tick();
-        }
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressed = false;
       }
     })
     .onClick(() => {
       if (this.isEnabled) {
+        if (this.active) {
+          Haptics.click();
+        } else {
+          Haptics.tick();
+        }
         this.onTap();
       }
     })

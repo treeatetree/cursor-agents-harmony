@@ -4,6 +4,10 @@ const DOMAIN: number = 0x435552;
 
 /** hilog helper — never logs raw API keys. */
 export class Log {
+  static debug(tag: string, msg: string): void {
+    hilog.debug(DOMAIN, tag, '%{public}s', Log.redact(msg));
+  }
+
   static info(tag: string, msg: string): void {
     hilog.info(DOMAIN, tag, '%{public}s', Log.redact(msg));
   }

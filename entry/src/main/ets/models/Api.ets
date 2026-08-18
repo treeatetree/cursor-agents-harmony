@@ -215,6 +215,8 @@ export interface ConversationMessage {
   id: string;
   type: ConversationMessageType | string;
   text: string;
+  createdAt?: string;
+  images?: Object[];
 }
 
 export interface ConversationResponse {

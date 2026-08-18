@@ -1,5 +1,6 @@
 import { isSubagentTool, plainArg, shortPathForTool, subagentDetail } from './StreamText';
 import { ToolCallEvent } from '../models/Sse';
+import { isOpaqueStepLabel } from './TimelineMedia';
 
 /** Cloud web uses the raw slug: "Used web-fetch". */
 export function toolSlug(name: string): string {
@@ -63,6 +64,15 @@ export function usedToolFromEvent(tool: ToolCallEvent): string {
   return usedToolLine(tool.name, running, toolArgDetail(tool.name, tool.argsText ?? ''));
 }
 
+/** Drop Cursor's opaque stepId ("步骤 642"). Keep a real title if the cloud sent one. */
+export function meaningfulStepTitle(raw: string): string {
+  const t = (raw ?? '').trim();
+  if (t.length === 0 || isOpaqueStepLabel(t)) {
+    return '';
+  }
+  return t;
+}
+
 export function processLiveTitle(connecting: boolean, runningSlug: string, hasTools: boolean,
   elapsed: string): string {
   let head = '在想下一步';
@@ -79,16 +89,16 @@ export function processLiveTitle(connecting: boolean, runningSlug: string, hasTo
   return head;
 }
 
-/** Gray waiting line: 思考中. / 思考中.. / 思考中… */
+/** Gray waiting line after a pause between SSE steps. */
 export function waitingThinkLabel(tick: number): string {
   const n = (Math.abs(tick) % 3) + 1;
   if (n === 1) {
-    return '思考中.';
+    return '在想下一步.';
   }
   if (n === 2) {
-    return '思考中..';
+    return '在想下一步..';
   }
-  return '思考中…';
+  return '在想下一步…';
 }
 
 export function processDoneTitle(hadTools: boolean, elapsed: string): string {

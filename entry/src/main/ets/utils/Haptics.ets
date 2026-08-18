@@ -22,12 +22,12 @@ export class Haptics {
 
   /** Chip / filter / light selection. */
   static tick(): void {
-    Haptics.fire('haptic.effect.sharp', 92, 'physicalFeedback');
+    Haptics.fire('haptic.effect.soft', 52, 'physicalFeedback');
   }
 
   /** Toolbar icon, secondary control. Sound stays off — too frequent. */
   static click(): void {
-    Haptics.fire('haptic.effect.hard', 100, 'physicalFeedback');
+    Haptics.fire('haptic.effect.soft', 72, 'physicalFeedback');
   }
 
   /** Open a card or push a page. */

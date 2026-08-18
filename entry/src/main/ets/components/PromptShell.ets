@@ -464,8 +464,9 @@ export struct PromptShell {
   @Builder
   modeChip() {
     HuChip({
-      label: this.followUpMode === 'plan' ? '规划' : 'Agent',
+      label: '规划',
       on: this.followUpMode === 'plan',
+      tone: 'plan',
       onTap: () => {
         this.onModeChange(this.followUpMode === 'plan' ? 'agent' : 'plan');
       }
@@ -527,15 +528,6 @@ export struct PromptShell {
             this.onImage();
           }
         })
-        if (this.failedFollow) {
-          HuChip({
-            label: '重发',
-            on: true,
-            onTap: () => {
-              this.onRetryFollow();
-            }
-          })
-        }
       }
     }
     .height(32)

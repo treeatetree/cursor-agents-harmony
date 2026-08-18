@@ -13,8 +13,8 @@ import { UnreadStore } from '../store/UnreadStore';
 import { PrefStore } from '../store/PrefStore';
 import { clipNotice } from '../utils/MarkdownParse';
 import {
-  InboxDelta, diffInboxAgents, emptyInboxDelta, isRunInFlight, mergeInboxLists, pickNewerIso,
-  sortByRecency
+  InboxDelta, diffInboxAgents, emptyInboxDelta, filterAgentsByIds, isRunInFlight, mergeInboxLists,
+  pickNewerIso, sortByRecency
 } from '../utils/InboxGrouping';
 import { repoTail } from '../utils/DisplayFmt';
 import { AppState } from '../utils/AppState';
@@ -23,6 +23,7 @@ import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { DetailVM } from './DetailVM';
 
 const TAG = 'InboxVM';
+const INBOX_SILENT_MIN_MS = 8000;
 
 export class InboxVM {
   private static instance: InboxVM | undefined = undefined;
@@ -45,7 +46,9 @@ export class InboxVM {
   private ctx: common.UIAbilityContext | undefined = undefined;
   private heldIds: string[] = [];
   private refreshQueued: boolean = false;
+  private userRefreshPending: boolean = false;
   private watchTimer: number = -1;
+  private listTimer: number = -1;
   private watchBusy: boolean = false;
   private watchCooldownUntil: number = 0;
   private listeners: Array<() => void> = [];
@@ -79,15 +82,31 @@ export class InboxVM {
   async bootstrap(context: common.UIAbilityContext): Promise<void> {
     this.ctx = context;
     await AgentCache.getInstance().init(context);
-    const cached = AgentCache.getInstance().loadInbox();
+    const cache = AgentCache.getInstance();
+    const cached = cache.loadInbox();
+    cache.hydrateSummaries();
     if (cached.length > 0) {
       this.source.replaceAll(cached);
       this.loadedOnce = true;
-      const fetchedAt = AgentCache.getInstance().inboxFetchedAt();
-      if (fetchedAt > 0) {
-        this.lastRefreshAt = fetchedAt;
-      }
+      // Disk age must not pretend we just hit the network — otherwise
+      // shouldRefresh(30s) skips the first real listAgents after launch.
     }
+  }
+
+  /** Coalesce silent listAgents. Pull-to-refresh still goes through refresh(false). */
+  async requestRefresh(silent: boolean = true, minIntervalMs: number = INBOX_SILENT_MIN_MS): Promise<boolean> {
+    if (!silent) {
+      return this.refresh(false);
+    }
+    if (!this.shouldRefresh(minIntervalMs)) {
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'refresh_skip',
+        extra: `min=${minIntervalMs} age=${this.lastRefreshAt > 0 ? Date.now() - this.lastRefreshAt : -1}`
+      });
+      return true;
+    }
+    return this.refresh(true);
   }
 
   shouldRefresh(minIntervalMs: number = 10000): boolean {
@@ -105,17 +124,44 @@ export class InboxVM {
       SessionDiag.emit({ tag: TAG, event: 'prefetch_skip', extra: 'archived' });
       return;
     }
+    this.prefetchUnread();
+    const unread = UnreadStore.getInstance().ids();
     const snap = this.source.snapshot();
-    const ids: string[] = [];
-    for (let i = 0; i < snap.length && ids.length < 2; i++) {
+    const rows: AgentSummary[] = [];
+    for (let i = 0; i < snap.length; i++) {
       const id = snap[i].id;
       if (id.indexOf('local-') === 0) {
         continue;
       }
-      ids.push(id);
+      if (unread.indexOf(id) >= 0) {
+        continue;
+      }
+      rows.push(snap[i]);
     }
-    if (ids.length > 0) {
-      AgentPrefetch.getInstance().enqueueVisible(ids, 'show');
+    if (rows.length > 0) {
+      AgentPrefetch.getInstance().enqueueVisible(rows, 'show');
+    }
+  }
+
+  prefetchUnread(): void {
+    const ids = UnreadStore.getInstance().ids();
+    if (ids.length === 0) {
+      return;
+    }
+    AgentPrefetch.getInstance().enqueue(ids, 'unread');
+  }
+
+  private async untilIdle(maxMs: number): Promise<void> {
+    const start = Date.now();
+    while (this.loading || CursorApiClient.getInstance().isMutating()) {
+      if (Date.now() - start >= maxMs) {
+        return;
+      }
+      await new Promise<void>((resolve: () => void) => {
+        setTimeout(() => {
+          resolve();
+        }, 50);
+      });
     }
   }
 
@@ -124,12 +170,29 @@ export class InboxVM {
       return false;
     }
     if (this.loading || CursorApiClient.getInstance().isMutating()) {
-      this.refreshQueued = true;
-      return true;
+      if (silent) {
+        this.refreshQueued = true;
+        SessionDiag.emit({ tag: TAG, event: 'refresh_skip', extra: 'busy_silent' });
+        return true;
+      }
+      this.userRefreshPending = true;
+      this.refreshing = true;
+      this.emitChange();
+      SessionDiag.emit({ tag: TAG, event: 'refresh_wait', extra: 'busy' });
+      await this.untilIdle(12000);
+      if (this.loading || CursorApiClient.getInstance().isMutating()) {
+        this.userRefreshPending = false;
+        this.refreshing = false;
+        this.emitChange();
+        SessionDiag.emit({ tag: TAG, event: 'refresh_skip', extra: 'wait_timeout' });
+        return false;
+      }
     }
     this.loading = true;
+    this.userRefreshPending = false;
     if (!silent) {
       this.refreshing = true;
+      this.emitChange();
     }
     this.errorMsg = '';
     this.authExpired = false;
@@ -142,19 +205,6 @@ export class InboxVM {
       const unwrapped = unwrapAgentsList(resp as object);
       let agents = unwrapped.items ?? [];
       this.nextCursor = unwrapped.nextCursor ?? '';
-      if (this.nextCursor.length > 0) {
-        try {
-          const moreResp = await client.listAgents(100, this.nextCursor, this.includeArchived,
-            this.prUrlFilter);
-          const more = unwrapAgentsList(moreResp as object);
-          const extra = more.items ?? [];
-          for (let i = 0; i < extra.length; i++) {
-            agents.push(extra[i]);
-          }
-          this.nextCursor = more.nextCursor ?? '';
-        } catch (_e) {
-        }
-      }
       if (!this.includeArchived) {
         agents = agents.filter((a: AgentSummary) => a.status !== 'ARCHIVED');
       }
@@ -164,7 +214,8 @@ export class InboxVM {
       agents = sortByRecency(agents);
       this.heldIds = this.heldIdsStillMissing(agents);
       this.noteStatusChanges(prev, agents);
-      this.lastDelta = silent ? emptyInboxDelta() : diffInboxAgents(prev, agents);
+      const delta = diffInboxAgents(prev, agents);
+      this.lastDelta = silent ? emptyInboxDelta() : delta;
       this.source.replaceAll(agents);
       const filtered = this.includeArchived || this.prUrlFilter.length > 0;
       AgentCache.getInstance().saveInbox(agents, filtered ? 'merge' : 'full');
@@ -186,9 +237,12 @@ export class InboxVM {
       UnreadStore.getInstance().syncBadge();
       this.pushWidget();
       this.emitChange();
-      if (!this.includeArchived && !silent && this.lastDelta.ids.length > 0) {
-        const deltaIds = this.lastDelta.ids.slice(0, 3);
-        AgentPrefetch.getInstance().enqueue(deltaIds, 'delta');
+      if (!this.includeArchived) {
+        this.prefetchUnread();
+      }
+      if (!this.includeArchived && delta.ids.length > 0) {
+        const rows = filterAgentsByIds(agents, delta.ids);
+        AgentPrefetch.getInstance().enqueueVisible(rows, silent ? 'poll' : 'delta');
       }
       return true;
     } catch (e) {
@@ -197,9 +251,12 @@ export class InboxVM {
     } finally {
       this.loading = false;
       this.refreshing = false;
-      if (this.refreshQueued) {
+      this.emitChange();
+      if (this.userRefreshPending) {
         this.refreshQueued = false;
-        this.refresh(true).catch(() => {
+      } else if (this.refreshQueued) {
+        this.refreshQueued = false;
+        this.requestRefresh(true, INBOX_SILENT_MIN_MS).catch(() => {
         });
       }
     }
@@ -245,11 +302,11 @@ export class InboxVM {
   }
 
   startWatch(): void {
-    if (this.watchTimer >= 0) {
-      return;
+    if (this.watchTimer < 0) {
+      this.tickWatch();
+      this.armWatch();
     }
-    this.tickWatch();
-    this.armWatch();
+    this.armListRefresh();
   }
 
   stopWatch(): void {
@@ -257,20 +314,43 @@ export class InboxVM {
       clearTimeout(this.watchTimer);
       this.watchTimer = -1;
     }
+    if (this.listTimer >= 0) {
+      clearTimeout(this.listTimer);
+      this.listTimer = -1;
+    }
   }
 
   private armWatch(): void {
     if (this.watchTimer >= 0) {
       return;
     }
-    const jitter = Math.floor(Math.random() * 3000);
+    const inflight = this.inFlightAgents().length > 0;
+    const jitter = Math.floor(Math.random() * (inflight ? 1200 : 3000));
+    const delay = (inflight ? 4000 : 8000) + jitter;
     this.watchTimer = setTimeout(() => {
       this.watchTimer = -1;
       this.tickWatch();
       if (AppState.foreground) {
         this.armWatch();
       }
-    }, 8000 + jitter) as number;
+    }, delay) as number;
+  }
+
+  private armListRefresh(): void {
+    if (this.listTimer >= 0) {
+      return;
+    }
+    this.listTimer = setTimeout(() => {
+      this.listTimer = -1;
+      if (AppState.foreground && this.inFlightAgents().length > 0) {
+        SessionDiag.emit({ tag: TAG, event: 'list_refresh', extra: 'silent' });
+        this.requestRefresh(true, 15000).catch(() => {
+        });
+      }
+      if (AppState.foreground) {
+        this.armListRefresh();
+      }
+    }, 15000) as number;
   }
 
   private tickWatch(): void {
@@ -393,7 +473,21 @@ export class InboxVM {
         more = more.filter((a: AgentSummary) => a.status !== 'ARCHIVED');
       }
       this.nextCursor = unwrapped.nextCursor ?? '';
-      const merged = sortByRecency(this.source.snapshot().concat(more));
+      this.mergeRunStatus(more);
+      const prev = this.source.snapshot();
+      const seen: Record<string, boolean> = {};
+      for (let i = 0; i < prev.length; i++) {
+        seen[prev[i].id] = true;
+      }
+      const extra: AgentSummary[] = [];
+      for (let i = 0; i < more.length; i++) {
+        if (!seen[more[i].id]) {
+          extra.push(more[i]);
+        }
+      }
+      let merged = mergeInboxLists(prev.concat(extra), prev, this.heldIds, Date.now());
+      merged = sortByRecency(merged);
+      this.heldIds = this.heldIdsStillMissing(merged);
       this.source.replaceAll(merged);
       const filtered = this.includeArchived || this.prUrlFilter.length > 0;
       AgentCache.getInstance().saveInbox(merged, filtered ? 'merge' : 'full');
@@ -417,6 +511,19 @@ export class InboxVM {
       }
     }
     return n;
+  }
+
+  peek(agentId: string): AgentSummary | undefined {
+    if (!agentId || agentId.length === 0) {
+      return undefined;
+    }
+    const snap = this.source.snapshot();
+    for (let i = 0; i < snap.length; i++) {
+      if (snap[i].id === agentId) {
+        return snap[i];
+      }
+    }
+    return undefined;
   }
 
   setIncludeArchived(value: boolean): void {
@@ -451,7 +558,9 @@ export class InboxVM {
       item.lastUserAt = pickNewerIso(item.lastUserAt ?? '', iso);
       item.updatedAt = pickNewerIso(item.updatedAt, iso);
       this.source.updateAt(i, item);
-      AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
+      const ordered = sortByRecency(this.source.snapshot());
+      this.source.replaceAll(ordered);
+      AgentCache.getInstance().saveInbox(ordered, 'merge');
       this.dirty = true;
       this.emitChange();
       return;
@@ -542,8 +651,8 @@ export class InboxVM {
     if (oldStatus === now || (oldStatus.length > 0 && isTerminalRun(oldStatus))) {
       return;
     }
-    const watching = DetailVM.getActive()?.agentId ?? '';
-    if (watching === a.id && AppState.foreground) {
+    const watching = DetailVM.getActive()?.isViewing(a.id) === true;
+    if (watching && AppState.foreground) {
       return;
     }
     const zh = runStatusLabel(now);

@@ -14,6 +14,7 @@
 - 主路径：Inbox → 新建 Agent → 详情（对话/SSE/追问/PR）→ 设置（API Key）
 - 设备：HUAWEI Pura X Max（无线调试）
 - 构建 `./scripts/build.sh`，安装 `./scripts/install.sh`
+- 真机 QA：`.cursor/skills/hm-device-qa/SKILL.md`
 
 卓易通 WebView 壳在独立仓 `treeatetree/cursor-agents-android`，本仓不再含 Android 工程。
 
@@ -21,7 +22,7 @@
 
 ## 2026-08-18 已合入 main（PR #9 squash `3bb63a2`）
 
-审查加固 + Android 拆仓已在 GitHub `main`。本地应与 `origin/main` 对齐。
+审查加固 + Android 拆仓已在 GitHub `main`（HEAD `d580066`）。
 
 已做（节选）：
 - Inbox 分组打平为 `header | pair | agent`，单 `LazyForEach`（`InboxFeedSource` + `flattenCardFeed` / `flattenListFeed`）
@@ -30,6 +31,22 @@
 - 本仓删除 `android-shell/`、`android-shell-immersive/`、`scripts/install-android.sh`
 
 视觉锁仍有效：beUI；锌浅/深；无绿糖、无左边条；封面/外屏/内屏竖固定双列；`Tokens.cardH = 116`；禁止卡片 `height: '100%'`。
+
+---
+
+## 2026-08-18 会话打磨（`ux/session-polish` → main）
+
+会话体验 + 缓存/预取 + 真机 QA，合成一个 commit 合进 main。真机编装过，`onDeviceTest` 24/24。
+
+1. **会话还在跑时不像结束了**：底部「在想下一步…」；隐藏 Cursor 内部 `步骤 642`；`DetailVM` 单例 + attach/detach，离开详情不拆 SSE。
+2. **同步更快**：Inbox 运行中约 4s 刷状态；静默刷新合并（`requestRefresh`）；冷启动不再把磁盘时间当刚打过网；未读/可见卡预取；已结束会话可 cache-only 打开。
+3. **缓存**：产物/用量进磁盘；`CachePolicy` 判断能不能跳过 conversation；上限 LRU 80 / 磁盘 2000；裁剪时保留 `localAt` 和图片 URL。
+4. **Inbox / 详情 UI**：顶栏横幅改成底栏 `StatusPill` + 按页 `ToastHost`；未读用锂灰描边；新建嵌套 sheet 改 overlay（点「自动」不再关掉整页半屏）；双列卡已复验等宽。规划芯片浅蓝留下。诊断日志默认开。
+5. **QA**：`scripts/device-qa.sh` + `.cursor/skills/hm-device-qa/SKILL.md`；`test.sh` 走 `onDeviceTest`。截图 `.cursor/review-shots/` 已 gitignore。离线提示走 Inbox `StatusPill`，已删 `NetworkBanner`。
+
+走查接受、不改：筛选芯片仍在顶栏；详情 meta 在 `···`。
+
+签名必须空 `signingConfigs`。DevEco 写进跟踪文件时跑 `./scripts/capture-signing-local.sh`。
 
 ---
 
@@ -76,6 +93,7 @@ entry/src/main/ets/
 ./scripts/wifi-connect.sh connect <ip:port>
 ./scripts/build.sh
 ./scripts/install.sh
-./scripts/test.sh          # 需要已连接设备
+./scripts/test.sh          # 真机 onDeviceTest；不要 hvigor entry@ohosTest test
+./scripts/device-qa.sh capture <name>   # 截图+dump → .cursor/review-shots/
 CURSOR_API_KEY=… python3 ./scripts/api-smoke.py
 ```

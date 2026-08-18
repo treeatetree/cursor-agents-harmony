@@ -26,4 +26,8 @@ export interface TimelineItem {
   stepCount?: number;
   usageShort?: string;
   sentTags?: string[];
+  /** Local or API ISO time. Empty means unknown — never invent for history. */
+  localAt?: string;
+  /** https / file URIs to show in the bubble. Never store raw base64 here. */
+  imageUrls?: string[];
 }

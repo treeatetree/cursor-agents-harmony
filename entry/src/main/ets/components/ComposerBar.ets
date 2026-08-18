@@ -1,5 +1,6 @@
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
+import { HuChip } from './HuChip';
 import { HuIconButton } from './HuIconButton';
 import { HuTextButton } from './HuTextButton';
 
@@ -62,11 +63,10 @@ export struct ComposerBar {
       }
 
       Row({ space: 4 }) {
-        HuTextButton({
-          label: this.followUpMode === 'plan' ? '规划' : 'Agent',
-          compact: false,
-          active: true,
-          color: $r('app.color.text_secondary'),
+        HuChip({
+          label: '规划',
+          on: this.followUpMode === 'plan',
+          tone: 'plan',
           onTap: () => {
             this.onModeChange(this.followUpMode === 'plan' ? 'agent' : 'plan');
           }

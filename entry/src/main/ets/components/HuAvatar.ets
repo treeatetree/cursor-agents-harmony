@@ -6,8 +6,8 @@ import { AVATAR_IDS, avatarLabel, normalizeAvatarId } from '../utils/AvatarPrese
 
 @Component
 export struct HuAvatar {
-  @Prop preset: string = 'iridescent';
-  @Prop @Watch('onPhotoUri') photoUri: string = '';
+  @Prop @Watch('onFace') preset: string = 'iridescent';
+  @Prop @Watch('onFace') photoUri: string = '';
   @Prop box: number = Tokens.touchMin;
   @Prop ring: boolean = false;
   @Prop haptic: boolean = true;
@@ -16,7 +16,7 @@ export struct HuAvatar {
   onTap: () => void = () => {
   };
 
-  onPhotoUri(_name: string): void {
+  onFace(_name: string): void {
     this.photoFailed = false;
   }
 

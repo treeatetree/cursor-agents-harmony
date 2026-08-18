@@ -74,6 +74,7 @@ export class PrefStore {
       this.aliasById = await this.loadStringMap(KEY_ALIAS);
       this.lastSeenById = await this.loadStringMap(KEY_LAST_SEEN);
       this.pinnedIds = await this.readPinnedIds();
+      this.publishAvatar(await this.getAvatarPreset(), await this.getAvatarPhoto());
     } catch (e) {
       Log.warn(TAG, `init failed: ${JSON.stringify(e)}`);
     }
@@ -211,7 +212,7 @@ export class PrefStore {
     if (!this.pref) {
       return false;
     }
-    return (await this.pref.get(KEY_DIAG, false)) as boolean;
+    return (await this.pref.get(KEY_DIAG, true)) as boolean;
   }
 
   async setDiagEnabled(value: boolean): Promise<void> {
@@ -458,11 +459,7 @@ export class PrefStore {
   }
 
   async setAvatarPreset(value: string): Promise<void> {
-    if (!this.pref) {
-      return;
-    }
-    await this.pref.put(KEY_AVATAR, value);
-    await this.pref.flush();
+    await this.saveAvatar(value, await this.getAvatarPhoto());
   }
 
   async getAvatarPhoto(): Promise<string> {
@@ -473,11 +470,27 @@ export class PrefStore {
   }
 
   async setAvatarPhoto(value: string): Promise<void> {
-    if (!this.pref) {
-      return;
+    await this.saveAvatar(await this.getAvatarPreset(), value);
+  }
+
+  async saveAvatar(preset: string, photo: string): Promise<void> {
+    const id = preset.length > 0 ? preset : 'iridescent';
+    const uri = id === 'custom' ? photo : '';
+    if (this.pref) {
+      await this.pref.put(KEY_AVATAR, id);
+      await this.pref.put(KEY_AVATAR_PHOTO, uri);
+      await this.pref.flush();
     }
-    await this.pref.put(KEY_AVATAR_PHOTO, value);
-    await this.pref.flush();
+    this.publishAvatar(id, uri);
+  }
+
+  private publishAvatar(preset: string, photo: string): void {
+    try {
+      AppStorage.setOrCreate('avatarPreset', preset);
+      AppStorage.setOrCreate('avatarPhoto', photo);
+      AppStorage.setOrCreate('avatarRev', Date.now());
+    } catch (_e) {
+    }
   }
 
   async getLastTools(): Promise<string> {

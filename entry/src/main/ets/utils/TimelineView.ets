@@ -1,4 +1,5 @@
 import { TimelineItem } from '../models/Timeline';
+import { isLiveWaitItem } from './TimelineMedia';
 
 function activityHasBody(it: TimelineItem, hasTool: boolean): boolean {
   if ((it.text ?? '').trim().length > 0) {
@@ -7,18 +8,9 @@ function activityHasBody(it: TimelineItem, hasTool: boolean): boolean {
   return hasTool;
 }
 
-/** Empty streaming think with no tools yet — paint "思考中…" instead of a hollow card. */
-export function isWaitingThink(item: TimelineItem, hasTool: boolean): boolean {
-  if (item.kind !== 'thinking') {
-    return false;
-  }
-  if (item.streaming !== true) {
-    return false;
-  }
-  if ((item.text ?? '').trim().length > 0) {
-    return false;
-  }
-  return hasTool !== true;
+/** Empty streaming think — the live "still running" tail, even after tools/assistant. */
+export function isWaitingThink(item: TimelineItem, _hasTool: boolean = false): boolean {
+  return isLiveWaitItem(item);
 }
 
 /** Finished headers were painting "运行 · 已完成" on top of another 已完成. */
@@ -76,14 +68,17 @@ export function visibleTimeline(items: TimelineItem[]): TimelineItem[] {
     }
     if (it.kind === 'thinking' || it.kind === 'progress' || it.kind === 'step') {
       const run = it.runId ?? '';
-      if (leadSeen[run] === true) {
+      const liveWait = isLiveWaitItem(it);
+      if (leadSeen[run] === true && !liveWait) {
         continue;
       }
       const live = it.streaming === true;
       if (!live && !activityHasBody(it, hasTool[run] === true)) {
         continue;
       }
-      leadSeen[run] = true;
+      if (!liveWait) {
+        leadSeen[run] = true;
+      }
     }
     out.push(it);
   }
@@ -234,4 +229,19 @@ export function nextUserJumpAt(
     return -1;
   }
   return next;
+}
+
+export function visibleKeySig(items: TimelineItem[]): string {
+  let out = '';
+  for (let i = 0; i < items.length; i++) {
+    if (i > 0) {
+      out += '\n';
+    }
+    out += items[i].key;
+  }
+  return out;
+}
+
+export function visibleRowSig(item: TimelineItem): string {
+  return `${item.text ?? ''}|${item.streaming === true ? '1' : '0'}|${item.statusLabel ?? ''}|${item.stepCount ?? 0}|${item.collapsed === true ? '1' : '0'}|${item.pinnedOpen === true ? '1' : '0'}|${item.failed === true ? '1' : '0'}`;
 }

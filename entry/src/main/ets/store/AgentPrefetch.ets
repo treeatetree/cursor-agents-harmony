@@ -1,24 +1,34 @@
-import { AgentDetail, ConversationMessage, Run, RunStatus, RunsListResponse } from '../models/Api';
+import { AgentDetail, AgentSummary, ConversationMessage, Run, RunStatus, RunsListResponse } from '../models/Api';
 import { unwrapAgentDetail } from '../api/ApiUnwrap';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { AgentCache } from './AgentCache';
 import { ApiKeyStore } from './ApiKeyStore';
+import { lastTextSummary } from '../utils/StreamText';
+import { cacheCoversDetail } from '../utils/CachePolicy';
+import { isRunInFlight } from '../utils/InboxGrouping';
 import { SessionDiag } from '../utils/SessionDiag';
 
 const TAG = 'Prefetch';
-const QUEUE_MAX = 3;
 const FRESH_MS = 30 * 1000;
 const VISIBLE_STALE_MS = 2 * 60 * 1000;
 
+export interface PrefetchHit {
+  ok: boolean;
+  detail?: AgentDetail;
+  runs?: Run[];
+  messages?: ConversationMessage[];
+}
+
 /**
- * Narrow background warm-up for conversation cache.
- * At most 1 conversation in flight; queue keeps the latest 3 ids.
+ * Background warm-up for conversation cache.
+ * One conversation in flight; already-covered ids are skipped.
  */
 export class AgentPrefetch {
   private static instance: AgentPrefetch | undefined = undefined;
   private queue: string[] = [];
   private lastAt: Record<string, number> = {};
   private inflight: Record<string, boolean> = {};
+  private inflightJobs: Record<string, Promise<PrefetchHit>> = {};
   private running: boolean = false;
 
   static getInstance(): AgentPrefetch {
@@ -42,8 +52,21 @@ export class AgentPrefetch {
       return;
     }
     const watching = this.watchingId();
+    const inbox = AgentCache.getInstance().loadInbox();
+    const priority: string[] = [];
+    const normal: string[] = [];
+    const front = reason === 'unread' || reason === 'terminal';
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
+      if (this.coveredByCache(id, inbox)) {
+        SessionDiag.emit({
+          tag: TAG,
+          event: 'hit',
+          agentId: id,
+          extra: `reason=${reason} settled=1`
+        });
+        continue;
+      }
       if (!this.canPrefetch(id, watching)) {
         SessionDiag.emit({
           tag: TAG,
@@ -54,45 +77,85 @@ export class AgentPrefetch {
         continue;
       }
       this.removeQueued(id);
-      this.queue.push(id);
+      if (front) {
+        priority.push(id);
+      } else {
+        normal.push(id);
+      }
       SessionDiag.emit({
         tag: TAG,
         event: 'enqueue',
         agentId: id,
-        extra: `reason=${reason} q=${this.queue.length}`
+        extra: `reason=${reason} q=${this.queue.length + priority.length + normal.length}`
       });
     }
-    while (this.queue.length > QUEUE_MAX) {
-      const dropped = this.queue.shift();
-      if (dropped && dropped.length > 0) {
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'skip',
-          agentId: dropped,
-          extra: `reason=${reason} overflow=1`
-        });
-      }
-    }
+    this.queue = priority.concat(this.queue.concat(normal));
     this.pump();
+  }
+
+  isInflight(agentId: string): boolean {
+    return agentId.length > 0 && this.inflight[agentId] === true;
+  }
+
+  async awaitInflight(agentId: string): Promise<PrefetchHit | undefined> {
+    const job = this.inflightJobs[agentId];
+    if (!job) {
+      return undefined;
+    }
+    try {
+      return await job;
+    } catch (_e) {
+      return undefined;
+    }
   }
 
   clear(): void {
     this.queue = [];
     this.lastAt = {};
     this.inflight = {};
+    this.inflightJobs = {};
     this.running = false;
   }
 
-  /** Top-of-inbox: skip when conversation cache is fresh enough. */
-  enqueueVisible(ids: string[], reason: string): void {
+  /** Drop queued ids that are not the watching agent. Keep inflight + freshness. */
+  trimIdle(): void {
+    const watch = this.watchingId();
+    const next: string[] = [];
+    for (let i = 0; i < this.queue.length; i++) {
+      const id = this.queue[i];
+      if (id === watch || this.inflight[id] === true) {
+        next.push(id);
+      }
+    }
+    this.queue = next;
+  }
+
+  /** Top-of-inbox: skip when conversation cache already covers the Inbox row. */
+  enqueueVisible(rows: AgentSummary[], reason: string): void {
     const cache = AgentCache.getInstance();
     const want: string[] = [];
-    for (let i = 0; i < ids.length; i++) {
-      const id = ids[i];
+    for (let i = 0; i < rows.length; i++) {
+      const a = rows[i];
+      const id = a.id;
       const cached = cache.loadAgent(id);
       const n = cached?.messages?.length ?? 0;
       const age = cached && cached.fetchedAt > 0 ? Date.now() - cached.fetchedAt : -1;
-      if (n > 0 && age >= 0 && age < VISIBLE_STALE_MS) {
+      const inboxRunId = a.latestRunId ?? '';
+      const inboxRunStatus = `${a.latestRunStatus ?? ''}`;
+      if (cacheCoversDetail(cached, inboxRunId, inboxRunStatus)) {
+        SessionDiag.emit({
+          tag: TAG,
+          event: 'hit',
+          agentId: id,
+          extra: `reason=${reason} settled=1 n=${n}`
+        });
+        continue;
+      }
+      const localRun = cached?.detail?.latestRunId ?? cached?.timelineRunId ?? '';
+      const sameRun = inboxRunId.length === 0 || localRun.length === 0 || inboxRunId === localRun;
+      const live = isRunInFlight(inboxRunStatus);
+      const staleMs = reason === 'show' ? VISIBLE_STALE_MS : FRESH_MS;
+      if (n > 0 && live && sameRun && age >= 0 && age < staleMs) {
         SessionDiag.emit({
           tag: TAG,
           event: 'hit',
@@ -114,6 +177,20 @@ export class AgentPrefetch {
     }
   }
 
+  private coveredByCache(id: string, inbox: AgentSummary[]): boolean {
+    const cached = AgentCache.getInstance().loadAgent(id);
+    let runId = '';
+    let status = '';
+    for (let i = 0; i < inbox.length; i++) {
+      if (inbox[i].id === id) {
+        runId = inbox[i].latestRunId ?? '';
+        status = `${inbox[i].latestRunStatus ?? ''}`;
+        break;
+      }
+    }
+    return cacheCoversDetail(cached, runId, status);
+  }
+
   private canPrefetch(id: string, watching: string): boolean {
     if (!id || id.length === 0) {
       return false;
@@ -132,7 +209,11 @@ export class AgentPrefetch {
 
   private watchingId(): string {
     try {
-      return AppStorage.get<string>('watchingAgentId') ?? '';
+      const watch = AppStorage.get<string>('watchingAgentId') ?? '';
+      if (watch.length > 0) {
+        return watch;
+      }
+      return AppStorage.get<string>('streamingAgentId') ?? '';
     } catch (_e) {
       return '';
     }
@@ -169,42 +250,38 @@ export class AgentPrefetch {
         SessionDiag.emit({ tag: TAG, event: 'skip', agentId: id, extra: 'reason=watch' });
         continue;
       }
-      await this.fetchOne(id);
+      const job = this.fetchOne(id);
+      this.inflightJobs[id] = job;
+      await job;
     }
   }
 
-  private async fetchOne(agentId: string): Promise<void> {
+  private async fetchOne(agentId: string): Promise<PrefetchHit> {
     this.inflight[agentId] = true;
     const started = Date.now();
+    const miss: PrefetchHit = { ok: false };
     try {
       const client = CursorApiClient.getInstance();
       const settled = await Promise.all([
         client.getAgent(agentId),
         client.getRuns(agentId, 20)
       ]);
-      if (this.watchingId() === agentId) {
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'skip',
-          agentId: agentId,
-          elapsedMs: Date.now() - started,
-          extra: 'reason=opened'
-        });
-        return;
-      }
       const detail: AgentDetail = unwrapAgentDetail(settled[0] as object);
       const runs: Run[] = extractRuns(settled[1] as object);
       const conv = await client.getConversation(agentId);
       const messages: ConversationMessage[] = conv.messages ?? [];
-      AgentCache.getInstance().saveAgent(agentId, detail, runs, undefined, messages);
+      const summary = lastTextSummary(messageTexts(messages));
+      AgentCache.getInstance().saveAgent(agentId, detail, runs, summary, messages);
       this.lastAt[agentId] = Date.now();
       SessionDiag.emit({
         tag: TAG,
         event: 'done',
         agentId: agentId,
         elapsedMs: Date.now() - started,
-        extra: `n=${messages.length} runs=${runs.length}`
+        extra: `n=${messages.length} runs=${runs.length} watch=${this.watchingId() === agentId ? 1 : 0}`
       });
+      const hit: PrefetchHit = { ok: true, detail: detail, runs: runs, messages: messages };
+      return hit;
     } catch (_e) {
       SessionDiag.emit({
         tag: TAG,
@@ -212,10 +289,19 @@ export class AgentPrefetch {
         agentId: agentId,
         elapsedMs: Date.now() - started
       });
+      return miss;
     } finally {
       this.inflight[agentId] = false;
     }
   }
+}
+
+function messageTexts(messages: ConversationMessage[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    out.push(messages[i].text ?? '');
+  }
+  return out;
 }
 
 function extractRuns(raw: object): Run[] {
