@@ -19,7 +19,7 @@ import { EnvVarListEditor, McpListEditor, SubagentListEditor } from '../componen
 import { defaultEnv, envNameLabel, hasTools, serializeTools, toolsChipLabel, usesNamedEnv } from '../utils/AgentCapabilities';
 import { repoIdentity, repoTail } from '../utils/DisplayFmt';
 import { collectRecentEnvs, collectRecentRepos, pairRecentRepos, RecentRepo, RecentRepoRow } from '../utils/InboxGrouping';
-import { isOriginRepo } from '../utils/GitLinks';
+import { isOriginRepo, looksLikeRepoUrl } from '../utils/GitLinks';
 import {
   buildParamRows, formatChipFromRows, formatFollowChip, findModel, groupModels, ModelParamRow,
   ModelVendorGroup, paramRowsStamp, rowsToParams, shortModelName, snapParamRows, variantLabel,
@@ -76,7 +76,6 @@ export struct NewAgentPage {
   @State showBindSheet: boolean = false;
   @State sheetKind: string = '';
   @State repoQuery: string = '';
-  @State manualRepoUrl: string = '';
   @State repos: RepoInfo[] = [];
   @State models: ModelInfo[] = [];
   @State modelGroups: ModelVendorGroup[] = [];
@@ -86,7 +85,6 @@ export struct NewAgentPage {
   @State paramStamp: string = '';
   @State modelChipLabel: string = '自动';
   @State windowW: number = 360;
-  @State windowH: number = 780;
   @State topInset: number = 0;
   @State bottomInset: number = 0;
   @State imageNames: string[] = [];
@@ -109,12 +107,10 @@ export struct NewAgentPage {
     this.topInset = this.embedded ? 8 : this.bp.safeTop();
     this.bottomInset = this.bp.composerBottom();
     this.windowW = this.bp.widthVp;
-    this.windowH = this.bp.heightVp;
     this.unsubBp = this.bp.onChange(() => {
       this.topInset = this.embedded ? 8 : this.bp.safeTop();
       this.bottomInset = this.bp.composerBottom();
       this.windowW = this.bp.widthVp;
-      this.windowH = this.bp.heightVp;
     });
     this.vm.hydrateFromCache();
     this.syncFromVm();
@@ -157,18 +153,6 @@ export struct NewAgentPage {
   private closeSheet(): void {
     this.showSheet = false;
     this.showBindSheet = false;
-  }
-
-  private sheetMaxVp(): number {
-    const h = this.windowH > 0 ? this.windowH : this.bp.heightVp;
-    const ratio = this.embedded ? 0.85 : 0.62;
-    const cap = Math.floor(h * ratio);
-    return cap > 280 ? cap : 280;
-  }
-
-  private sheetScrollMaxVp(): number {
-    const max = this.sheetMaxVp() - Tokens.sheetPadTop - Tokens.sheetPadBottom - 52;
-    return max > 160 ? max : 160;
   }
 
   private scheduleDraftSave(text: string): void {
@@ -673,6 +657,9 @@ export struct NewAgentPage {
   @Builder
   formColumn() {
     Column() {
+      if (this.embedded && this.showSheet) {
+        this.sheetBody()
+      } else {
       if (!this.embedded) {
         Row() {
           HuIconButton({
@@ -782,11 +769,12 @@ export struct NewAgentPage {
       .justifyContent(FlexAlign.Start)
       .padding({ top: this.embedded ? 20 : 12, bottom: this.bottomInset })
       .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
+      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.bg0'))
-    .overlay(this.pageOverlays())
+    .overlay(this.noticeDock(), { align: Alignment.Bottom })
     .bindSheet($$this.showBindSheet, this.sheetBody(), {
       height: this.sheetKind === 'repo' ? SheetSize.LARGE : SheetSize.MEDIUM,
       dragBar: true,
@@ -794,32 +782,6 @@ export struct NewAgentPage {
       radius: LengthMetrics.vp(Tokens.radiusSheet),
       backgroundColor: $r('app.color.overlay')
     })
-  }
-
-  @Builder
-  pageOverlays() {
-    Stack({ alignContent: Alignment.Bottom }) {
-      if (this.embedded && this.showSheet) {
-        Column()
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#99000000')
-          .onClick(() => {
-            this.closeSheet();
-          })
-        Column() {
-          this.sheetBody()
-        }
-        .width('100%')
-        .constraintSize({ maxHeight: this.sheetMaxVp() })
-        .backgroundColor($r('app.color.overlay'))
-        .borderRadius({ topLeft: Tokens.radiusSheet, topRight: Tokens.radiusSheet })
-      }
-      this.noticeDock()
-    }
-    .width('100%')
-    .height('100%')
-    .hitTestBehavior(HitTestMode.Transparent)
   }
 
   @Builder
@@ -1012,6 +974,7 @@ export struct NewAgentPage {
             .fontSize(Tokens.typeCallout)
             .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
             .placeholderColor($r('app.color.text_placeholder'))
+            .fontColor($r('app.color.text_primary'))
             .backgroundColor($r('app.color.field_bg'))
             .borderRadius(Tokens.radiusField)
             .onChange((v: string) => {
@@ -1020,12 +983,13 @@ export struct NewAgentPage {
               this.refreshCanSubmit();
             })
         }
-        TextInput({ text: this.repoQuery, placeholder: '搜索 owner/repo' })
+        TextInput({ text: this.repoQuery, placeholder: '搜索名称，或粘贴仓库 URL' })
           .height(Tokens.touchMin)
           .width('100%')
           .fontSize(Tokens.typeCallout)
           .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
           .placeholderColor($r('app.color.text_placeholder'))
+          .fontColor($r('app.color.text_primary'))
           .backgroundColor($r('app.color.field_bg'))
           .borderRadius(Tokens.radiusField)
           .onChange((v: string) => {
@@ -1035,6 +999,21 @@ export struct NewAgentPage {
           })
 
         List({ space: 8 }) {
+          if (looksLikeRepoUrl(this.repoQuery)) {
+            ListItem() {
+              SheetPickRow({
+                title: this.repoQuery.trim(),
+                caption: '使用粘贴的地址',
+                selected: false,
+                onTap: () => {
+                  this.vm.setManualRepoUrl(this.repoQuery);
+                  this.applyRepoSelection(this.vm.selectedRepo);
+                  this.closeSheet();
+                  this.refreshCanSubmit();
+                }
+              })
+            }
+          }
           ForEach(this.repos, (r: RepoInfo) => {
             ListItem() {
               SheetPickRow({
@@ -1053,33 +1032,6 @@ export struct NewAgentPage {
         .layoutWeight(1)
         .width('100%')
         .scrollBar(BarState.Off)
-
-        Row({ space: 8 }) {
-          TextInput({ text: this.manualRepoUrl, placeholder: '或粘贴 GitHub / Origin 仓库 URL' })
-            .layoutWeight(1)
-            .height(Tokens.touchMin)
-            .fontSize(Tokens.typeCallout)
-            .placeholderFont({ size: Tokens.typeCallout, weight: FontWeight.Regular })
-            .placeholderColor($r('app.color.text_placeholder'))
-            .fontColor($r('app.color.text_primary'))
-            .backgroundColor($r('app.color.field_bg'))
-            .borderRadius(Tokens.radiusField)
-            .padding({ left: 12, right: 12 })
-            .onChange((v: string) => {
-              this.manualRepoUrl = v;
-            })
-          HuTextButton({
-            label: '应用',
-            color: $r('app.color.text_primary'),
-            onTap: () => {
-              this.vm.setManualRepoUrl(this.manualRepoUrl);
-              this.applyRepoSelection(this.vm.selectedRepo);
-              this.closeSheet();
-              this.refreshCanSubmit();
-            }
-          })
-        }
-        .width('100%')
       }
     }
     .padding({
@@ -1096,11 +1048,23 @@ export struct NewAgentPage {
   @Builder
   optionsSheet() {
     Column({ space: Tokens.sheetGap }) {
-      Text('更多')
-        .fontSize(Tokens.typeHeadline)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .width('100%')
+      Row() {
+        Text('更多')
+          .fontSize(Tokens.typeHeadline)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1)
+        HuTextButton({
+          label: '完成',
+          color: $r('app.color.text_secondary'),
+          compact: true,
+          onTap: () => {
+            this.closeSheet();
+          }
+        })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
 
       Scroll() {
         Column({ space: Tokens.sheetGap }) {
@@ -1193,13 +1157,13 @@ export struct NewAgentPage {
         .alignItems(HorizontalAlign.Start)
       }
       .width('100%')
-      .constraintSize({ maxHeight: this.sheetScrollMaxVp() })
+      .layoutWeight(1)
       .align(Alignment.TopStart)
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
     }
     .width('100%')
-    .constraintSize({ maxHeight: this.sheetMaxVp() })
+    .height('100%')
     .padding({
       left: Tokens.sheetPadH,
       right: Tokens.sheetPadH,
@@ -1207,7 +1171,7 @@ export struct NewAgentPage {
       bottom: Tokens.sheetPadBottom
     })
     .alignItems(HorizontalAlign.Start)
-    .backgroundColor($r('app.color.overlay'))
+    .backgroundColor($r('app.color.bg0'))
     .onDisAppear(() => {
       this.vm.mcpServers = this.mcpServers;
       this.vm.subagents = this.subagents;
@@ -1219,11 +1183,23 @@ export struct NewAgentPage {
   @Builder
   modelSheet() {
     Column({ space: Tokens.sheetGap }) {
-      Text('模型')
-        .fontSize(Tokens.typeHeadline)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .width('100%')
+      Row() {
+        Text('模型')
+          .fontSize(Tokens.typeHeadline)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1)
+        HuTextButton({
+          label: '关闭',
+          color: $r('app.color.text_secondary'),
+          compact: true,
+          onTap: () => {
+            this.closeSheet();
+          }
+        })
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
       if (this.modelsLoading && this.modelGroups.length === 0) {
         Text('正在加载模型…')
           .fontSize(Tokens.typeCallout)
@@ -1277,7 +1253,7 @@ export struct NewAgentPage {
         })
       }
       .width('100%')
-      .constraintSize({ maxHeight: this.sheetScrollMaxVp() })
+      .layoutWeight(1)
       .scrollBar(BarState.Off)
       .align(Alignment.TopStart)
       .edgeEffect(EdgeEffect.Spring)
@@ -1289,9 +1265,9 @@ export struct NewAgentPage {
       bottom: Tokens.sheetPadBottom
     })
     .width('100%')
-    .constraintSize({ maxHeight: this.sheetMaxVp() })
+    .height('100%')
     .alignItems(HorizontalAlign.Start)
-    .backgroundColor($r('app.color.overlay'))
+    .backgroundColor($r('app.color.bg0'))
   }
 
   @Builder

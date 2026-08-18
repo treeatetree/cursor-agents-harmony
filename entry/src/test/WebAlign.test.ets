@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@ohos/hypium';
-import { gitCompareUrl, isOriginRepo, normalizeCreateRepoUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
+import { gitCompareUrl, isOriginRepo, looksLikeRepoUrl, normalizeCreateRepoUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
 import { applyInboxQuery, collectRecentEnvs, diffInboxAgents, groupAgents, inboxDeltaLabel, mergeInboxLists, recencyMs, sortByRecency } from '../main/ets/utils/InboxGrouping';
 import { unwrapAgentsList } from '../main/ets/api/ApiUnwrap';
 import { agentIdFromLaunch, noticeTextFromLaunch, showUnreadFromLaunch } from '../main/ets/utils/WantParse';
@@ -137,6 +137,12 @@ export default function webAlignTest() {
       expect(isOriginRepo('https://origin.cursor.com/acme/app')).assertTrue();
       expect(isOriginRepo('https://github.com/acme/app')).assertFalse();
       expect(isOriginRepo('https://cursor.com/docs/origin')).assertFalse();
+    });
+
+    it('detects pasted repo urls vs name search', 0, () => {
+      expect(looksLikeRepoUrl('https://github.com/acme/app')).assertTrue();
+      expect(looksLikeRepoUrl('git@github.com:acme/app.git')).assertTrue();
+      expect(looksLikeRepoUrl('family-finance')).assertFalse();
     });
 
     it('normalizes codebase urls to origin clone urls', 0, () => {

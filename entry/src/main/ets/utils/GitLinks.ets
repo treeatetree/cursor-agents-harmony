@@ -74,6 +74,18 @@ export function isOriginRepo(repoUrl: string): boolean {
   return !!git && isOriginGit(git);
 }
 
+/** Typed text is a pasteable GitHub / Origin URL, not a name filter. */
+export function looksLikeRepoUrl(raw: string): boolean {
+  const t = (raw ?? '').trim().toLowerCase();
+  if (t.length < 8) {
+    return false;
+  }
+  if (t.indexOf('https://') === 0 || t.indexOf('http://') === 0 || t.indexOf('git@') === 0) {
+    return true;
+  }
+  return t.indexOf('github.com/') >= 0 || t.indexOf('origin.cursor.com/') >= 0;
+}
+
 /** Codebase browse URL → Origin clone URL used by Cloud Agents. */
 export function normalizeCreateRepoUrl(url: string): string {
   const cleaned = (url ?? '').trim();
