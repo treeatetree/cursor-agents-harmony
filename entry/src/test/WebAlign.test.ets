@@ -12,6 +12,8 @@ import { unwrapUsageRuns } from '../main/ets/api/ApiUnwrap';
 import { findUnreadAnchor, countNewContent, isWaitingThink, nextUserJumpAt, visibleKeySig, visibleRowSig, visibleTimeline } from '../main/ets/utils/TimelineView';
 import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, usedToolLine, waitingThinkLabel } from '../main/ets/utils/TimelineCopy';
 import { convFingerprint, keepPendingTurns, lastMessageStamp, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
+import { isComposerProtocol, parseComposerProtocol, taskCardBody, taskCardTitle } from '../main/ets/utils/ConvProtocol';
+import { conversationToTimeline } from '../main/ets/utils/ConversationBuild';
 import { cacheCoversConversation, cacheCoversDetail } from '../main/ets/utils/CachePolicy';
 import {
   buildParamRows, coerceParamsToVariant, formatModelSent, ModelParamRow, modelSentTags, rowsToParams, snapParamRows
@@ -980,6 +982,80 @@ export default function webAlignTest() {
       expect(blocks[0].kind).assertEqual('code');
       expect(blocks[0].lang).assertEqual('chat_selection');
       expect(blocks[1].kind).assertEqual('text');
+    });
+  });
+
+  describe('ConvProtocol', () => {
+    const TASK = [
+      '<timestamp>Wednesday, Aug 19, 2026, 8:28 AM (UTC+8)</timestamp>',
+      '<system_notification>',
+      'The following task has finished. If you were already aware, ignore this notification and do not restate prior responses.',
+      '</system_notification>',
+      '<task>',
+      'kind: subagent',
+      'status: success',
+      'task_id: 2db9ace2-7e65-4c17-b5f4-29a5baef5d0a',
+      'title: 调查鸿蒙与替代渠道',
+      'tool_call_id: call_pipT8xFnPd5url2DuQ7k7nw4',
+      'detail: <user_visible_high_level_summary>',
+      '未找到可核验的上架页。',
+      '</user_visible_high_level_summary>',
+      '<response>',
+      '结论如下。',
+      '</response>',
+      '</task>'
+    ].join('\n');
+
+    it('detects composer protocol shells', 0, () => {
+      expect(isComposerProtocol(TASK)).assertTrue();
+      expect(isComposerProtocol('你看一下为啥 inbox 闪蓝')).assertFalse();
+    });
+
+    it('pulls subagent title and body, drops the notification', 0, () => {
+      const p = parseComposerProtocol(TASK);
+      expect(p.protocol).assertTrue();
+      expect(p.userText).assertEqual('');
+      expect(p.tasks.length).assertEqual(1);
+      expect(p.tasks[0].title).assertEqual('调查鸿蒙与替代渠道');
+      expect(taskCardTitle(p.tasks[0])).assertEqual('子任务 · 调查鸿蒙与替代渠道');
+      expect(taskCardBody(p.tasks[0]).indexOf('未找到可核验') >= 0).assertTrue();
+      expect(taskCardBody(p.tasks[0]).indexOf('结论如下') >= 0).assertTrue();
+    });
+
+    it('keeps real text inside user_query', 0, () => {
+      const p = parseComposerProtocol('<user_query>补一下隐私政策</user_query>');
+      expect(p.protocol).assertTrue();
+      expect(p.userText).assertEqual('补一下隐私政策');
+      expect(p.tasks.length).assertEqual(0);
+    });
+
+    it('does not paint protocol as a user bubble', 0, () => {
+      const items = conversationToTimeline([
+        { id: 'u1', type: 'user_message', text: '查上架风险' },
+        { id: 'a1', type: 'assistant_message', text: '先看公开文档。' },
+        { id: 'n1', type: 'user_message', text: TASK }
+      ]);
+      const kinds: string[] = [];
+      for (let i = 0; i < items.length; i++) {
+        kinds.push(items[i].kind);
+      }
+      expect(kinds.indexOf('userPrompt') >= 0).assertTrue();
+      expect(kinds.indexOf('subagent') >= 0).assertTrue();
+      let users = 0;
+      let subs = 0;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'userPrompt') {
+          users += 1;
+          expect((items[i].text ?? '').indexOf('<task>') < 0).assertTrue();
+        }
+        if (items[i].kind === 'subagent') {
+          subs += 1;
+          expect(items[i].statusLabel ?? '').assertEqual('子任务 · 调查鸿蒙与替代渠道');
+          expect(items[i].collapsed).assertEqual(true);
+        }
+      }
+      expect(users).assertEqual(1);
+      expect(subs).assertEqual(1);
     });
   });
 

@@ -33,9 +33,9 @@ import { cacheCoversConversation, cacheCoversDetail } from '../utils/CachePolicy
 import { isRunInFlight } from '../utils/InboxGrouping';
 import { countNewContent, findUnreadAnchor, lastContentKey, visibleTimeline } from '../utils/TimelineView';
 import {
-  extraImageUrls, imageUrlsFromMessage, imageUrlsFromPrompt, isLiveWaitItem,
-  pickMessageTime, waitingKey
+  imageUrlsFromPrompt, isLiveWaitItem, waitingKey
 } from '../utils/TimelineMedia';
+import { conversationToTimeline } from '../utils/ConversationBuild';
 import { canApplyRunStatus, isNewerIso, isTerminalStatus } from '../utils/RunState';
 import { OpIdStore } from '../store/OpIdStore';
 import { RunStateMachine } from './RunStateMachine';
@@ -2401,7 +2401,8 @@ export class DetailVM {
         }
       }
       if (k === 'thinking' || k === 'progress' || k === 'step' || k === 'tool' ||
-        k === 'assistant' || k === 'userPrompt' || k === 'runHeader' || k === 'runOutcome') {
+        k === 'assistant' || k === 'userPrompt' || k === 'runHeader' || k === 'runOutcome' ||
+        k === 'subagent') {
         keep.push({
           key: it.key,
           kind: it.kind,
@@ -2516,108 +2517,7 @@ export class DetailVM {
   }
 
   private buildConversation(messages: ConversationMessage[]): void {
-    const items: TimelineItem[] = [];
-    let assistantIdx = 0;
-    let pendingShort: string[] = [];
-    let pendingKey = '';
-
-    const flushProgress = (): void => {
-      if (pendingShort.length === 0) {
-        return;
-      }
-      const joined = pendingShort.join('\n\n');
-      items.push({
-        key: `progress-${pendingKey}-${assistantIdx}`,
-        kind: 'progress',
-        runId: 'history',
-        text: joined,
-        collapsed: true,
-        stepCount: pendingShort.length
-      });
-      assistantIdx++;
-      pendingShort = [];
-      pendingKey = '';
-    };
-
-    const flushAsAssistant = (): void => {
-      if (pendingShort.length === 0) {
-        return;
-      }
-      // Final short replies (e.g. "pong") stay as real assistant bubbles.
-      const joined = pendingShort.join('\n\n');
-      items.push({
-        key: `asst-${pendingKey}-${assistantIdx}`,
-        kind: 'assistant',
-        runId: 'history',
-        text: joined
-      });
-      assistantIdx++;
-      pendingShort = [];
-      pendingKey = '';
-    };
-
-    for (let i = 0; i < messages.length; i++) {
-      const m = messages[i];
-      const text = (m.text ?? '').trim();
-      const allImgs = imageUrlsFromMessage(m);
-      const extraImgs = extraImageUrls(m);
-      const at = pickMessageTime(m);
-      if (text.length === 0 && allImgs.length === 0) {
-        continue;
-      }
-      const mid = m.id && m.id.length > 0 ? m.id : `i${i}`;
-      if (m.type === 'user_message') {
-        flushAsAssistant();
-        items.push({
-          key: `user-${mid}`,
-          kind: 'userPrompt',
-          runId: 'history',
-          text: text,
-          localAt: at.length > 0 ? at : undefined,
-          imageUrls: allImgs.length > 0 ? allImgs : undefined
-        });
-      } else if (m.type === 'assistant_message') {
-        const last = i === messages.length - 1;
-        if (isProgressText(text) && !last) {
-          if (pendingKey.length === 0) {
-            pendingKey = mid;
-          }
-          pendingShort.push(text);
-        } else if (isProgressText(text) && last) {
-          const hasAnswer = items.length > 0 && items[items.length - 1].kind === 'assistant';
-          if (hasAnswer) {
-            pendingShort.push(text);
-            flushProgress();
-          } else if (pendingShort.length > 0) {
-            pendingShort.push(text);
-            flushAsAssistant();
-          } else {
-            items.push({
-              key: `asst-${mid}-${assistantIdx}`,
-              kind: 'assistant',
-              runId: 'history',
-              text: text,
-              localAt: at.length > 0 ? at : undefined,
-              imageUrls: extraImgs.length > 0 ? extraImgs : undefined
-            });
-            assistantIdx++;
-          }
-        } else {
-          flushProgress();
-          items.push({
-            key: `asst-${mid}-${assistantIdx}`,
-            kind: 'assistant',
-            runId: 'history',
-            text: text,
-            localAt: at.length > 0 ? at : undefined,
-            imageUrls: extraImgs.length > 0 ? extraImgs : undefined
-          });
-          assistantIdx++;
-        }
-      }
-    }
-    flushAsAssistant();
-    this.source.replaceAll(items);
+    this.source.replaceAll(conversationToTimeline(messages));
     this.applyUnreadScroll();
   }
 

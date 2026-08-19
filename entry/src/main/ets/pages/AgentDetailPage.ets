@@ -2397,6 +2397,19 @@ struct AgentDetailPage {
       .padding({ top: 10, bottom: 2 })
       .alignItems(VerticalAlign.Center)
       .transition(chromeTransition())
+    } else if (item.kind === 'subagent') {
+      ActivityCard({
+        item: item,
+        runActive: false,
+        shimmerOn: this.shimmerOn,
+        title: item.statusLabel ?? '子任务',
+        body: item.text ?? '',
+        tools: [],
+        onToggle: () => {
+          Haptics.tick();
+          this.vm.toggleCollapsed(item.key);
+        }
+      })
     } else if (item.kind === 'thinking' || item.kind === 'progress' || item.kind === 'step') {
       if (this.isWaitingRow(item)) {
         Text(this.waitingLine())

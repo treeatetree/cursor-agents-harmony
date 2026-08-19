@@ -9,7 +9,8 @@ export type TimelineKind =
   | 'assistant'
   | 'tool'
   | 'runOutcome'
-  | 'streamNotice';
+  | 'streamNotice'
+  | 'subagent';
 
 export interface TimelineItem {
   key: string;
