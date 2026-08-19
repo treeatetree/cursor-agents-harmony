@@ -25,3 +25,4 @@ signing/material/
 .cxx/
 *.log
 .cursor/review-shots/
+ref/

@@ -23,6 +23,9 @@ description: >-
 - 坑：单节点一个 `bindSheet`；`@Builder` 后不链式 `.layoutWeight`。
 - 真机命令、hdc 路径：`dev-os` 的 `environment.md` + `.cursor/HANDOFF-REVIEW.md`。
 - 真机走查 / Hypium：`.cursor/skills/hm-device-qa/SKILL.md`，`./scripts/device-qa.sh` + `./scripts/test.sh`（`onDeviceTest`，不要 hvigor `test`）。
+- Inbox / 仓库分组：同时只展开一个（含置顶）。状态提示用 pill，不要横幅。
+- 云端慢：加载过的缓存住；未读/胶囊/角标/预加载同一套逻辑。
+- 技术整改和商店合规分轨。上架材料进 `doc/`，不要和稳定性 todos 捆在一起。
 - 默认不 commit。不要改 `.cursor/plans/`。
 
 详细审查顺序和刚回滚项：`.cursor/HANDOFF-REVIEW.md`。
