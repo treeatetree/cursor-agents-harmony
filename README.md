@@ -12,7 +12,7 @@ Cursor Cloud Agents 的鸿蒙原生指挥台。直连 `api.cursor.com`，不走 
 - 新建 Agent（仓库、分支、模型、Agent/Plan、自动 PR）
 - Agent 详情：SSE 流式时间线、Outcome（PR/分支）、追问、取消
 - Pura X Max：外屏 / 内屏展开 / 横竖屏断点（Stack ↔ Split）
-- 网络断开横幅、轻触觉、键盘 RESIZE
+- 网络断开 StatusPill 提示、轻触觉、键盘 RESIZE
 
 ## 环境
 
