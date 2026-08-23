@@ -11,13 +11,33 @@ export function isInFlightStatus(status?: string): boolean {
   return status === 'RUNNING' || status === 'CREATING';
 }
 
-/** True when an incoming snapshot may replace the current run status. */
-export function canApplyRunStatus(prev: string, next: string): boolean {
+/**
+ * Inbox finish-notify only on a live in-flight → terminal flip.
+ * Empty/unknown old status is first paint or list filling in history — not a new result.
+ */
+export function shouldNoteTerminal(oldStatus: string, now: string): boolean {
+  if (!isTerminalStatus(now)) {
+    return false;
+  }
+  if (oldStatus === now || isTerminalStatus(oldStatus)) {
+    return false;
+  }
+  return isInFlightStatus(oldStatus);
+}
+
+/**
+ * True when an incoming snapshot may replace the current run status.
+ * SSE/list must not revive a terminal run. A confirmed GET run may.
+ */
+export function canApplyRunStatus(prev: string, next: string, confirmed: boolean = false): boolean {
   if (!next || next.length === 0) {
     return false;
   }
   if (prev === next) {
     return true;
+  }
+  if (isTerminalStatus(prev) && isInFlightStatus(next)) {
+    return confirmed;
   }
   if (isTerminalStatus(prev) && !isTerminalStatus(next)) {
     return false;

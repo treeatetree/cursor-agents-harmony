@@ -66,9 +66,7 @@ export function fadeTransition(): TransitionEffect {
   if (ms <= 0) {
     return TransitionEffect.IDENTITY;
   }
-  return TransitionEffect.OPACITY
-    .combine(TransitionEffect.translate({ y: 6 }))
-    .animation({ duration: ms, curve: Curve.EaseOut });
+  return TransitionEffect.OPACITY.animation({ duration: ms, curve: Curve.EaseOut });
 }
 
 /** Inbox group cards appearing under a section. */

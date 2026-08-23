@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="app" data-sys="be" data-mode="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Plan 卡 · 折叠 / 展开</title>
+  <link rel="stylesheet" href="tokens.css" />
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: #FAFAFA;
+      font-family: var(--font-ui);
+    }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(2, 664px);
+      gap: 28px;
+      justify-content: center;
+      padding: 36px 24px 48px;
+    }
+    .col { display: flex; flex-direction: column; gap: 10px; }
+    .col h2 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 500;
+      color: #A1A1AA;
+      letter-spacing: .04em;
+    }
+    .phone {
+      width: 664px;
+      height: 939px;
+      background: var(--bg);
+      color: var(--ink);
+      overflow: hidden;
+    }
+    .feed {
+      padding: 16px 16px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .user {
+      align-self: flex-end;
+      max-width: 78%;
+      background: var(--bg1);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: var(--t-prose);
+      line-height: var(--lh-prose);
+    }
+    .env {
+      font-size: var(--t-micro);
+      color: var(--ink3);
+      padding-top: 4px;
+    }
+    .plan {
+      background: var(--bg2);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+    .plan-h {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 28px;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    .plan-h-l {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .plan-ico {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      color: var(--ink2);
+    }
+    .plan-title {
+      font-size: var(--t-caption);
+      font-weight: 500;
+      color: var(--ink);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .plan-path {
+      font-family: var(--font-mono);
+      font-size: var(--t-micro);
+      color: var(--ink3);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .plan-ov {
+      padding: 0 10px 10px;
+      font-size: var(--t-caption);
+      line-height: var(--lh-caption);
+      color: var(--ink2);
+    }
+    .plan-todos {
+      border-top: 1px solid var(--line);
+      padding: 8px 10px 10px;
+    }
+    .plan-todos-h {
+      font-size: var(--t-caption);
+      color: var(--ink2);
+      margin-bottom: 8px;
+    }
+    .todo {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: var(--t-caption);
+      line-height: 18px;
+      color: var(--ink);
+      padding: 3px 0;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      margin-top: 4px;
+      border: 1px solid var(--ink3);
+      border-radius: 99px;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    .dot.done {
+      background: var(--ink);
+      border-color: var(--ink);
+    }
+    .more {
+      font-size: var(--t-caption);
+      color: var(--ink3);
+      padding: 4px 0 0 18px;
+    }
+    .body {
+      border-top: 1px solid var(--line);
+      padding: 10px;
+      font-size: var(--t-prose);
+      line-height: var(--lh-prose);
+      color: var(--ink);
+    }
+    .body h2 {
+      margin: 0 0 8px;
+      font-size: var(--t-headline);
+      font-weight: 700;
+      color: var(--ink);
+      letter-spacing: 0;
+    }
+    .body ul {
+      margin: 0;
+      padding: 0 0 0 16px;
+      color: var(--ink2);
+      font-size: var(--t-callout);
+      line-height: var(--lh-list);
+    }
+    @media (max-width: 1400px) {
+      .board { grid-template-columns: 664px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="board">
+    <div class="col">
+      <h2>详情 · Plan 卡收起</h2>
+      <div class="phone" data-theme="app">
+        <div class="feed">
+          <div class="user">帮我梳理上架鸿蒙商店还要做哪些，列一张清单</div>
+          <div class="env">环境就绪</div>
+          <article class="plan">
+            <div class="plan-h">
+              <div class="plan-h-l">
+                <svg class="plan-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M7 3.5h7.2L19 8.3V20a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 6 20V5A1.5 1.5 0 0 1 7.5 3.5H7zm7.4 1.2v3.4h3.4l-3.4-3.4zM9 12.2h6v1.3H9v-1.3zm0 3.2h6v1.3H9V15.4z"/>
+                </svg>
+                <div class="plan-title">鸿蒙商店上架准备</div>
+              </div>
+              <div class="plan-path">plans/…32f8dfe4.plan.md</div>
+            </div>
+            <div class="plan-ov">按中国大陆 + 海外 AppGallery、个人开发者、暂无 Cursor 品牌授权的现状推进。先解除品牌、隐私跨境和备案硬门槛。</div>
+            <div class="plan-todos">
+              <div class="plan-todos-h">6 项待办</div>
+              <div class="todo"><span class="dot"></span>锁定独立品牌、bundleName、Cursor 授权结论和 V1 收费模式</div>
+              <div class="todo"><span class="dot"></span>完成数据清单、隐私/协议、跨境披露、软著、APP 备案与 AI 合规确认</div>
+              <div class="todo"><span class="dot"></span>创建 AGC 应用并补齐发布签名、release 产物、安全和审核测试账号</div>
+              <div class="more">还有 3 项</div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <h2>详情 · Plan 卡展开</h2>
+      <div class="phone" data-theme="app">
+        <div class="feed">
+          <div class="user">帮我梳理上架鸿蒙商店还要做哪些，列一张清单</div>
+          <div class="env">环境就绪</div>
+          <article class="plan">
+            <div class="plan-h">
+              <div class="plan-h-l">
+                <svg class="plan-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M7 3.5h7.2L19 8.3V20a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 6 20V5A1.5 1.5 0 0 1 7.5 3.5H7zm7.4 1.2v3.4h3.4l-3.4-3.4zM9 12.2h6v1.3H9v-1.3zm0 3.2h6v1.3H9V15.4z"/>
+                </svg>
+                <div class="plan-title">鸿蒙商店上架准备</div>
+              </div>
+              <div class="plan-path">plans/…32f8dfe4.plan.md</div>
+            </div>
+            <div class="plan-ov">按中国大陆 + 海外 AppGallery、个人开发者、暂无 Cursor 品牌授权的现状推进。先解除品牌、隐私跨境和备案硬门槛。</div>
+            <div class="plan-todos">
+              <div class="plan-todos-h">6 项待办</div>
+              <div class="todo"><span class="dot"></span>锁定独立品牌、bundleName、Cursor 授权结论和 V1 收费模式</div>
+              <div class="todo"><span class="dot"></span>完成数据清单、隐私/协议、跨境披露、软著、APP 备案与 AI 合规确认</div>
+              <div class="todo"><span class="dot"></span>创建 AGC 应用并补齐发布签名、release 产物、安全和审核测试账号</div>
+              <div class="more">还有 3 项</div>
+            </div>
+            <div class="body">
+              <h2>当前结论</h2>
+              <ul>
+                <li>硬阻塞：尚未创建 AGC 应用；无发布证书。</li>
+                <li>最高风险：名称与包名直接使用 Cursor 品牌，没有书面授权。</li>
+                <li>首发建议免费无内购，收费作为单独决策门。</li>
+              </ul>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

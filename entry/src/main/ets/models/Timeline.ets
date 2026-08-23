@@ -10,7 +10,8 @@ export type TimelineKind =
   | 'tool'
   | 'runOutcome'
   | 'streamNotice'
-  | 'subagent';
+  | 'subagent'
+  | 'plan';
 
 export interface TimelineItem {
   key: string;
@@ -31,4 +32,6 @@ export interface TimelineItem {
   localAt?: string;
   /** https / file URIs to show in the bubble. Never store raw base64 here. */
   imageUrls?: string[];
+  /** Nested spawn brief for a subagent card. */
+  promptText?: string;
 }

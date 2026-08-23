@@ -1,14 +1,16 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { isBlockedLinkScheme, isInAppBrowserUrl, isSafeHttpsUrl, parseHttpUrl } from '../main/ets/utils/SafeUrl';
 import { repoIdentity } from '../main/ets/utils/DisplayFmt';
-import { canApplyRunStatus, isInFlightStatus, isTerminalStatus, phaseFromRun, pickNewerIso } from '../main/ets/utils/RunState';
-import { canFlushQueue, emptyQueue } from '../main/ets/viewmodels/FollowUpQueue';
+import { canApplyRunStatus, isInFlightStatus, isTerminalStatus, phaseFromRun, pickNewerIso,
+  shouldNoteTerminal } from '../main/ets/utils/RunState';
+import { canFlushQueue, emptyQueue, queueBackoffMs } from '../main/ets/viewmodels/FollowUpQueue';
+import { mapCreateHttpMessage } from '../main/ets/utils/ApiErrorMap';
 import { appendRuntimeText, capMessages, capTimeline, clipText, CACHE_TEXT_MAX,
   CACHE_TIMELINE_MAX_ITEMS } from '../main/ets/utils/CacheLimit';
 import { sanitizeDiagExtra } from '../main/ets/utils/SessionDiag';
 import { isLiveWaitItem, isOpaqueStepLabel, isShowableImageUrl, imageUrlsFromMessage, imageUrlsFromText } from '../main/ets/utils/TimelineMedia';
 import { meaningfulStepTitle } from '../main/ets/utils/TimelineCopy';
-import { findUnreadAnchor, countNewContent, isWaitingThink } from '../main/ets/utils/TimelineView';
+import { canUserJump, findUnreadAnchor, countNewContent, isWaitingThink } from '../main/ets/utils/TimelineView';
 import { noticeTextFromLaunch, showUnreadFromLaunch } from '../main/ets/utils/WantParse';
 import { parseMarkdown } from '../main/ets/utils/MarkdownParse';
 import { ConversationMessage } from '../main/ets/models/Api';
@@ -45,6 +47,7 @@ export default function safeUrlTest() {
     it('forbids terminal rollback', 0, () => {
       expect(isTerminalStatus('FINISHED')).assertTrue();
       expect(canApplyRunStatus('FINISHED', 'RUNNING')).assertFalse();
+      expect(canApplyRunStatus('FINISHED', 'RUNNING', true)).assertTrue();
       expect(canApplyRunStatus('RUNNING', 'FINISHED')).assertTrue();
       expect(canApplyRunStatus('FINISHED', '')).assertFalse();
       expect(isInFlightStatus('CREATING')).assertTrue();
@@ -54,6 +57,12 @@ export default function safeUrlTest() {
       expect(phaseFromRun('ERROR', false, false)).assertEqual('Error');
       expect(pickNewerIso('2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z'))
         .assertEqual('2026-01-02T00:00:00Z');
+      expect(shouldNoteTerminal('', 'FINISHED')).assertFalse();
+      expect(shouldNoteTerminal('FINISHED', 'FINISHED')).assertFalse();
+      expect(shouldNoteTerminal('ERROR', 'FINISHED')).assertFalse();
+      expect(shouldNoteTerminal('RUNNING', 'FINISHED')).assertTrue();
+      expect(shouldNoteTerminal('CREATING', 'ERROR')).assertTrue();
+      expect(shouldNoteTerminal('RUNNING', 'RUNNING')).assertFalse();
     });
   });
 
@@ -64,6 +73,24 @@ export default function safeUrlTest() {
       expect(canFlushQueue(q, true, false)).assertFalse();
       expect(canFlushQueue(q, false, true)).assertFalse();
       expect(canFlushQueue(q, false, false)).assertTrue();
+      q.retries = 5;
+      expect(canFlushQueue(q, false, false)).assertFalse();
+      expect(queueBackoffMs(0)).assertEqual(1000);
+      expect(queueBackoffMs(1)).assertEqual(2000);
+      expect(queueBackoffMs(2)).assertEqual(4000);
+      expect(queueBackoffMs(3)).assertEqual(8000);
+      expect(queueBackoffMs(8)).assertEqual(8000);
+    });
+  });
+
+  describe('ApiErrorMap', () => {
+    it('maps create 429 resource_exhausted to concurrency copy', 0, () => {
+      expect(mapCreateHttpMessage(429, 'resource_exhausted', 'Error'))
+        .assertEqual('同时运行的 Cloud Agent 已达上限，先归档旧任务再试');
+      expect(mapCreateHttpMessage(429, '', 'slow down'))
+        .assertEqual('创建任务过于频繁，请稍等再发');
+      expect(mapCreateHttpMessage(409, '', 'conflict'))
+        .assertEqual('这次任务可能已经建过，请回 Inbox 看一下');
     });
   });
 
@@ -223,6 +250,21 @@ export default function safeUrlTest() {
       expect(findUnreadAnchor(items, 'a1')).assertEqual('u2');
       expect(countNewContent(items, 'a1') > 0).assertTrue();
       expect(findUnreadAnchor(items, '')).assertEqual('u2');
+      expect(findUnreadAnchor(items, 'gone')).assertEqual('');
+      expect(countNewContent(items, 'gone')).assertEqual(0);
+    });
+
+    it('disables jump at the first and last user prompts', 0, () => {
+      const keys = ['u0', 'u3', 'u6'];
+      const idxs = [0, 3, 6];
+      expect(canUserJump(keys, idxs, 'u0', -1, 0, 2)).assertFalse();
+      expect(canUserJump(keys, idxs, 'u0', 1, 0, 2)).assertTrue();
+      expect(canUserJump(keys, idxs, 'u6', 1, 7, 10)).assertFalse();
+      expect(canUserJump(keys, idxs, 'u6', -1, 7, 10)).assertTrue();
+      expect(canUserJump(keys, idxs, '', 1, 0, 10, true)).assertFalse();
+      expect(canUserJump(keys, idxs, '', -1, 0, 10, true)).assertTrue();
+      expect(canUserJump(keys, idxs, '', 1, 0, 10)).assertTrue();
+      expect(canUserJump(keys, idxs, '', -1, 0, 10)).assertFalse();
     });
   });
 }

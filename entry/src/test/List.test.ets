@@ -3,6 +3,7 @@ import apiUnwrapTest from './ApiUnwrap.test';
 import webAlignTest from './WebAlign.test';
 import safeUrlTest from './SafeUrl.test';
 import inboxFeedTest from './InboxFeed.test';
+import convProtocolTest from './ConvProtocol.test';
 
 export default function testsuite() {
   sseParserTest();
@@ -10,4 +11,5 @@ export default function testsuite() {
   webAlignTest();
   safeUrlTest();
   inboxFeedTest();
+  convProtocolTest();
 }

@@ -153,12 +153,6 @@ export class UnreadStore {
       await PrefStore.getInstance().setLastSeenKey(id, lastKey);
     }
     if (!this.isUnread(id)) {
-      SessionDiag.emit({
-        tag: 'Unread',
-        event: 'markSeen',
-        agentId: id,
-        extra: `n=${this.items.length} already_read lastKey=${lastKey.length > 0 ? '1' : '0'}`
-      });
       return;
     }
     const next: UnreadItem[] = [];

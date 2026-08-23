@@ -12,7 +12,8 @@ export struct ToastHost {
     if (this.text.length === 0) {
       return false;
     }
-    if (this.page.length === 0 || this.toastPage.length === 0) {
+    if (this.tone === 'danger' || this.tone === 'warn' || this.toastPage.length === 0 ||
+      this.page.length === 0) {
       return true;
     }
     return this.page === this.toastPage;

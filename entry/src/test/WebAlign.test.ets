@@ -1,7 +1,7 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { gitCompareUrl, isOriginRepo, looksLikeRepoUrl, normalizeCreateRepoUrl, parseGitWeb } from '../main/ets/utils/GitLinks';
 import { applyInboxQuery, collectRecentEnvs, diffInboxAgents, groupAgents, inboxDeltaLabel, mergeInboxLists, recencyMs, sortByRecency } from '../main/ets/utils/InboxGrouping';
-import { unwrapAgentsList } from '../main/ets/api/ApiUnwrap';
+import { unwrapAgentsList, unwrapArtifacts } from '../main/ets/api/ApiUnwrap';
 import { agentIdFromLaunch, noticeTextFromLaunch, showUnreadFromLaunch } from '../main/ets/utils/WantParse';
 import { citationQuote, clipNotice, isCitationFence, parseMarkdown, tokenizeInline } from '../main/ets/utils/MarkdownParse';
 import { AgentSummary, ConversationMessage, ModelInfo, ModelParamValue, ModelVariant, ModelVariantParam } from '../main/ets/models/Api';
@@ -9,11 +9,16 @@ import { fileNameOf, isImagePath, isVideoPath } from '../main/ets/utils/DisplayF
 import { sniffMime } from '../main/ets/utils/ImagePicker';
 import { isSubagentTool, lastTextSummary, subagentDetail } from '../main/ets/utils/StreamText';
 import { unwrapUsageRuns } from '../main/ets/api/ApiUnwrap';
-import { findUnreadAnchor, countNewContent, isWaitingThink, nextUserJumpAt, visibleKeySig, visibleRowSig, visibleTimeline } from '../main/ets/utils/TimelineView';
+import { findUnreadAnchor, countNewContent, isWaitingThink, jumpCanFromIndex, nextUserJumpAt, visibleKeySig, visibleRowSig, visibleTimeline } from '../main/ets/utils/TimelineView';
 import { processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug, usedToolLine, waitingThinkLabel } from '../main/ets/utils/TimelineCopy';
 import { convFingerprint, keepPendingTurns, lastMessageStamp, mergeCachedActivity } from '../main/ets/utils/TimelineMerge';
-import { isComposerProtocol, parseComposerProtocol, taskCardBody, taskCardTitle } from '../main/ets/utils/ConvProtocol';
-import { conversationToTimeline } from '../main/ets/utils/ConversationBuild';
+import { agentPromptBody, agentPromptTitle, isComposerProtocol, looksLikeAgentTaskPrompt, parseComposerProtocol, taskCardBody, taskCardTitle } from '../main/ets/utils/ConvProtocol';
+import { conversationToTimeline, foldAgentWrittenPrompts } from '../main/ets/utils/ConversationBuild';
+import {
+  foldPlanItems, isPlanPath, isPlanToolEvent, keepFullToolArgs, looksLikePlanDoc, parsePlanDoc,
+  planDocFromTool, planItemFromDoc, previewTodos, shortPlanPath, shouldMergePlans, titleFromPlanPath,
+  weavePlans
+} from '../main/ets/utils/PlanDoc';
 import { cacheCoversConversation, cacheCoversDetail } from '../main/ets/utils/CachePolicy';
 import {
   buildParamRows, coerceParamsToVariant, formatModelSent, ModelParamRow, modelSentTags, rowsToParams, snapParamRows
@@ -654,16 +659,37 @@ export default function webAlignTest() {
     it('first down from the latest message does not wrap to the first prompt', 0, () => {
       const keys = ['u0', 'u6'];
       const idxs = [0, 6];
-      expect(nextUserJumpAt(keys, idxs, '', 1, 7, 10)).assertEqual(-1);
-      expect(nextUserJumpAt(keys, idxs, '', -1, 7, 10)).assertEqual(0);
+      expect(nextUserJumpAt(keys, idxs, '', 1, 7, 10, true)).assertEqual(-1);
+      expect(nextUserJumpAt(keys, idxs, '', -1, 7, 10, true)).assertEqual(0);
+    });
+
+    it('first up from a long assistant stays on the only prompt', 0, () => {
+      const keys = ['u0'];
+      const idxs = [0];
+      expect(nextUserJumpAt(keys, idxs, '', -1, 1, 4)).assertEqual(-1);
+      expect(nextUserJumpAt(keys, idxs, '', 1, 1, 4)).assertEqual(-1);
+      expect(nextUserJumpAt(keys, idxs, 'u0', -1, 0, 2)).assertEqual(-1);
     });
 
     it('later taps move from the last jumped prompt', 0, () => {
       const keys = ['u0', 'u3', 'u6'];
       const idxs = [0, 3, 6];
       expect(nextUserJumpAt(keys, idxs, 'u6', -1, 7, 10)).assertEqual(1);
-      expect(nextUserJumpAt(keys, idxs, 'u3', 1, 0, 4)).assertEqual(2);
+      expect(nextUserJumpAt(keys, idxs, 'u3', 1, 3, 6)).assertEqual(2);
       expect(nextUserJumpAt(keys, idxs, 'u0', -1, 0, 2)).assertEqual(-1);
+    });
+
+    it('disables jump at the first and last user prompts', 0, () => {
+      // AgentDetailPage greys arrows from jumpCanFromIndex, not nextUserJumpAt.
+      expect(jumpCanFromIndex(1, 4, -1)).assertFalse();
+      expect(jumpCanFromIndex(1, 4, 1)).assertTrue();
+      expect(jumpCanFromIndex(2, 4, -1)).assertTrue();
+      expect(jumpCanFromIndex(2, 4, 1)).assertTrue();
+      expect(jumpCanFromIndex(4, 4, 1)).assertFalse();
+      expect(jumpCanFromIndex(4, 4, -1)).assertTrue();
+      expect(jumpCanFromIndex(0, 4, -1)).assertFalse();
+      expect(jumpCanFromIndex(1, 1, -1)).assertFalse();
+      expect(jumpCanFromIndex(1, 1, 1)).assertFalse();
     });
 
     it('unread anchor lands on the next user prompt', 0, () => {
@@ -676,6 +702,8 @@ export default function webAlignTest() {
       expect(findUnreadAnchor(items, 'a1')).assertEqual('u2');
       expect(countNewContent(items, 'a1') > 0).assertTrue();
       expect(findUnreadAnchor(items, '')).assertEqual('u2');
+      expect(findUnreadAnchor(items, 'gone')).assertEqual('');
+      expect(countNewContent(items, 'gone')).assertEqual(0);
     });
 
     it('visible key sig changes only when structure changes', 0, () => {
@@ -859,6 +887,25 @@ export default function webAlignTest() {
       expect(merged[3].kind).assertEqual('thinking');
       expect(merged[3].streaming).assertEqual(true);
     });
+
+    it('does not paste cached spawn prompts back as user bubbles', 0, () => {
+      const spawnText = 'You are an explore agent. The parent agent needs a survey of listing pages.';
+      const conv: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'history', text: '查上架风险' },
+        { key: 'a1', kind: 'assistant', runId: 'history', text: '先派子任务。' },
+        { key: 'p1', kind: 'subagent', runId: 'history', text: spawnText, statusLabel: '子任务提示词', collapsed: true }
+      ];
+      const live: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'history', text: '查上架风险' },
+        { key: 'a1', kind: 'assistant', runId: 'history', text: '先派子任务。' },
+        { key: 'u-spawn', kind: 'userPrompt', runId: 'history', text: spawnText }
+      ];
+      const merged = keepPendingTurns(conv, live);
+      expect(merged.length).assertEqual(3);
+      expect(merged[2].kind).assertEqual('subagent');
+      const folded = foldAgentWrittenPrompts(live);
+      expect(folded[2].kind).assertEqual('userPrompt');
+    });
   });
 
   describe('ModelSent', () => {
@@ -983,6 +1030,24 @@ export default function webAlignTest() {
       expect(blocks[0].lang).assertEqual('chat_selection');
       expect(blocks[1].kind).assertEqual('text');
     });
+
+    it('does not treat unmatched backticks or globs as styled english', 0, () => {
+      const dangling = tokenizeInline('see Inbox `and more');
+      let code = 0;
+      let joined = '';
+      for (let i = 0; i < dangling.length; i++) {
+        if (dangling[i].code) {
+          code += 1;
+        }
+        joined += dangling[i].text;
+      }
+      expect(code).assertEqual(0);
+      expect(joined.indexOf('Inbox') >= 0).assertTrue();
+      const glob = tokenizeInline('匹配 *.ets 文件');
+      expect(glob.length).assertEqual(1);
+      expect(glob[0].italic).assertFalse();
+      expect(glob[0].text.indexOf('*.ets') >= 0).assertTrue();
+    });
   });
 
   describe('ConvProtocol', () => {
@@ -1009,6 +1074,8 @@ export default function webAlignTest() {
     it('detects composer protocol shells', 0, () => {
       expect(isComposerProtocol(TASK)).assertTrue();
       expect(isComposerProtocol('你看一下为啥 inbox 闪蓝')).assertFalse();
+      const stamped = '<timestamp>Thursday, Aug 20, 2026, 8:12 AM (UTC+8)</timestamp>\n\n今天合入 4 笔。';
+      expect(isComposerProtocol(stamped)).assertFalse();
     });
 
     it('pulls subagent title and body, drops the notification', 0, () => {
@@ -1056,6 +1123,105 @@ export default function webAlignTest() {
       }
       expect(users).assertEqual(1);
       expect(subs).assertEqual(1);
+    });
+
+    it('folds agent-written subtask prompts into a card', 0, () => {
+      const spawn = [
+        '<timestamp>Wednesday, Aug 19, 2026, 8:00 AM (UTC+8)</timestamp>',
+        '<user_query>',
+        'You are an explore agent. The parent agent needs a survey of HarmonyOS listing pages.',
+        'Your team\'s answer should list evidence URLs only.',
+        '</user_query>'
+      ].join('\n');
+      expect(looksLikeAgentTaskPrompt(spawn)).assertTrue();
+      expect(looksLikeAgentTaskPrompt('补一下隐私政策')).assertFalse();
+      expect(agentPromptTitle(spawn).indexOf('子任务提示词') >= 0).assertTrue();
+      expect(agentPromptBody(spawn).indexOf('explore agent') >= 0).assertTrue();
+      const waiting = conversationToTimeline([
+        { id: 'u1', type: 'user_message', text: '查上架风险' },
+        { id: 'a1', type: 'assistant_message', text: '我先派一个子任务。' },
+        { id: 'p1', type: 'user_message', text: spawn }
+      ]);
+      let waitingUsers = 0;
+      for (let i = 0; i < waiting.length; i++) {
+        if (waiting[i].kind === 'userPrompt') {
+          waitingUsers += 1;
+        }
+      }
+      expect(waitingUsers).assertEqual(2);
+      const items = conversationToTimeline([
+        { id: 'u1', type: 'user_message', text: '查上架风险' },
+        { id: 'a1', type: 'assistant_message', text: '我先派一个子任务。' },
+        { id: 'p1', type: 'user_message', text: spawn },
+        { id: 'n1', type: 'user_message', text: TASK }
+      ]);
+      let users = 0;
+      let nested = 0;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'userPrompt') {
+          users += 1;
+          expect((items[i].text ?? '').indexOf('parent agent') < 0).assertTrue();
+        }
+        if ((items[i].promptText ?? '').indexOf('explore agent') >= 0) {
+          nested += 1;
+        }
+      }
+      expect(users).assertEqual(1);
+      expect(nested).assertEqual(1);
+    });
+
+    it('recognizes role-assignment spawns without parent-agent boilerplate', 0, () => {
+      const shell = 'You are a shell agent. Run the device tests and paste the failing case only.';
+      expect(looksLikeAgentTaskPrompt(shell)).assertTrue();
+      const inform = 'Briefly inform the user about the task result and perform any follow-up actions (if needed).';
+      expect(looksLikeAgentTaskPrompt(inform)).assertTrue();
+      expect(looksLikeAgentTaskPrompt('请帮我看一下 Inbox 刷新为什么会失败')).assertFalse();
+    });
+
+    it('folds the user message immediately before a task result', 0, () => {
+      const spawn = '把 HarmonyOS 上架页和替代渠道都过一遍，只保留能点开的证据 URL。';
+      expect(looksLikeAgentTaskPrompt(spawn)).assertFalse();
+      const items = conversationToTimeline([
+        { id: 'u1', type: 'user_message', text: '查上架风险' },
+        { id: 'a1', type: 'assistant_message', text: '我先派一个子任务。' },
+        { id: 'p1', type: 'user_message', text: spawn },
+        { id: 'a2', type: 'assistant_message', text: '等子任务回来。' },
+        { id: 'n1', type: 'user_message', text: TASK }
+      ]);
+      let users = 0;
+      let nested = 0;
+      let results = 0;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'userPrompt') {
+          users += 1;
+          expect(items[i].text ?? '').assertEqual('查上架风险');
+        }
+        if (items[i].kind === 'subagent' && (items[i].statusLabel ?? '').indexOf('子任务 ·') === 0) {
+          results += 1;
+          if ((items[i].promptText ?? '').indexOf('HarmonyOS') >= 0) {
+            nested += 1;
+          }
+        }
+      }
+      expect(users).assertEqual(1);
+      expect(nested).assertEqual(1);
+      expect(results).assertEqual(1);
+    });
+
+    it('does not fold the opening human turn just because a task follows', 0, () => {
+      const items = conversationToTimeline([
+        { id: 'u1', type: 'user_message', text: '查上架风险' },
+        { id: 'a1', type: 'assistant_message', text: '先看公开文档。' },
+        { id: 'n1', type: 'user_message', text: TASK }
+      ]);
+      let users = 0;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].kind === 'userPrompt') {
+          users += 1;
+          expect(items[i].text ?? '').assertEqual('查上架风险');
+        }
+      }
+      expect(users).assertEqual(1);
     });
   });
 
@@ -1133,6 +1299,340 @@ export default function webAlignTest() {
         messages: [{}]
       };
       expect(cacheCoversDetail(mid, 'run-1', 'FINISHED')).assertFalse();
+    });
+  });
+
+  describe('PlanDoc', () => {
+    const sample =
+      '---\n' +
+      'name: 鸿蒙商店上架准备\n' +
+      'overview: 先解除品牌硬门槛，再补齐发布工程。\n' +
+      'todos:\n' +
+      '  - id: identity-model\n' +
+      '    content: 锁定独立品牌、bundleName、Cursor 授权结论和 V1 收费模式\n' +
+      '    status: pending\n' +
+      '  - id: privacy-filing\n' +
+      '    content: 完成数据清单、隐私/协议、跨境披露\n' +
+      '    status: pending\n' +
+      '  - id: release-engineering\n' +
+      '    content: 创建 AGC 应用并补齐发布签名\n' +
+      '    status: pending\n' +
+      '  - id: store-assets\n' +
+      '    content: 准备中英文商店文案\n' +
+      '    status: pending\n' +
+      'isProject: false\n' +
+      '---\n\n' +
+      '# 鸿蒙商店上架准备计划\n\n' +
+      '## 当前结论\n';
+
+    it('parses Cursor plan YAML', 0, () => {
+      expect(looksLikePlanDoc(sample)).assertTrue();
+      const doc = parsePlanDoc(sample, '/opt/cursor/.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md');
+      expect(doc.name).assertEqual('鸿蒙商店上架准备');
+      expect(doc.overview.indexOf('先解除品牌') >= 0).assertTrue();
+      expect(doc.todos.length).assertEqual(4);
+      expect(doc.todos[0].content.indexOf('锁定独立品牌') >= 0).assertTrue();
+      expect(doc.body.indexOf('当前结论') >= 0).assertTrue();
+    });
+
+    it('shortens plan paths and titles', 0, () => {
+      expect(isPlanPath('/opt/cursor/.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md')).assertTrue();
+      expect(isPlanPath('README.md')).assertFalse();
+      expect(isPlanPath('docs/explanation.md')).assertFalse();
+      expect(isPlanPath('assets/airplane.md')).assertFalse();
+      expect(isPlanPath('notes/game-plan.md')).assertFalse();
+      expect(isPlanPath('/opt/cursor/artifacts/plans/store.md')).assertTrue();
+      expect(shortPlanPath('/opt/cursor/.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md'))
+        .assertEqual('.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md');
+      expect(titleFromPlanPath('/opt/cursor/.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md'))
+        .assertEqual('鸿蒙商店上架准备');
+    });
+
+    it('detects plan write tools by path', 0, () => {
+      const args = '{"path":".cursor/plans/a_abc123.plan.md","contents":"# hi"}';
+      expect(isPlanToolEvent('write', args)).assertTrue();
+      expect(isPlanToolEvent('write', '{"path":"entry/src/main/ets/Index.ets"}')).assertFalse();
+      expect(isPlanToolEvent('CreatePlan', '{"name":"x"}')).assertTrue();
+    });
+
+    it('does not treat a checklist answer as a plan', 0, () => {
+      const list = '## 清单\n\n- [ ] 补隐私政策\n- [ ] 换包名\n- [ ] 做签名';
+      expect(looksLikePlanDoc(list)).assertFalse();
+      const items: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'r1', text: '列清单' },
+        { key: 'a', kind: 'assistant', runId: 'r1', text: list }
+      ];
+      const out = conversationToTimeline([
+        { id: 'u', type: 'user_message', text: '列清单' },
+        { id: 'a', type: 'assistant_message', text: list }
+      ]);
+      expect(out[1].kind).assertEqual('assistant');
+      const folded = foldPlanItems(items);
+      expect(folded[1].kind).assertEqual('assistant');
+    });
+
+    it('lifts YAML assistant text and plan writes into one card', 0, () => {
+      const conv = conversationToTimeline([
+        { id: 'u', type: 'user_message', text: '梳理上架' },
+        { id: 'a', type: 'assistant_message', text: sample }
+      ]);
+      expect(conv[1].kind).assertEqual('plan');
+      expect(conv[1].statusLabel).assertEqual('鸿蒙商店上架准备');
+      expect((conv[1].stepCount ?? 0) >= 3).assertTrue();
+      const vis = visibleTimeline(conv);
+      expect(vis[1].kind).assertEqual('plan');
+
+      const tools: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'r1', text: '梳理上架' },
+        {
+          key: 'tool-1',
+          kind: 'tool',
+          runId: 'r1',
+          text: '用了 write',
+          tool: {
+            callId: 'c1',
+            name: 'write',
+            status: 'completed',
+            argsText: '{"path":".cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md","contents":' +
+              JSON.stringify(sample) + '}'
+          }
+        },
+        { key: 'think', kind: 'thinking', runId: 'r1', text: '在写计划' }
+      ];
+      const folded = foldPlanItems(tools);
+      let plans = 0;
+      let writes = 0;
+      for (let i = 0; i < folded.length; i++) {
+        if (folded[i].kind === 'plan') {
+          plans += 1;
+        }
+        if (folded[i].kind === 'tool') {
+          writes += 1;
+        }
+      }
+      expect(plans).assertEqual(1);
+      expect(writes).assertEqual(0);
+      expect(previewTodos(parsePlanDoc(sample).todos).length).assertEqual(3);
+
+      const mixed: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'history', text: '梳理上架' },
+        {
+          key: 'a',
+          kind: 'plan',
+          runId: 'history',
+          text: sample,
+          statusLabel: '鸿蒙商店上架准备',
+          promptText: '先解除品牌硬门槛',
+          collapsed: true
+        },
+        {
+          key: 'plan-run-c1',
+          kind: 'plan',
+          runId: 'run-1',
+          text: sample,
+          usageShort: '.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md',
+          collapsed: true
+        }
+      ];
+      const one = foldPlanItems(mixed);
+      let mixedPlans = 0;
+      for (let i = 0; i < one.length; i++) {
+        if (one[i].kind === 'plan') {
+          mixedPlans += 1;
+        }
+      }
+      expect(mixedPlans).assertEqual(1);
+      expect(one[1].usageShort ?? '').assertEqual('.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md');
+    });
+
+    it('reads CreatePlan args and artifacts paths', 0, () => {
+      expect(isPlanPath('file:///opt/cursor/artifacts/plans/plan_4713bad5.plan.md')).assertTrue();
+      expect(shortPlanPath('file:///opt/cursor/artifacts/plans/plan_4713bad5.plan.md'))
+        .assertEqual('plans/plan_4713bad5.plan.md');
+      expect(titleFromPlanPath('file:///opt/cursor/artifacts/plans/plan_4713bad5.plan.md'))
+        .assertEqual('plan_4713bad5');
+      const args = JSON.stringify({
+        name: '核心上架任务',
+        overview: '先把商店资料凑齐',
+        todos: [
+          { content: '补隐私政策', status: 'pending' },
+          { content: '换包名', status: 'pending' },
+          { content: '做签名', status: 'pending' }
+        ],
+        plan: '## 核心任务\n\n先过审核。'
+      });
+      expect(keepFullToolArgs('CreatePlan', args)).assertTrue();
+      const listed = unwrapArtifacts({
+        items: [{ path: 'file:///opt/cursor/artifacts/plans/plan_4713bad5.plan.md', sizeBytes: 1200 }]
+      });
+      expect(listed.length).assertEqual(1);
+      expect(listed[0].path).assertEqual('file:///opt/cursor/artifacts/plans/plan_4713bad5.plan.md');
+      const asArr = unwrapArtifacts([
+        { path: '.cursor/plans/store.plan.md', size: 800 }
+      ] as object);
+      expect(asArr.length).assertEqual(1);
+      expect(asArr[0].path).assertEqual('.cursor/plans/store.plan.md');
+      const doc = planDocFromTool({
+        callId: 'c2',
+        name: 'CreatePlan',
+        status: 'completed',
+        argsText: args,
+        resultText: JSON.stringify({ path: 'file:///opt/cursor/artifacts/plans/plan_4713bad5.plan.md' })
+      });
+      expect(doc.name).assertEqual('核心上架任务');
+      expect(doc.todos.length).assertEqual(3);
+      expect(doc.overview.indexOf('商店') >= 0).assertTrue();
+      expect(doc.path.indexOf('plan_4713bad5') >= 0).assertTrue();
+      expect(doc.body.indexOf('核心任务') >= 0).assertTrue();
+    });
+
+    it('merges the same plan path in one turn', 0, () => {
+      const first: TimelineItem = {
+        key: 'p1',
+        kind: 'plan',
+        runId: 'r1',
+        text: sample,
+        statusLabel: '鸿蒙商店上架准备'
+      };
+      const second: TimelineItem = {
+        key: 'p2',
+        kind: 'plan',
+        runId: 'r1',
+        text: sample,
+        usageShort: '.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md'
+      };
+      const folded = foldPlanItems([
+        { key: 'u1', kind: 'userPrompt', runId: 'r1', text: '梳理' },
+        first,
+        second
+      ]);
+      let n = 0;
+      for (let i = 0; i < folded.length; i++) {
+        if (folded[i].kind === 'plan') {
+          n += 1;
+        }
+      }
+      expect(n).assertEqual(1);
+      expect(folded[1].usageShort ?? '').assertEqual('.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md');
+    });
+
+    it('keeps two different plans in the same turn', 0, () => {
+      const first: TimelineItem = {
+        key: 'p1',
+        kind: 'plan',
+        runId: 'r1',
+        text: sample,
+        statusLabel: '鸿蒙商店上架准备',
+        usageShort: '.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md'
+      };
+      const second: TimelineItem = {
+        key: 'p2',
+        kind: 'plan',
+        runId: 'r1',
+        text: '---\nname: 核心上架任务\noverview: 先过审核\ntodos:\n  - id: t-0\n    content: 补隐私政策\n    status: pending\n---\n\n# 核心',
+        statusLabel: '核心上架任务',
+        usageShort: 'plans/plan_4713bad5.plan.md'
+      };
+      const folded = foldPlanItems([
+        { key: 'u1', kind: 'userPrompt', runId: 'r1', text: '梳理' },
+        first,
+        second
+      ]);
+      let n = 0;
+      for (let i = 0; i < folded.length; i++) {
+        if (folded[i].kind === 'plan') {
+          n += 1;
+        }
+      }
+      expect(n).assertEqual(2);
+    });
+
+    it('keeps two plans from different turns', 0, () => {
+      const first: TimelineItem = {
+        key: 'p1',
+        kind: 'plan',
+        runId: 'r1',
+        text: sample,
+        statusLabel: '鸿蒙商店上架准备',
+        usageShort: '.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md'
+      };
+      const second: TimelineItem = {
+        key: 'p2',
+        kind: 'plan',
+        runId: 'r1',
+        text: '---\nname: 核心上架任务\noverview: 先过审核\ntodos:\n  - id: t-0\n    content: 补隐私政策\n    status: pending\n---\n\n# 核心',
+        statusLabel: '核心上架任务',
+        usageShort: 'plans/plan_4713bad5.plan.md'
+      };
+      expect(shouldMergePlans(first, second)).assertFalse();
+      const folded = foldPlanItems([
+        { key: 'u1', kind: 'userPrompt', runId: 'r1', text: '梳理' },
+        first,
+        { key: 'u2', kind: 'userPrompt', runId: 'r1', text: '核心任务' },
+        second
+      ]);
+      let n = 0;
+      for (let i = 0; i < folded.length; i++) {
+        if (folded[i].kind === 'plan') {
+          n += 1;
+        }
+      }
+      expect(n).assertEqual(2);
+    });
+
+    it('weaves artifact plans after each user turn', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'history', text: '梳理' },
+        { key: 'a1', kind: 'assistant', runId: 'history', text: '先看品牌' },
+        { key: 'u2', kind: 'userPrompt', runId: 'history', text: '核心任务' },
+        { key: 'a2', kind: 'assistant', runId: 'history', text: '三条' }
+      ];
+      const p1 = planItemFromDoc('plan-art-1', 'history', parsePlanDoc(sample,
+        '.cursor/plans/鸿蒙商店上架准备_32f8dfe4.plan.md'));
+      const p2 = planItemFromDoc('plan-art-2', 'history', parsePlanDoc(
+        '---\nname: 核心上架任务\noverview: 先过审核\ntodos:\n  - id: t-0\n    content: 补隐私政策\n    status: pending\n---\n\n# 核心',
+        'plans/plan_4713bad5.plan.md'));
+      const out = weavePlans(conv, [p1, p2]);
+      expect(out[2].kind).assertEqual('plan');
+      expect(out[2].statusLabel).assertEqual('鸿蒙商店上架准备');
+      expect(out[1].kind).assertEqual('assistant');
+      expect(out[5].kind).assertEqual('plan');
+      expect(out[5].statusLabel).assertEqual('核心上架任务');
+      expect(out[4].kind).assertEqual('assistant');
+    });
+
+    it('weaves a single artifact plan after the last turn', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u1', kind: 'userPrompt', runId: 'history', text: '梳理' },
+        { key: 'a1', kind: 'assistant', runId: 'history', text: '先看品牌' },
+        { key: 'u2', kind: 'userPrompt', runId: 'history', text: '核心任务' },
+        { key: 'a2', kind: 'assistant', runId: 'history', text: '三条' }
+      ];
+      const p2 = planItemFromDoc('plan-art-2', 'history', parsePlanDoc(
+        '---\nname: 核心上架任务\noverview: 先过审核\ntodos:\n  - id: t-0\n    content: 补隐私政策\n    status: pending\n---\n\n# 核心',
+        'plans/plan_4713bad5.plan.md'));
+      const out = weavePlans(conv, [p2]);
+      expect(out[4].kind).assertEqual('plan');
+      expect(out[4].statusLabel).assertEqual('核心上架任务');
+      expect(out[3].kind).assertEqual('assistant');
+    });
+
+    it('keeps an empty cached plan across conversation rebuild', 0, () => {
+      const conv: TimelineItem[] = [
+        { key: 'u', kind: 'userPrompt', runId: 'history', text: '梳理' },
+        { key: 'a', kind: 'assistant', runId: 'history', text: '先看品牌' }
+      ];
+      const cached: TimelineItem[] = [
+        { key: 'plan-1', kind: 'plan', runId: 'run-1', text: '', statusLabel: '计划' }
+      ];
+      const merged = mergeCachedActivity(conv, cached);
+      let plans = 0;
+      for (let i = 0; i < merged.length; i++) {
+        if (merged[i].kind === 'plan') {
+          plans += 1;
+        }
+      }
+      expect(plans).assertEqual(1);
     });
   });
 }

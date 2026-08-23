@@ -2,12 +2,11 @@ import { common } from '@kit.AbilityKit';
 import { LengthMetrics } from '@kit.ArkUI';
 import { NewAgentVM } from '../viewmodels/NewAgentVM';
 import { InboxVM } from '../viewmodels/InboxVM';
-import { CreateDraftStore } from '../store/CreateDraftStore';
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { PrefStore } from '../store/PrefStore';
 import {
-  AgentSummary, CustomSubagentDef, EnvTarget, EnvVarDef, McpServerDef, ModelInfo, RepoInfo
+  CustomSubagentDef, EnvTarget, EnvVarDef, McpServerDef, ModelInfo, RepoInfo
 } from '../models/Api';
 import { Haptics } from '../utils/Haptics';
 import { motionMs } from '../utils/Motion';
@@ -31,7 +30,7 @@ import { SheetPickRow } from '../components/SheetAction';
 import { ModelPicker } from '../components/ModelPicker';
 import { StatusBanner } from '../components/StatusBanner';
 import { ToastHost } from '../components/ToastHost';
-import { notifyResult } from '../utils/AppToast';
+import { notifyResult, showToast } from '../utils/AppToast';
 
 @Builder
 export function NewAgentPageBuilder() {
@@ -102,8 +101,10 @@ export struct NewAgentPage {
   private attachedImages: PromptImage[] = [];
   private draftTimer: number = -1;
   private unsubBp: (() => void) | undefined = undefined;
+  private pageAlive: boolean = false;
 
   aboutToAppear(): void {
+    this.pageAlive = true;
     this.topInset = this.embedded ? 8 : this.bp.safeTop();
     this.bottomInset = this.bp.composerBottom();
     this.windowW = this.bp.widthVp;
@@ -128,6 +129,7 @@ export struct NewAgentPage {
   }
 
   aboutToDisappear(): void {
+    this.pageAlive = false;
     if (this.unsubBp) {
       this.unsubBp();
       this.unsubBp = undefined;
@@ -582,45 +584,43 @@ export struct NewAgentPage {
       return;
     }
     this.errorMsg = '';
-    const nowIso = new Date().toISOString();
-    const name = this.vm.titleFromPrompt();
-    const localId = `local-${Date.now()}`;
-    CreateDraftStore.getInstance().park({
-      localId: localId,
-      prompt: this.vm.prompt.trim(),
-      name: name,
-      body: this.vm.buildCreateBody()
-    });
-    const summary: AgentSummary = {
-      id: localId,
-      name: name,
-      status: 'ACTIVE',
-      url: '',
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      lastUserAt: nowIso,
-      latestRunStatus: 'CREATING'
-    };
-    InboxVM.getInstance().prependOptimistic(summary);
+    this.busy = true;
+    const resp = await this.vm.submit();
+    this.syncFromVm();
+    const agentId = resp?.agent?.id ?? '';
+    if (agentId.length === 0) {
+      if (!this.pageAlive) {
+        if (this.vm.errorMsg.length > 0) {
+          showToast(this.vm.errorMsg, 'danger', '');
+        }
+        return;
+      }
+      Haptics.fail();
+      return;
+    }
     PrefStore.getInstance().clearDraft();
     PrefStore.getInstance().setLastTools(serializeTools(this.env, this.mcpServers, this.subagents));
     if (this.selectedModel.length > 0) {
       PrefStore.getInstance().setDefaultModel(this.selectedModel);
     }
-    Haptics.success();
     for (let i = 0; i < this.attachedImages.length; i++) {
       const src = previewSrc(this.attachedImages[i]);
       dropPreviewMap(src);
       unlinkPreviewFile(src);
     }
     this.attachedImages = [];
+    this.syncImageNames();
+    if (!this.pageAlive) {
+      showToast('任务已创建', 'success', 'inbox');
+      return;
+    }
+    Haptics.success();
     if (this.embedded) {
-      this.onCreated(localId);
+      this.onCreated(agentId);
       return;
     }
     const param: Record<string, Object> = {};
-    param['agentId'] = localId;
-    param['seed'] = '1';
+    param['agentId'] = agentId;
     this.navStack.replacePath({ name: 'AgentDetail', param: param });
   }
 

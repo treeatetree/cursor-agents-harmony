@@ -52,7 +52,8 @@ export function capTimeline(items: TimelineItem[]): TimelineItem[] {
         usageShort: it.usageShort,
         sentTags: it.sentTags,
         localAt: it.localAt,
-        imageUrls: it.imageUrls
+        imageUrls: it.imageUrls,
+        promptText: it.promptText
       });
     } else {
       out.push(it);

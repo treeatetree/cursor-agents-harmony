@@ -7,6 +7,7 @@ import {
 import { ApiKeyStore } from '../store/ApiKeyStore';
 import { Log } from '../utils/Log';
 import { SessionDiag } from '../utils/SessionDiag';
+import { mapHttpUserMessage } from '../utils/ApiErrorMap';
 
 const TAG = 'CursorApi';
 const BASE = 'https://api.cursor.com';
@@ -100,16 +101,26 @@ export class CursorApiClient {
   /** POST create — no auto-retry (avoid duplicate agents). */
   async createAgent(body: object, idempotencyKey: string = ''): Promise<CreateAgentResponse> {
     this.mutating++;
+    const started = Date.now();
+    SessionDiag.emit({ tag: TAG, event: 'mutate', extra: `create begin n=${this.mutating}` });
     try {
       return await this.request<CreateAgentResponse>('POST', '/v1/agents', body, undefined, idempotencyKey);
     } finally {
       this.mutating--;
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'mutate',
+        elapsedMs: Date.now() - started,
+        extra: `create end n=${this.mutating}`
+      });
     }
   }
 
   /** POST follow-up — no auto-retry (avoid duplicate runs). Keep unwrap. */
   async createRun(agentId: string, body: object, idempotencyKey: string = ''): Promise<Run> {
     this.mutating++;
+    const started = Date.now();
+    SessionDiag.emit({ tag: TAG, event: 'mutate', extra: `run begin n=${this.mutating}` });
     try {
       const resp = await this.request<CreateRunResponse>('POST',
         `/v1/agents/${encodeURIComponent(agentId)}/runs`, body, undefined, idempotencyKey);
@@ -129,6 +140,12 @@ export class CursorApiClient {
     throw new ApiException(500, '创建 Run 响应缺少 id', 'invalid_create_run', true);
     } finally {
       this.mutating--;
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'mutate',
+        elapsedMs: Date.now() - started,
+        extra: `run end n=${this.mutating}`
+      });
     }
   }
 
@@ -214,6 +231,7 @@ export class CursorApiClient {
       headers['Idempotency-Key'] = idempotencyKey;
     }
 
+    const started = Date.now();
     try {
       Log.info(TAG, `${method} ${path}`);
       const extra: http.HttpRequestOptions = {
@@ -228,6 +246,7 @@ export class CursorApiClient {
         extra.extraData = JSON.stringify(body);
       }
       const resp = await client.request(url, extra);
+      const elapsedMs = Date.now() - started;
       const code = resp.responseCode;
       const raw = typeof resp.result === 'string' ? resp.result : JSON.stringify(resp.result);
 
@@ -266,86 +285,29 @@ export class CursorApiClient {
       SessionDiag.emit({
         tag: TAG,
         event: 'http',
+        elapsedMs: elapsedMs,
         extra: `${method} ${path} ${code}${apiCode.length > 0 ? ` ${apiCode}` : ''} ${clipDiag(message, 160)}`
       });
 
-      const creating = method === 'POST' && path === '/v1/agents';
       const retryable = code >= 500;
-      if (code === 401) {
-        message = 'API Key 无效或已过期';
-      } else if (code === 403) {
-        message = looksLikeConcurrencyLimit(message) ?
-          '同时运行的 Cloud Agent 已达套餐上限，先到网页归档旧任务再试' :
-          '无权限，请检查 Cursor 订阅计划';
-      } else if (code === 409 && creating) {
-        message = '这次任务可能已经建过，请回 Inbox 看一下';
-      } else if (code === 429) {
-        if (creating) {
-          message = '创建任务过于频繁，请稍等再发';
-        } else if (path.indexOf('/repositories') >= 0) {
-          message = '仓库列表每分钟只能刷新一次，请稍后再试';
-        } else {
-          message = '请求过于频繁，请稍后重试';
-        }
-      } else if (code === 400) {
-        message = mapClient400(apiCode, message);
-      } else if (creating && (code === 500 || code === 502 || code === 503 || code === 504)) {
-        message = 'Cursor 创建任务繁忙，请稍后再发';
-      } else if (code === 503) {
-        message = '服务繁忙，请稍后重试';
-      } else {
-        message = sanitizeApiMessage(message, `请求失败（${code}）`);
-      }
+      message = mapHttpUserMessage(`${method}`, path, code, apiCode, message);
       throw new ApiException(code, message, apiCode, retryable);
     } catch (e) {
       if (e instanceof ApiException) {
         throw e;
       }
       Log.error(TAG, `network error: ${JSON.stringify(e)}`);
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'http',
+        elapsedMs: Date.now() - started,
+        extra: `${method} ${path} network`
+      });
       throw new ApiException(0, '网络不可用，请检查连接', 'network', true);
     } finally {
       client.destroy();
     }
   }
-}
-
-function looksLikeConcurrencyLimit(message: string): boolean {
-  const low = message.toLowerCase();
-  return low.indexOf('limit') >= 0 || low.indexOf('upgrade') >= 0 ||
-    low.indexOf('simultaneous') >= 0 || low.indexOf('concurrent') >= 0 ||
-    message.indexOf('上限') >= 0 || message.indexOf('同时') >= 0;
-}
-
-function mapClient400(apiCode: string, message: string): string {
-  const low = message.toLowerCase();
-  if (low.indexOf('not supported in your region') >= 0 ||
-    (apiCode === 'invalid_model' && low.indexOf('region') >= 0)) {
-    return '这个模型在当前地区不可用，换 Composer、Grok、Kimi 或 GLM';
-  }
-  if (apiCode === 'invalid_model') {
-    return '这个模型或参数不被支持，换一组参数或换模型';
-  }
-  return sanitizeApiMessage(message, '请求失败（400）');
-}
-
-/** Drop raw JSON / HTML / "body..." so toasts stay readable. */
-function sanitizeApiMessage(message: string, fallback: string): string {
-  const t = (message ?? '').trim();
-  if (t.length === 0) {
-    return fallback;
-  }
-  const head = t.substring(0, 1);
-  if (head === '{' || head === '[' || head === '<') {
-    return fallback;
-  }
-  const low = t.toLowerCase();
-  if (low.indexOf('body') === 0 || low.indexOf('"body"') >= 0 || low.indexOf('request body') >= 0) {
-    return fallback;
-  }
-  if (t.length > 96) {
-    return fallback;
-  }
-  return t;
 }
 
 function clipDiag(s: string, max: number): string {

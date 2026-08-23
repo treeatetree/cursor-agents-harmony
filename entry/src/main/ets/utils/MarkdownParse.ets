@@ -59,14 +59,21 @@ export function parseMarkdown(src: string): MdBlock[] {
 export function tokenizeInline(s: string): InlineSeg[] {
   const out: InlineSeg[] = [];
   const parts = s.split('`');
+  const matched = parts.length % 2 === 1;
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
-    if (i % 2 === 1) {
+    if (matched && i % 2 === 1) {
       if (part.length > 0) {
         out.push({ text: part, bold: false, italic: false, code: true, url: '' });
       }
-    } else {
-      pushLinked(part, out);
+    } else if (part.length > 0) {
+      if (!matched && i > 0) {
+        pushLinked('`' + part, out);
+      } else {
+        pushLinked(part, out);
+      }
+    } else if (!matched && i > 0 && i === parts.length - 1) {
+      pushLinked('`', out);
     }
   }
   return out;
@@ -395,7 +402,7 @@ function pushBoldItalic(s: string, out: InlineSeg[]): void {
     }
     const bold = j % 2 === 1;
     const ital = chunk.split('*');
-    if (ital.length === 1) {
+    if (ital.length === 1 || ital.length % 2 === 0) {
       out.push({ text: chunk, bold: bold, italic: false, code: false, url: '' });
     } else {
       for (let k = 0; k < ital.length; k++) {

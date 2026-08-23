@@ -578,7 +578,13 @@ export function mergeInboxLists(
       continue;
     }
     const age = nowMs - recencyMs(a);
-    if (held[a.id] || isLocalAgentId(a.id) || (age >= 0 && age < LOCAL_GRACE_MS)) {
+    if (isLocalAgentId(a.id)) {
+      if (held[a.id]) {
+        out.push(a);
+      }
+      continue;
+    }
+    if (held[a.id] || (age >= 0 && age < LOCAL_GRACE_MS)) {
       out.push(a);
     }
   }

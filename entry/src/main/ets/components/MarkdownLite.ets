@@ -25,6 +25,8 @@ export struct MarkdownLite {
   @Prop compact: boolean = false;
   /** Nested in a user bubble — boxes stay transparent, no second fill. */
   @Prop inBubble: boolean = false;
+  /** Nested in an activity / subagent card — transparent fills, keep hairline boxes. */
+  @Prop nested: boolean = false;
   /** Pixel cap so quotes / code cannot inflate the bubble past the feed. */
   @Prop capWidth: number = 0;
   @Prop toastPage: string = 'detail';
@@ -45,6 +47,10 @@ export struct MarkdownLite {
 
   private listLine(): number {
     return this.compact ? 20 : Tokens.lineList;
+  }
+
+  private flatFill(): boolean {
+    return this.inBubble || this.nested;
   }
 
   /** Process / compact rows sit back; the main answer stays ink. */
@@ -93,11 +99,12 @@ export struct MarkdownLite {
             .fontColor($r('app.color.text_primary'))
             .fontFamily(Tokens.fontMono)
             .fontWeight(FontWeight.Medium)
-            .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.code_inline_bg'))
+            .backgroundColor(this.flatFill() ? Color.Transparent : $r('app.color.code_inline_bg'))
         } else if (seg.url.length > 0) {
           Span(seg.text)
             .fontSize(size)
             .fontColor($r('app.color.text_link'))
+            .fontFamily(Tokens.fontUi)
             .fontWeight(FontWeight.Medium)
             .decoration({
               type: TextDecorationType.Underline,
@@ -110,23 +117,26 @@ export struct MarkdownLite {
           Span(seg.text)
             .fontSize(size)
             .fontColor($r('app.color.text_primary'))
+            .fontFamily(Tokens.fontUi)
             .fontWeight(FontWeight.Bold)
             .fontStyle(seg.italic ? FontStyle.Italic : FontStyle.Normal)
         } else if (seg.italic) {
           Span(seg.text)
             .fontSize(size)
             .fontColor($r('app.color.text_secondary'))
+            .fontFamily(Tokens.fontUi)
             .fontWeight(weight)
             .fontStyle(FontStyle.Italic)
         } else {
           Span(seg.text)
             .fontSize(size)
             .fontColor(color)
+            .fontFamily(Tokens.fontUi)
             .fontWeight(weight)
             .fontStyle(FontStyle.Normal)
         }
       }, (seg: InlineSeg, idx: number) =>
-        `s-${idx}-${seg.text.length}-${seg.code ? 1 : 0}-${seg.bold ? 1 : 0}-${seg.url.length}`)
+        `s-${idx}-${seg.code ? 1 : 0}-${seg.bold ? 1 : 0}-${seg.italic ? 1 : 0}-${seg.text.length}`)
     }
     .fontFamily(Tokens.fontUi)
     .lineHeight(line)
@@ -293,7 +303,7 @@ export struct MarkdownLite {
         }
         .width('100%')
         .alignItems(VerticalAlign.Top)
-        .backgroundColor(ri === 0 && !this.inBubble ? $r('app.color.bg2') : Color.Transparent)
+        .backgroundColor(ri === 0 && !this.flatFill() ? $r('app.color.bg2') : Color.Transparent)
         .border({
           width: { bottom: 1 },
           color: $r('app.color.border')
@@ -302,7 +312,7 @@ export struct MarkdownLite {
     }
     .constraintSize({ maxWidth: this.textCap() })
     .width(this.capWidth > 0 ? this.capWidth : '100%')
-    .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.bg1'))
+    .backgroundColor(this.flatFill() ? Color.Transparent : $r('app.color.bg1'))
     .border({ width: 1, color: $r('app.color.border') })
     .borderRadius(Tokens.radiusSm)
     .clip(true)
@@ -335,7 +345,7 @@ export struct MarkdownLite {
       .height(32)
       .padding({ left: 12, right: 4 })
       .alignItems(VerticalAlign.Center)
-      .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.bg2'))
+      .backgroundColor(this.flatFill() ? Color.Transparent : $r('app.color.bg2'))
 
       Text(b.text)
         .fontSize(Tokens.typeCaption)
@@ -355,7 +365,7 @@ export struct MarkdownLite {
     }
     .constraintSize({ maxWidth: this.textCap() })
     .width(this.capWidth > 0 ? this.capWidth : '100%')
-    .backgroundColor(this.inBubble ? Color.Transparent : $r('app.color.code_bg'))
+    .backgroundColor(this.flatFill() ? Color.Transparent : $r('app.color.code_bg'))
     .border({ width: 1, color: $r('app.color.border') })
     .borderRadius(Tokens.radiusMd)
     .clip(true)

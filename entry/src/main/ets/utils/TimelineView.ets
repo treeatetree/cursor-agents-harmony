@@ -88,7 +88,7 @@ export function visibleTimeline(items: TimelineItem[]): TimelineItem[] {
 export function lastContentKey(items: TimelineItem[]): string {
   for (let i = items.length - 1; i >= 0; i--) {
     const k = items[i].kind;
-    if (k === 'userPrompt' || k === 'assistant') {
+    if (k === 'userPrompt' || k === 'assistant' || k === 'plan') {
       return items[i].key;
     }
   }
@@ -96,7 +96,7 @@ export function lastContentKey(items: TimelineItem[]): string {
 }
 
 /** First new userPrompt after lastSeen; else that run's assistant head.
- *  Never-seen: land on the latest userPrompt (this turn's question). */
+ *  Never-seen (empty lastSeen): latest userPrompt. Unknown lastSeen: none. */
 export function findUnreadAnchor(items: TimelineItem[], lastSeenKey: string): string {
   if (lastSeenKey.length === 0) {
     for (let i = items.length - 1; i >= 0; i--) {
@@ -105,7 +105,7 @@ export function findUnreadAnchor(items: TimelineItem[], lastSeenKey: string): st
       }
     }
     for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i].kind === 'assistant') {
+      if (items[i].kind === 'assistant' || items[i].kind === 'plan') {
         return items[i].key;
       }
     }
@@ -121,11 +121,8 @@ export function findUnreadAnchor(items: TimelineItem[], lastSeenKey: string): st
     }
   }
   if (!found) {
-    for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i].kind === 'userPrompt') {
-        return items[i].key;
-      }
-    }
+    // Stale lastSeen (key format changed) is not "never opened".
+    // Jumping to the latest userPrompt would pin a read thread at the top.
     return '';
   }
   for (let i = start; i < items.length; i++) {
@@ -134,7 +131,7 @@ export function findUnreadAnchor(items: TimelineItem[], lastSeenKey: string): st
     }
   }
   for (let i = start; i < items.length; i++) {
-    if (items[i].kind === 'assistant') {
+    if (items[i].kind === 'assistant' || items[i].kind === 'plan') {
       return items[i].key;
     }
   }
@@ -160,28 +157,65 @@ export function countNewContent(items: TimelineItem[], lastSeenKey: string): num
       }
     }
     if (!found) {
-      for (let i = items.length - 1; i >= 0; i--) {
-        if (items[i].kind === 'userPrompt') {
-          start = i;
-          break;
-        }
-      }
+      return 0;
     }
   }
   let n = 0;
   for (let i = start; i < items.length; i++) {
     const k = items[i].kind;
-    if (k === 'userPrompt' || k === 'assistant') {
+    if (k === 'userPrompt' || k === 'assistant' || k === 'plan') {
       n++;
     }
   }
   return n;
 }
 
+/** Grey from the 1-based counter only. 1 disables up; total disables down. */
+export function jumpCanFromIndex(index: number, total: number, dir: number): boolean {
+  if (total <= 0 || index < 1) {
+    return false;
+  }
+  if (dir < 0) {
+    return index > 1;
+  }
+  return index < total;
+}
+
 /**
- * Next user-prompt index in `keys` for up/down jump.
- * First tap (empty lastKey) starts from the nearest user card at or above the
- * visible bottom — never wraps to the oldest prompt.
+ * Which user prompt the jump buttons are on.
+ * lastKey is the cursor after a tap. If empty: last prompt when pinned to
+ * the bottom, otherwise the prompt at the top of the screen.
+ */
+export function currentUserJumpAt(
+  keys: string[],
+  idxs: number[],
+  lastKey: string,
+  viewStart: number,
+  stickToBottom: boolean
+): number {
+  if (keys.length === 0 || keys.length !== idxs.length) {
+    return -1;
+  }
+  if (lastKey.length > 0) {
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i] === lastKey) {
+        return i;
+      }
+    }
+  }
+  if (stickToBottom) {
+    return keys.length - 1;
+  }
+  for (let i = keys.length - 1; i >= 0; i--) {
+    if (idxs[i] <= viewStart) {
+      return i;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Next user-prompt index in `keys` for up/down jump. No wrap.
  * Returns -1 when the move is past either end.
  */
 export function nextUserJumpAt(
@@ -190,45 +224,31 @@ export function nextUserJumpAt(
   lastKey: string,
   dir: number,
   viewStart: number,
-  viewEnd: number
+  viewEnd: number,
+  stickToBottom: boolean = false
 ): number {
-  if (keys.length === 0 || keys.length !== idxs.length) {
+  const cur = currentUserJumpAt(keys, idxs, lastKey, viewStart, stickToBottom);
+  if (cur < 0) {
     return -1;
   }
-  let at = -1;
-  if (lastKey.length > 0) {
-    for (let i = 0; i < keys.length; i++) {
-      if (keys[i] === lastKey) {
-        at = i;
-        break;
-      }
-    }
-  }
-  if (at < 0) {
-    const bottom = viewEnd >= viewStart ? viewEnd : viewStart;
-    for (let i = keys.length - 1; i >= 0; i--) {
-      if (idxs[i] <= bottom) {
-        at = i;
-        break;
-      }
-    }
-    if (at < 0) {
-      for (let i = 0; i < keys.length; i++) {
-        if (idxs[i] >= viewStart) {
-          at = i;
-          break;
-        }
-      }
-    }
-    if (at < 0) {
-      at = dir < 0 ? keys.length - 1 : 0;
-    }
-  }
-  const next = at + dir;
+  const next = cur + dir;
   if (next < 0 || next >= keys.length) {
     return -1;
   }
   return next;
+}
+
+/** False when this direction would not move to another user prompt. */
+export function canUserJump(
+  keys: string[],
+  idxs: number[],
+  lastKey: string,
+  dir: number,
+  viewStart: number,
+  viewEnd: number,
+  stickToBottom: boolean = false
+): boolean {
+  return nextUserJumpAt(keys, idxs, lastKey, dir, viewStart, viewEnd, stickToBottom) >= 0;
 }
 
 export function visibleKeySig(items: TimelineItem[]): string {
@@ -243,5 +263,5 @@ export function visibleKeySig(items: TimelineItem[]): string {
 }
 
 export function visibleRowSig(item: TimelineItem): string {
-  return `${item.text ?? ''}|${item.streaming === true ? '1' : '0'}|${item.statusLabel ?? ''}|${item.stepCount ?? 0}|${item.collapsed === true ? '1' : '0'}|${item.pinnedOpen === true ? '1' : '0'}|${item.failed === true ? '1' : '0'}`;
+  return `${item.text ?? ''}|${item.promptText ?? ''}|${item.streaming === true ? '1' : '0'}|${item.statusLabel ?? ''}|${item.stepCount ?? 0}|${item.collapsed === true ? '1' : '0'}|${item.pinnedOpen === true ? '1' : '0'}|${item.failed === true ? '1' : '0'}`;
 }

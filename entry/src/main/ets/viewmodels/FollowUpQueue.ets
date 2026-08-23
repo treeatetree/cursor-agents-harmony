@@ -16,3 +16,21 @@ export function canFlushQueue(q: QueuedFollowUp, sending: boolean, runActive: bo
   }
   return !sending && !runActive && q.retries < 5;
 }
+
+/** 1s / 2s / 4s … capped at 8s. */
+export function queueBackoffMs(retries: number): number {
+  let n = retries;
+  if (n < 0) {
+    n = 0;
+  }
+  let ms = 1000;
+  let i = 0;
+  while (i < n && ms < 8000) {
+    ms = ms * 2;
+    i += 1;
+  }
+  if (ms > 8000) {
+    return 8000;
+  }
+  return ms;
+}

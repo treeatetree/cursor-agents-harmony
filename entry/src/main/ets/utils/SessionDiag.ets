@@ -76,8 +76,8 @@ export class SessionDiag {
     }
     const line = `{${bits.join(',')}}\n`;
     SessionDiag.pending.push(line);
-    if (SessionDiag.pending.length > 80) {
-      SessionDiag.pending.splice(0, SessionDiag.pending.length - 80);
+    if (SessionDiag.pending.length > 400) {
+      SessionDiag.pending.splice(0, SessionDiag.pending.length - 400);
     }
     SessionDiag.flush();
   }

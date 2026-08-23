@@ -1,7 +1,7 @@
 import {
-  AgentDetail, AgentSummary, AgentsListResponse, CreateAgentResponse, CreateRunResponse,
-  CustomSubagentDef, ModelInfo, ModelsResponse, RepoInfo, RepositoriesResponse, Run,
-  RunUsage, TokenUsage
+  AgentDetail, AgentSummary, AgentsListResponse, ArtifactInfo,
+  CreateAgentResponse, CreateRunResponse, CustomSubagentDef, ModelInfo, ModelsResponse,
+  RepoInfo, RepositoriesResponse, Run, RunUsage, TokenUsage
 } from '../models/Api';
 
 /** Normalize agents list payloads (`items` or legacy `agents`). */
@@ -171,6 +171,38 @@ function parseCustomSubagents(raw: Object | undefined): CustomSubagentDef[] {
       prompt: `${s['prompt'] ?? ''}`,
       model: `${s['model'] ?? 'inherit'}`
     });
+  }
+  return out;
+}
+
+export function unwrapArtifacts(raw: object): ArtifactInfo[] {
+  const r = raw as Record<string, Object>;
+  const asArr = raw as Object[];
+  const fromKey = r['items'] ?? r['artifacts'] ?? r['files'] ?? r['data'];
+  const list = (fromKey ?? (asArr.length !== undefined ? asArr : [])) as Object[];
+  const out: ArtifactInfo[] = [];
+  if (list.length === undefined) {
+    return out;
+  }
+  for (let i = 0; i < list.length; i++) {
+    try {
+      const row = list[i] as Record<string, Object>;
+      const path = `${row['path'] ?? row['file'] ?? row['filePath'] ?? row['name'] ?? ''}`.trim();
+      if (path.length === 0) {
+        continue;
+      }
+      const item: ArtifactInfo = { path: path };
+      const size = Number(row['sizeBytes'] ?? row['size'] ?? 0);
+      if (size > 0) {
+        item.sizeBytes = size;
+      }
+      const at = `${row['updatedAt'] ?? row['updated_at'] ?? ''}`;
+      if (at.length > 0) {
+        item.updatedAt = at;
+      }
+      out.push(item);
+    } catch (_e) {
+    }
   }
   return out;
 }

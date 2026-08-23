@@ -1,4 +1,4 @@
-import { AgentDetail, AgentSummary, ConversationMessage, Run, RunStatus, RunsListResponse } from '../models/Api';
+import { AgentDetail, AgentSummary, ApiException, ConversationMessage, Run, RunStatus, RunsListResponse } from '../models/Api';
 import { unwrapAgentDetail } from '../api/ApiUnwrap';
 import { CursorApiClient } from '../api/CursorApiClient';
 import { AgentCache } from './AgentCache';
@@ -56,24 +56,16 @@ export class AgentPrefetch {
     const priority: string[] = [];
     const normal: string[] = [];
     const front = reason === 'unread' || reason === 'terminal';
+    let hits = 0;
+    let skips = 0;
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
       if (this.coveredByCache(id, inbox)) {
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'hit',
-          agentId: id,
-          extra: `reason=${reason} settled=1`
-        });
+        hits += 1;
         continue;
       }
       if (!this.canPrefetch(id, watching)) {
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'skip',
-          agentId: id,
-          extra: `reason=${reason}`
-        });
+        skips += 1;
         continue;
       }
       this.removeQueued(id);
@@ -82,14 +74,16 @@ export class AgentPrefetch {
       } else {
         normal.push(id);
       }
+    }
+    this.queue = priority.concat(this.queue.concat(normal));
+    const queued = priority.length + normal.length;
+    if (queued > 0 || hits > 0 || skips > 0) {
       SessionDiag.emit({
         tag: TAG,
         event: 'enqueue',
-        agentId: id,
-        extra: `reason=${reason} q=${this.queue.length + priority.length + normal.length}`
+        extra: `reason=${reason} queued=${queued} hit=${hits} skip=${skips} q=${this.queue.length}`
       });
     }
-    this.queue = priority.concat(this.queue.concat(normal));
     this.pump();
   }
 
@@ -134,6 +128,7 @@ export class AgentPrefetch {
   enqueueVisible(rows: AgentSummary[], reason: string): void {
     const cache = AgentCache.getInstance();
     const want: string[] = [];
+    let hits = 0;
     for (let i = 0; i < rows.length; i++) {
       const a = rows[i];
       const id = a.id;
@@ -143,12 +138,7 @@ export class AgentPrefetch {
       const inboxRunId = a.latestRunId ?? '';
       const inboxRunStatus = `${a.latestRunStatus ?? ''}`;
       if (cacheCoversDetail(cached, inboxRunId, inboxRunStatus)) {
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'hit',
-          agentId: id,
-          extra: `reason=${reason} settled=1 n=${n}`
-        });
+        hits += 1;
         continue;
       }
       const localRun = cached?.detail?.latestRunId ?? cached?.timelineRunId ?? '';
@@ -156,22 +146,16 @@ export class AgentPrefetch {
       const live = isRunInFlight(inboxRunStatus);
       const staleMs = reason === 'show' ? VISIBLE_STALE_MS : FRESH_MS;
       if (n > 0 && live && sameRun && age >= 0 && age < staleMs) {
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'hit',
-          agentId: id,
-          extra: `reason=${reason} cacheAgeMs=${age} n=${n}`
-        });
+        hits += 1;
         continue;
       }
-      SessionDiag.emit({
-        tag: TAG,
-        event: 'miss',
-        agentId: id,
-        extra: `reason=${reason} cacheAgeMs=${age} n=${n}`
-      });
       want.push(id);
     }
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'visible',
+      extra: `reason=${reason} hit=${hits} miss=${want.length}`
+    });
     if (want.length > 0) {
       this.enqueue(want, reason);
     }
@@ -282,12 +266,15 @@ export class AgentPrefetch {
       });
       const hit: PrefetchHit = { ok: true, detail: detail, runs: runs, messages: messages };
       return hit;
-    } catch (_e) {
+    } catch (e) {
+      const code = e instanceof ApiException ? e.code : -1;
+      const api = e instanceof ApiException ? e.apiCode : '';
       SessionDiag.emit({
         tag: TAG,
         event: 'fail',
         agentId: agentId,
-        elapsedMs: Date.now() - started
+        elapsedMs: Date.now() - started,
+        extra: `code=${code} api=${api}`
       });
       return miss;
     } finally {

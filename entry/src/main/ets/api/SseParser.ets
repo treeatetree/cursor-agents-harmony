@@ -25,6 +25,8 @@ export class SseParser {
         return out;
       }
       this.droppingLine = false;
+      this.droppingFrame = false;
+      this.clearFrame();
       incoming = incoming.substring(newline + 1);
     }
     this.lineBuf += incoming;

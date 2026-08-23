@@ -103,8 +103,8 @@ export struct ToolCallRow {
         if (this.canExpand()) {
           runLayout(() => {
             this.opened = !this.opened;
+            this.onToggle();
           });
-          this.onToggle();
         }
       })
 

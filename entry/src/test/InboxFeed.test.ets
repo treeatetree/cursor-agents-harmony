@@ -1,6 +1,6 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { AgentSummary } from '../main/ets/models/Api';
-import { applyInboxQuery, diffInboxAgents, flattenCardFeed, flattenListFeed, groupAgents, inboxDeltaLabel } from '../main/ets/utils/InboxGrouping';
+import { applyInboxQuery, diffInboxAgents, flattenCardFeed, flattenListFeed, groupAgents, inboxDeltaLabel, mergeInboxLists } from '../main/ets/utils/InboxGrouping';
 
 function sample(id: string, name: string, repo: string): AgentSummary {
   const row: AgentSummary = {
@@ -85,6 +85,19 @@ export default function inboxFeedTest() {
       expect(d.updated).assertEqual(1);
       expect(inboxDeltaLabel(d).indexOf('更新') >= 0).assertTrue();
       expect(inboxDeltaLabel(diffInboxAgents(prev, prev))).assertEqual('已是最新');
+    });
+
+    it('drops failed local create rows unless they are still held', 0, () => {
+      const remote: AgentSummary[] = [sample('a', 'A', '')];
+      const localRow = sample('local-1', '新任务', '');
+      localRow.latestRunStatus = 'ERROR';
+      const local: AgentSummary[] = [remote[0], localRow];
+      const dropped = mergeInboxLists(remote, local, [], Date.parse('2026-08-16T12:01:30.000Z'));
+      expect(dropped.length).assertEqual(1);
+      expect(dropped[0].id).assertEqual('a');
+      const held = mergeInboxLists(remote, local, ['local-1'], Date.parse('2026-08-16T12:01:30.000Z'));
+      expect(held.length).assertEqual(2);
+      expect(held[1].id).assertEqual('local-1');
     });
   });
 }

@@ -18,6 +18,7 @@ import {
 import { Tokens } from '../theme/Tokens';
 import { BreakpointStore } from '../store/BreakpointStore';
 import { ActivityCard } from '../components/ActivityCard';
+import { PlanCard } from '../components/PlanCard';
 import { PromptShell } from '../components/PromptShell';
 import { MarkdownLite } from '../components/MarkdownLite';
 import { InboxVM } from '../viewmodels/InboxVM';
@@ -39,10 +40,13 @@ import { copyToClipboard } from '../utils/Clipboard';
 import { confirmDanger } from '../utils/AppDialog';
 import { showToast } from '../utils/AppToast';
 import { Haptics } from '../utils/Haptics';
+import { SessionDiag } from '../utils/SessionDiag';
 import { NetworkMonitor } from '../utils/NetworkMonitor';
 import { relativeTime } from '../utils/TimeFmt';
 import { isShowableImageUrl, isOpaqueStepLabel } from '../utils/TimelineMedia';
-import { isWaitingThink, nextUserJumpAt, visibleKeySig, visibleRowSig, visibleTimeline } from '../utils/TimelineView';
+import { isWaitingThink, jumpCanFromIndex, visibleKeySig, visibleRowSig,
+  visibleTimeline } from '../utils/TimelineView';
+import { isPlanToolEvent } from '../utils/PlanDoc';
 import { isSafeHttpsUrl } from '../utils/SafeUrl';
 import { meaningfulStepTitle, processDoneTitle, processLiveTitle, runHeaderVerb, toolSlug,
   waitingThinkLabel } from '../utils/TimelineCopy';
@@ -135,6 +139,8 @@ struct AgentDetailPage {
   @State pressKey: string = '';
   @State jumpIndex: number = 0;
   @State jumpTotal: number = 0;
+  @State jumpCanUp: boolean = false;
+  @State jumpCanDown: boolean = false;
   @State showJumpHint: boolean = false;
   @State quoteText: string = '';
   @State bubbleMax: number = 280;
@@ -145,11 +151,15 @@ struct AgentDetailPage {
   private lastKb: number = 0;
   private lastListH: number = 0;
   private pinTimer: number = -1;
+  private pinGuardUntil: number = 0;
   private followSig: string = '';
   private unreadJumped: boolean = false;
   private jumpHintTimer: number = -1;
   private lastUserKey: string = '';
   private lastJumpedKey: string = '';
+  private jumpTouched: boolean = false;
+  private jumpLockUntil: number = 0;
+  private lastInitAnchor: string = '';
   private feedViewStart: number = 0;
   private feedViewEnd: number = -1;
   private unsubNet: (() => void) | undefined = undefined;
@@ -210,9 +220,16 @@ struct AgentDetailPage {
     if (this.vm.agentId.length > 0 && this.vm.agentId !== this.agentId) {
       this.agentId = this.vm.agentId;
       this.lastUserKey = '';
+      this.jumpIndex = 0;
+      this.jumpTotal = 0;
+      this.jumpTouched = false;
+      this.lastInitAnchor = '';
+      this.unreadJumped = false;
       this.feedViewEnd = -1;
       this.feedKeySig = '';
       this.feedRowSigs = [];
+      this.followSig = '';
+      this.lastJumpedKey = '';
     }
     this.name = this.vm.name;
     this.status = this.vm.status;
@@ -249,6 +266,13 @@ struct AgentDetailPage {
     this.armMdSettle();
     this.armTick();
 
+    if (this.vm.createAbandoned) {
+      this.vm.createAbandoned = false;
+      this.vm.close();
+      this.navStack.pop();
+      return;
+    }
+
     if (this.vm.deleted) {
       InboxVM.getInstance().removeLocal(this.agentId);
       this.vm.close();
@@ -257,7 +281,7 @@ struct AgentDetailPage {
     }
 
     if (this.vm.stickToBottom) {
-      this.pinFeedToComposer(16, false);
+      this.pinFeedToComposer(16, true);
     } else if (this.unreadAnchorKey.length > 0 && this.lastJumpedKey !== this.unreadAnchorKey) {
       let found = false;
       for (let i = 0; i < this.feed.length; i++) {
@@ -290,33 +314,132 @@ struct AgentDetailPage {
     }
     setTimeout(() => {
       try {
-        this.listScroller.scrollToIndex(idx);
+        this.listScroller.scrollToIndex(idx, true, ScrollAlign.START);
       } catch (_e) {
       }
     }, 32);
   }
 
-  private jumpUser(dir: number): void {
+  private userJumpKeys(): string[] {
     const keys: string[] = [];
-    const idxs: number[] = [];
     for (let i = 0; i < this.feed.length; i++) {
       if (this.feed[i].kind === 'userPrompt') {
         keys.push(this.feed[i].key);
+      }
+    }
+    return keys;
+  }
+
+  private userJumpIdxs(): number[] {
+    const idxs: number[] = [];
+    for (let i = 0; i < this.feed.length; i++) {
+      if (this.feed[i].kind === 'userPrompt') {
         idxs.push(i);
       }
     }
+    return idxs;
+  }
+
+  private refreshJumpCans(): void {
+    const up = jumpCanFromIndex(this.jumpIndex, this.jumpTotal, -1);
+    const down = jumpCanFromIndex(this.jumpIndex, this.jumpTotal, 1);
+    SessionDiag.emit({
+      tag: 'Jump',
+      event: 'refresh',
+      extra: `idx=${this.jumpIndex} total=${this.jumpTotal} up=${up ? 1 : 0} down=${down ? 1 : 0} curUp=${this.jumpCanUp ? 1 : 0} curDown=${this.jumpCanDown ? 1 : 0} touched=${this.jumpTouched ? 1 : 0}`
+    });
+    if (up !== this.jumpCanUp) {
+      this.jumpCanUp = up;
+    }
+    if (down !== this.jumpCanDown) {
+      this.jumpCanDown = down;
+    }
+  }
+
+  private initialJumpIndex(keys: string[]): number {
     if (keys.length === 0) {
-      return;
+      return 0;
     }
-    const viewEnd = this.feedViewEnd >= 0 ? this.feedViewEnd :
-      (this.vm.stickToBottom ? Math.max(this.feed.length - 1, 0) : this.feedViewStart);
-    const at = nextUserJumpAt(keys, idxs, this.lastUserKey, dir, this.feedViewStart, viewEnd);
-    if (at < 0) {
-      return;
+    const anchor = this.unreadAnchorKey;
+    if (anchor.length === 0) {
+      return keys.length;
     }
-    this.lastUserKey = keys[at];
-    this.jumpIndex = at + 1;
+    let feedAt = -1;
+    for (let i = 0; i < this.feed.length; i++) {
+      if (this.feed[i].key === anchor) {
+        feedAt = i;
+        break;
+      }
+    }
+    if (feedAt < 0) {
+      return keys.length;
+    }
+    let last = 0;
+    let seen = 0;
+    for (let i = 0; i <= feedAt; i++) {
+      if (this.feed[i].kind === 'userPrompt') {
+        seen++;
+        last = seen;
+      }
+    }
+    return last > 0 ? last : 1;
+  }
+
+  private syncJumpCursor(): void {
+    const keys = this.userJumpKeys();
+    const oldTotal = this.jumpTotal;
+    const oldIndex = this.jumpIndex;
     this.jumpTotal = keys.length;
+    if (keys.length === 0) {
+      this.jumpIndex = 0;
+      this.refreshJumpCans();
+      return;
+    }
+    const unreadInit = this.unreadAnchorKey.length > 0 && this.unreadAnchorKey !== this.lastInitAnchor &&
+      !this.jumpTouched;
+    if (unreadInit) {
+      this.lastInitAnchor = this.unreadAnchorKey;
+      this.jumpIndex = this.initialJumpIndex(keys);
+    } else if (!this.jumpTouched && (this.jumpIndex < 1 || this.jumpIndex > this.jumpTotal)) {
+      this.jumpIndex = this.initialJumpIndex(keys);
+    } else if (oldIndex === oldTotal && this.jumpTotal > oldTotal) {
+      // At the end when new prompts arrived — follow to the new end.
+      this.jumpIndex = this.jumpTotal;
+    } else if (this.jumpIndex > this.jumpTotal) {
+      this.jumpIndex = this.jumpTotal;
+    } else if (this.jumpIndex < 1) {
+      this.jumpIndex = this.jumpTotal;
+    }
+    this.refreshJumpCans();
+  }
+
+  private jumpUser(dir: number): void {
+    const keys = this.userJumpKeys();
+    const idxs = this.userJumpIdxs();
+    if (keys.length === 0 || keys.length !== idxs.length) {
+      return;
+    }
+    if (!jumpCanFromIndex(this.jumpIndex, this.jumpTotal, dir)) {
+      return;
+    }
+    const next = this.jumpIndex + dir;
+    if (next < 1 || next > keys.length) {
+      return;
+    }
+    const at = next - 1;
+    this.jumpTouched = true;
+    this.lastUserKey = keys[at];
+    this.feedViewStart = idxs[at];
+    this.jumpLockUntil = Date.now() + 800;
+    this.jumpIndex = next;
+    this.jumpTotal = keys.length;
+    this.jumpCanUp = jumpCanFromIndex(next, keys.length, -1);
+    this.jumpCanDown = jumpCanFromIndex(next, keys.length, 1);
+    SessionDiag.emit({
+      tag: 'Jump',
+      event: 'tap',
+      extra: `dir=${dir} next=${next} total=${keys.length} feedLen=${this.feed.length}`
+    });
     this.showJumpHint = true;
     if (this.jumpHintTimer >= 0) {
       clearTimeout(this.jumpHintTimer);
@@ -327,9 +450,10 @@ struct AgentDetailPage {
     }, 1400) as number;
     this.vm.stickToBottom = false;
     try {
-      this.listScroller.scrollToIndex(idxs[at]);
+      this.listScroller.scrollToIndex(idxs[at], true, ScrollAlign.START);
     } catch (_e) {
     }
+    this.refreshJumpCans();
   }
 
   private applyQuote(text: string): void {
@@ -382,6 +506,7 @@ struct AgentDetailPage {
     this.followSig = sig;
     this.vm.stickToBottom = true;
     this.showJump = false;
+    this.pinGuardUntil = Date.now() + delayMs + 280;
     if (this.pinTimer >= 0) {
       clearTimeout(this.pinTimer);
       this.pinTimer = -1;
@@ -434,6 +559,7 @@ struct AgentDetailPage {
           this.visibleSource.updateAt(i, next[i]);
         }
       }
+      this.syncJumpCursor();
       return;
     }
     const rowSigs: string[] = [];
@@ -444,6 +570,19 @@ struct AgentDetailPage {
     this.feedRowSigs = rowSigs;
     this.feed = next;
     this.visibleSource.replaceAll(next);
+    if (this.lastUserKey.length > 0) {
+      let keep = false;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i].key === this.lastUserKey) {
+          keep = true;
+          break;
+        }
+      }
+      if (!keep) {
+        this.lastUserKey = '';
+      }
+    }
+    this.syncJumpCursor();
   }
 
   private consumeNotice(): void {
@@ -572,7 +711,7 @@ struct AgentDetailPage {
     if (n === '正在提交…' || n === '连接中…') {
       return n;
     }
-    if (n.indexOf('重连') >= 0 || n.indexOf('流已过期') >= 0 || n.indexOf('正在加载最终') >= 0) {
+    if (n.indexOf('流已过期') >= 0 || n.indexOf('正在加载最终') >= 0) {
       return n;
     }
     if (this.sending) {
@@ -1151,13 +1290,13 @@ struct AgentDetailPage {
         this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.NONE);
       } catch (_e) {
       }
-      this.pagePad = this.bp.pagePad();
+      this.pagePad = this.bp.pagePad() + 4;
       this.topInset = this.bp.safeTop();
       this.bottomInset = this.bp.followComposerBottom();
       this.isHover = this.bp.isHover;
       this.unsubBp = this.bp.onChange(() => {
         runLayout(() => {
-          this.pagePad = this.bp.pagePad();
+          this.pagePad = this.bp.pagePad() + 4;
           this.topInset = this.bp.safeTop();
           this.bottomInset = this.bp.followComposerBottom();
           this.isHover = this.bp.isHover;
@@ -1328,21 +1467,7 @@ struct AgentDetailPage {
             ListItem() {
               this.timelineItem(item)
             }
-          }, (item: TimelineItem) => this.rowKey(item))
-          if (this.processFoot().length > 0) {
-            ListItem() {
-              Text(this.processFoot())
-                .fontSize(Tokens.typeCaption)
-                .fontFamily(Tokens.fontUi)
-                .fontColor($r('app.color.text_tertiary'))
-                .padding({ top: 8, bottom: 4 })
-                .onClick(() => {
-                  if (this.processFootRetry()) {
-                    this.runRetry();
-                  }
-                })
-            }
-          }
+          }, (item: TimelineItem) => item.key)
         }
         .width('100%')
         .height('100%')
@@ -1353,41 +1478,49 @@ struct AgentDetailPage {
         .focusable(true)
         .defaultFocus(false)
         .onScrollIndex((start: number, end: number) => {
+          if (Date.now() < this.jumpLockUntil) {
+            return;
+          }
           this.feedViewStart = start;
           this.feedViewEnd = end;
-          const extra = this.processFoot().length > 0 ? 1 : 0;
-          const nearBottom = this.feed.length === 0 || end >= this.feed.length + extra - 2;
+          const nearBottom = this.feed.length === 0 || end >= this.feed.length - 2;
+          if (Date.now() < this.pinGuardUntil) {
+            this.showJump = false;
+            return;
+          }
           this.vm.stickToBottom = nearBottom;
           this.showJump = !nearBottom && this.runActive;
         })
 
-          Column() {
+        if (this.hasUserPrompts()) {
+          Row() {
             Blank()
               .layoutWeight(1)
               .hitTestBehavior(HitTestMode.Transparent)
-            if (this.hasUserPrompts()) {
-              Column({ space: 6 }) {
-                if (this.showJumpHint) {
-                  StatusPill({
-                    text: `${this.jumpIndex} / ${this.jumpTotal}`
-                  })
-                }
-                this.jumpCluster()
+            Stack({ alignContent: Alignment.End }) {
+              this.jumpCluster()
+              if (this.showJumpHint) {
+                StatusPill({
+                  text: `${this.jumpIndex} / ${this.jumpTotal}`
+                })
+                .hitTestBehavior(HitTestMode.None)
+                .offset({ y: -64 })
               }
-              .alignItems(HorizontalAlign.End)
-              .alignSelf(ItemAlign.End)
-              .margin({ right: 12, bottom: 12 })
             }
+            .height('100%')
+            .hitTestBehavior(HitTestMode.Transparent)
+            .padding({ right: 4 })
           }
           .width('100%')
           .height('100%')
-          .alignItems(HorizontalAlign.Center)
           .hitTestBehavior(HitTestMode.Transparent)
+          .zIndex(8)
         }
-        .layoutWeight(1)
-        .width('100%')
-        .height('100%')
-        .onAreaChange((_old: Area, now: Area) => {
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .height('100%')
+      .onAreaChange((_old: Area, now: Area) => {
           const raw = now.height;
           const h = typeof raw === 'number' ? raw : 0;
           if (h > 0 && this.lastListH > 8 && h < this.lastListH - 12 && this.vm.stickToBottom) {
@@ -1413,12 +1546,12 @@ struct AgentDetailPage {
   @Builder
   jumpCluster() {
     Column() {
-      this.jumpIcon('chevronUp', -1, '上一条提问')
+      this.jumpArrowUp()
       Divider()
         .color($r('app.color.separator'))
         .strokeWidth(1)
         .width(20)
-      this.jumpIcon('chevronDown', 1, '下一条提问')
+      this.jumpArrowDown()
     }
     .backgroundColor($r('app.color.bg1'))
     .border({ width: 1, color: $r('app.color.border') })
@@ -1428,36 +1561,114 @@ struct AgentDetailPage {
   }
 
   @Builder
-  jumpIcon(name: string, dir: number, label: string) {
+  jumpArrowUp() {
     Column() {
-      HuIcon({
-        name: name,
-        iconSize: 18,
-        tint: $r('app.color.text_secondary')
-      })
+      if (this.jumpCanUp) {
+        HuIcon({
+          name: 'chevronUp',
+          iconSize: 18,
+          tint: $r('app.color.text_secondary')
+        })
+      } else {
+        HuIcon({
+          name: 'chevronUp',
+          iconSize: 18,
+          tint: $r('app.color.text_tertiary')
+        })
+      }
     }
     .width(40)
     .height(40)
     .justifyContent(FlexAlign.Center)
     .alignItems(HorizontalAlign.Center)
-    .opacity(this.pressKey === `jump:${dir}` ? 0.55 : 1)
+    .opacity(this.jumpCanUp ? (this.pressKey === 'jump:-1' ? 0.55 : 1) : 0.36)
     .animation({ duration: 160, curve: Curve.EaseOut })
-    .accessibilityText(label)
+    .accessibilityText('上一条提问')
     .onTouch((e: TouchEvent) => {
+      if (!this.jumpCanUp) {
+        return;
+      }
       if (e.type === TouchType.Down) {
-        this.pressKey = `jump:${dir}`;
+        this.pressKey = 'jump:-1';
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressKey = '';
       }
     })
     .onClick(() => {
+      if (!this.jumpCanUp) {
+        return;
+      }
       Haptics.click();
-      this.jumpUser(dir);
+      this.jumpUser(-1);
+    })
+  }
+
+  @Builder
+  jumpArrowDown() {
+    Column() {
+      if (this.jumpCanDown) {
+        HuIcon({
+          name: 'chevronDown',
+          iconSize: 18,
+          tint: $r('app.color.text_secondary')
+        })
+      } else {
+        HuIcon({
+          name: 'chevronDown',
+          iconSize: 18,
+          tint: $r('app.color.text_tertiary')
+        })
+      }
+    }
+    .width(40)
+    .height(40)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .opacity(this.jumpCanDown ? (this.pressKey === 'jump:1' ? 0.55 : 1) : 0.36)
+    .animation({ duration: 160, curve: Curve.EaseOut })
+    .accessibilityText('下一条提问')
+    .onTouch((e: TouchEvent) => {
+      if (!this.jumpCanDown) {
+        return;
+      }
+      if (e.type === TouchType.Down) {
+        this.pressKey = 'jump:1';
+      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        this.pressKey = '';
+      }
+    })
+    .onClick(() => {
+      if (!this.jumpCanDown) {
+        return;
+      }
+      Haptics.click();
+      this.jumpUser(1);
     })
   }
 
   @Builder
   composerPane() {
+    if (this.processFoot().length > 0) {
+      Row() {
+        StatusPill({
+          text: this.processFoot(),
+          loading: !this.processFootRetry(),
+          tone: this.processFootRetry() ? 'warn' : 'info',
+          action: this.processFootRetry() ? '重连' : '',
+          onTap: () => {
+            if (this.processFootRetry()) {
+              this.runRetry();
+            }
+          },
+          onAction: () => {
+            this.runRetry();
+          }
+        })
+      }
+      .width('100%')
+      .padding({ left: this.pagePad, right: this.pagePad, bottom: 4 })
+      .justifyContent(FlexAlign.Start)
+    }
     if (this.followHints().length > 0) {
       Row({ space: 8 }) {
         ForEach(this.followHints(), (h: string) => {
@@ -1473,7 +1684,7 @@ struct AgentDetailPage {
         }, (h: string) => h)
       }
       .width('100%')
-      .padding({ left: Tokens.pagePad, right: Tokens.pagePad, bottom: 4 })
+      .padding({ left: this.pagePad, right: this.pagePad, bottom: 4 })
     }
 
     PromptShell({
@@ -1483,7 +1694,7 @@ struct AgentDetailPage {
       live: this.runActive,
       cancelling: this.cancelling,
       busy: this.sending,
-      status: this.sending ? '发送中' : '',
+      status: this.sending ? '发送中' : (this.queuedFollowUp.length > 0 ? '结束后发送' : ''),
       imageCount: this.attachedImages.length,
       imageUris: $imageUris,
       toolsOn: countMcp(this.followUpMcp) > 0,
@@ -1495,6 +1706,7 @@ struct AgentDetailPage {
       queueNote: this.queueImagesLost ? '图片未保存' : '',
       quoteText: this.quoteText,
       bottomPad: this.bottomInset,
+      hPad: this.pagePad,
       onFocusChange: (on: boolean) => {
         if (on) {
           this.pinFeedToComposer(40, true);
@@ -2139,10 +2351,6 @@ struct AgentDetailPage {
     return processDoneTitle(tools.length > 0 || item.kind !== 'thinking', elapsed);
   }
 
-  private rowKey(item: TimelineItem): string {
-    return item.key;
-  }
-
   private isProcessKind(kind: string): boolean {
     return kind === 'thinking' || kind === 'progress' || kind === 'step';
   }
@@ -2197,6 +2405,9 @@ struct AgentDetailPage {
     for (let i = 0; i < total; i++) {
       const it = this.vm.source.getData(i);
       if (it.runId === runId && it.kind === 'tool') {
+        if (isPlanToolEvent(it.tool?.name ?? '', it.tool?.argsText ?? '')) {
+          continue;
+        }
         out.push(it);
       }
     }
@@ -2314,6 +2525,41 @@ struct AgentDetailPage {
   }
 
   @Builder
+  paintActivity(item: TimelineItem, chrome: string) {
+    if (item.kind === 'subagent') {
+      ActivityCard({
+        item: item,
+        runActive: false,
+        shimmerOn: this.shimmerOn,
+        title: item.statusLabel ?? '子任务',
+        body: item.text ?? '',
+        tools: [],
+        chrome: chrome,
+        onToggle: () => {
+          this.vm.toggleCollapsed(item.key);
+        }
+      })
+    } else {
+      ActivityCard({
+        item: item,
+        runActive: this.runActive,
+        shimmerOn: this.shimmerOn,
+        title: this.cardProcessTitle(item),
+        body: this.processBodyForRun(item.runId),
+        tools: this.toolsForRun(item.runId),
+        chrome: chrome,
+        onToggle: () => {
+          this.vm.toggleCollapsed(item.key);
+        },
+        onToggleTool: (key: string) => {
+          Haptics.tick();
+          this.vm.toggleCollapsed(key);
+        }
+      })
+    }
+  }
+
+  @Builder
   timelineItem(item: TimelineItem) {
     if (item.kind === 'userPrompt') {
       Column({ space: 4 }) {
@@ -2397,19 +2643,18 @@ struct AgentDetailPage {
       .padding({ top: 10, bottom: 2 })
       .alignItems(VerticalAlign.Center)
       .transition(chromeTransition())
-    } else if (item.kind === 'subagent') {
-      ActivityCard({
+    } else if (item.kind === 'plan') {
+      PlanCard({
         item: item,
-        runActive: false,
-        shimmerOn: this.shimmerOn,
-        title: item.statusLabel ?? '子任务',
-        body: item.text ?? '',
-        tools: [],
         onToggle: () => {
-          Haptics.tick();
           this.vm.toggleCollapsed(item.key);
+        },
+        onQuote: (t: string) => {
+          this.applyQuote(t);
         }
       })
+    } else if (item.kind === 'subagent') {
+      this.paintActivity(item, 'full')
     } else if (item.kind === 'thinking' || item.kind === 'progress' || item.kind === 'step') {
       if (this.isWaitingRow(item)) {
         Text(this.waitingLine())
@@ -2419,22 +2664,7 @@ struct AgentDetailPage {
           .opacity(shimmerOpacity(this.shimmerOn))
           .padding({ top: 8, bottom: 4 })
       } else if (this.isLeadProcess(item)) {
-        ActivityCard({
-          item: item,
-          runActive: this.runActive,
-          shimmerOn: this.shimmerOn,
-          title: this.cardProcessTitle(item),
-          body: this.processBodyForRun(item.runId),
-          tools: this.toolsForRun(item.runId),
-          onToggle: () => {
-            Haptics.tick();
-            this.vm.toggleCollapsed(item.key);
-          },
-          onToggleTool: (key: string) => {
-            Haptics.tick();
-            this.vm.toggleCollapsed(key);
-          }
-        })
+        this.paintActivity(item, 'full')
       } else {
         Column().width('100%').height(0)
       }

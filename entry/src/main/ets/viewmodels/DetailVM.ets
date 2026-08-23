@@ -28,21 +28,27 @@ import { PromptImage, toApiImages } from '../utils/ImagePicker';
 import { formatModelSent, modelSentJson, modelSentTags } from '../utils/ModelGroups';
 import { convFingerprint, keepPendingTurns, lastMessageStamp, mergeCachedActivity, restoreUserSentTags } from '../utils/TimelineMerge';
 import { SessionDiag } from '../utils/SessionDiag';
-import { appendRuntimeText, capTimeline } from '../utils/CacheLimit';
+import { appendRuntimeText, CACHE_TEXT_MAX, capTimeline } from '../utils/CacheLimit';
 import { cacheCoversConversation, cacheCoversDetail } from '../utils/CachePolicy';
 import { isRunInFlight } from '../utils/InboxGrouping';
 import { countNewContent, findUnreadAnchor, lastContentKey, visibleTimeline } from '../utils/TimelineView';
 import {
   imageUrlsFromPrompt, isLiveWaitItem, waitingKey
 } from '../utils/TimelineMedia';
-import { conversationToTimeline } from '../utils/ConversationBuild';
+import { conversationToTimeline, foldAgentWrittenPrompts } from '../utils/ConversationBuild';
+import {
+  applyPlanDoc, foldPlanItems, isPlanPath, isPlanToolEvent, keepFullToolArgs, looksLikePlanDoc,
+  mergePlanInto, parsePlanDoc, planDocFromItem, planDocFromTool, planItemFromDoc, shouldMergePlans,
+  shortPlanPath, titleFromPlanPath, weavePlans
+} from '../utils/PlanDoc';
 import { canApplyRunStatus, isNewerIso, isTerminalStatus } from '../utils/RunState';
 import { OpIdStore } from '../store/OpIdStore';
 import { RunStateMachine } from './RunStateMachine';
 import { ArtifactService } from './ArtifactService';
 import { StreamSession } from '../api/StreamSession';
-import { canFlushQueue } from './FollowUpQueue';
+import { canFlushQueue, queueBackoffMs } from './FollowUpQueue';
 import { isSafeHttpsUrl } from '../utils/SafeUrl';
+import { showToast } from '../utils/AppToast';
 
 const TAG = 'DetailVM';
 
@@ -95,6 +101,7 @@ export class DetailVM {
   lastFailedPrompt: string = '';
   lastFailedImages: PromptImage[] = [];
   createRetryable: boolean = false;
+  createAbandoned: boolean = false;
   repoUrl: string = '';
   startingRef: string = '';
   compareUrl: string = '';
@@ -130,12 +137,16 @@ export class DetailVM {
   private followStartedAt: number = 0;
   private followFirstFrame: boolean = false;
   private openWasUnread: boolean = false;
+  private unreadSettled: boolean = false;
   private openGen: number = 0;
   private streamSession: number = 0;
   private lastRunUpdatedAt: string = '';
   private unknownSubmit: boolean = false;
   private phaseMachine: RunStateMachine = new RunStateMachine();
   private artifactsSvc: ArtifactService = new ArtifactService();
+  private planKeep: TimelineItem[] = [];
+  private hydrating: boolean = false;
+  private hydrateAgain: boolean = false;
   private streamSessionHandle: StreamSession = new StreamSession();
   private onUi: (() => void) | undefined = undefined;
   private viewing: boolean = false;
@@ -188,6 +199,9 @@ export class DetailVM {
   }
 
   detachView(): void {
+    if (!this.viewing) {
+      return;
+    }
     this.viewing = false;
     this.onUi = undefined;
     AppStorage.setOrCreate('watchingAgentId', '');
@@ -246,6 +260,9 @@ export class DetailVM {
     }
     DetailVM.activeInstance = this;
     this.agentId = agentId;
+    this.planKeep = [];
+    this.hydrating = false;
+    this.hydrateAgain = false;
     this.viewing = true;
     AppStorage.setOrCreate('watchingAgentId', agentId);
     this.errorMsg = '';
@@ -253,6 +270,7 @@ export class DetailVM {
     this.deleted = false;
     this.needsPlanUpgrade = false;
     this.createRetryable = false;
+    this.createAbandoned = false;
     this.convKey = '';
     this.unreadAnchorKey = '';
     this.unreadNewCount = 0;
@@ -266,6 +284,7 @@ export class DetailVM {
       pendingFresh = false;
     }
     this.openWasUnread = UnreadStore.getInstance().isUnread(agentId) || pendingFresh;
+    this.unreadSettled = false;
 
     const cached = AgentCache.getInstance().loadAgent(agentId);
     let painted = false;
@@ -288,7 +307,7 @@ export class DetailVM {
       painted = true;
       cacheHit = cacheHit === 'none' ? 'messages' : `${cacheHit}+messages`;
     } else if (cached?.timeline && cached.timeline.length > 0) {
-      this.source.replaceAll(cached.timeline);
+      this.source.replaceAll(foldPlanItems(foldAgentWrittenPrompts(cached.timeline)));
       painted = true;
       cacheHit = cacheHit === 'none' ? 'timeline' : `${cacheHit}+timeline`;
     }
@@ -296,6 +315,9 @@ export class DetailVM {
       this.applyMergedActivity(liveKeep);
     }
     this.applyCachedExtras(cached);
+    if (this.artifacts.length > 0 && this.timelineNeedsPlanHydrate()) {
+      this.hydratePlansFromArtifacts();
+    }
     if (keepRunId.length > 0 && liveActive) {
       this.activeRunId = keepRunId;
       this.streamRunId = keepStreamId;
@@ -471,7 +493,7 @@ export class DetailVM {
       }
       if (this.activeRunId.length > 0 && this.isRunActive()) {
         const run = await client.getRun(agentId, this.activeRunId);
-        this.applyRunSnapshot(run);
+        this.applyRunSnapshot(run, true);
         if (this.isRunActive()) {
           const coord = StreamCoordinator.getInstance();
           if (!(streamAlive && coord.isActive() && coord.currentRunId() === run.id)) {
@@ -484,10 +506,14 @@ export class DetailVM {
         }
       }
 
-      if (cached?.extrasFetched !== true || this.isRunActive()) {
+      if (cached?.extrasFetched !== true || this.isRunActive() ||
+        (this.timelineNeedsPlanHydrate() && this.artifacts.length === 0)) {
         this.loadArtifactsAndUsage();
       } else {
         this.applyCachedExtras(cached);
+        if (this.timelineNeedsPlanHydrate()) {
+          this.hydratePlansFromArtifacts();
+        }
       }
       this.bumpInbox();
     } catch (e) {
@@ -605,6 +631,7 @@ export class DetailVM {
     this.runStatus = 'CREATING';
     this.streamNotice = '';
     this.createRetryable = false;
+    this.createAbandoned = false;
     await CreateDraftStore.getInstance().hydrate();
     const draft = CreateDraftStore.getInstance().peek();
     const prompt = draft?.prompt ?? '';
@@ -636,10 +663,14 @@ export class DetailVM {
     if (!draft) {
       this.syncing = false;
       this.errorMsg = '创建草稿丢失，请返回重试';
+      InboxVM.getInstance().removeLocal(localId);
+      this.createAbandoned = true;
       this.notify();
       return;
     }
     const opScope = `create:${draft.localId}`;
+    const createStarted = Date.now();
+    SessionDiag.emit({ tag: TAG, event: 'create', agentId: localId, extra: 'start' });
     try {
       const opId = await OpIdStore.getOrCreate(opScope, 'create');
       const raw = await CursorApiClient.getInstance().createAgent(draft.body, opId);
@@ -649,9 +680,6 @@ export class DetailVM {
         throw new ApiException(500, '创建响应缺少 id', 'invalid_create', true);
       }
       await OpIdStore.clear(opScope);
-      if (this.openGen !== gen) {
-        return;
-      }
       const nowIso = agent.updatedAt && agent.updatedAt.length > 0 ? agent.updatedAt :
         (agent.createdAt && agent.createdAt.length > 0 ? agent.createdAt : new Date().toISOString());
       const created: AgentSummary = {
@@ -666,6 +694,17 @@ export class DetailVM {
         latestRunStatus: resp.run?.status ?? 'CREATING'
       };
       InboxVM.getInstance().replaceHeld(localId, created);
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'create',
+        agentId: agent.id,
+        elapsedMs: Date.now() - createStarted,
+        extra: `ok viewing=${this.viewing ? 1 : 0} gen=${this.openGen === gen ? 1 : 0}`
+      });
+      CreateDraftStore.getInstance().clear();
+      if (this.openGen !== gen) {
+        return;
+      }
       this.agentId = agent.id;
       AppStorage.setOrCreate('watchingAgentId', agent.id);
       this.applyDetail(agent);
@@ -685,43 +724,58 @@ export class DetailVM {
         this.activeThinkingKey = think.key;
       }
       if (resp.run && resp.run.id) {
-        this.applyRunSnapshot(resp.run);
+        this.applyRunSnapshot(resp.run, true);
         this.notify();
         this.uiFlush.flush();
         await this.startStream(resp.run.id);
       }
-      CreateDraftStore.getInstance().clear();
       this.createRetryable = false;
       this.unknownSubmit = false;
       this.loadArtifactsAndUsage();
-    } catch (e) {
-      if (!this.stillSession(gen)) {
-        return;
+      if (this.viewing) {
+        Haptics.success();
       }
+    } catch (e) {
       if (e instanceof ApiException && e.code !== 0 && e.apiCode !== 'network' && !e.retryable) {
         await OpIdStore.clear(opScope).catch(() => {
         });
       }
-      if (e instanceof ApiException && (e.apiCode === 'network' || e.code === 0)) {
-        this.unknownSubmit = true;
-        this.errorMsg = '提交结果未知，请先回 Inbox 确认，不要直接重发';
+      const unknown = e instanceof ApiException && (e.apiCode === 'network' || e.code === 0);
+      const apiN = e instanceof ApiException ? e.code : -1;
+      const apiCode = e instanceof ApiException ? e.apiCode : '';
+      let failMsg = '创建失败';
+      if (unknown) {
+        failMsg = '提交结果未知，请先回 Inbox 确认是否已创建';
       } else if (e instanceof ApiException) {
-        this.errorMsg = e.message;
-      } else {
-        this.errorMsg = '创建失败';
+        failMsg = e.message;
       }
-      this.runStatus = 'ERROR';
-      this.createRetryable = true;
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'create',
+        agentId: localId,
+        elapsedMs: Date.now() - createStarted,
+        extra: `fail code=${apiN} api=${apiCode} viewing=${this.viewing ? 1 : 0} gen=${this.openGen === gen ? 1 : 0}`
+      });
+      InboxVM.getInstance().removeLocal(localId);
+      Log.error(TAG, failMsg);
+      showToast(failMsg, 'danger', '');
+      if (!this.stillSession(gen)) {
+        return;
+      }
+      this.unknownSubmit = unknown;
+      this.errorMsg = failMsg;
+      this.runStatus = unknown ? 'CREATING' : 'ERROR';
+      this.createRetryable = false;
+      this.createAbandoned = true;
       const thinkIdx = this.source.findIndexByKey('seed-think');
       if (thinkIdx >= 0) {
         const think = this.source.getData(thinkIdx);
         think.streaming = false;
         this.source.updateAt(thinkIdx, think);
       }
-      InboxVM.getInstance().removeLocal(localId);
-      InboxVM.getInstance().noteCreateFailed(this.name);
-      Haptics.fail();
-      Log.error(TAG, this.errorMsg);
+      if (this.viewing) {
+        Haptics.fail();
+      }
     } finally {
       this.syncing = false;
       this.notify();
@@ -810,7 +864,203 @@ export class DetailVM {
       AgentCache.getInstance().saveArtifacts(agentId, this.artifacts, this.usageLabel, this.usageRuns,
         bundle.artifactsOk && bundle.usageOk);
     }
+    if (bundle.artifactsOk) {
+      await this.hydratePlansFromArtifacts();
+    } else {
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'plan_hydrate',
+        agentId: agentId,
+        extra: `artifactsOk=0 arts=${this.artifacts.length} hasPlan=${this.timelineHasPlan() ? 1 : 0}`
+      });
+    }
     this.notify();
+  }
+
+  private timelineHasPlan(): boolean {
+    const n = this.source.totalCount();
+    for (let i = 0; i < n; i++) {
+      if (this.source.getData(i).kind === 'plan') {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private timelineNeedsPlanHydrate(): boolean {
+    const n = this.source.totalCount();
+    let hasPlan = false;
+    for (let i = 0; i < n; i++) {
+      const it = this.source.getData(i);
+      if (it.kind !== 'plan') {
+        continue;
+      }
+      hasPlan = true;
+      const d = planDocFromItem(it);
+      if ((d.body ?? '').trim().length === 0 && d.todos.length === 0) {
+        return true;
+      }
+    }
+    return !hasPlan;
+  }
+
+  private async hydratePlansFromArtifacts(): Promise<void> {
+    if (this.hydrating) {
+      this.hydrateAgain = true;
+      return;
+    }
+    this.hydrating = true;
+    const gen = this.openGen;
+    const agentId = this.agentId;
+    try {
+      do {
+        this.hydrateAgain = false;
+        await this.hydratePlansOnce();
+      } while (this.hydrateAgain && this.stillSession(gen, agentId));
+    } finally {
+      if (this.openGen === gen) {
+        this.hydrating = false;
+      }
+    }
+  }
+
+  private async hydratePlansOnce(): Promise<void> {
+    const gen = this.openGen;
+    const agentId = this.agentId;
+    const arts = this.artifacts;
+    if (!arts || arts.length === 0) {
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'plan_hydrate',
+        agentId: agentId,
+        extra: `arts=0 hasPlan=${this.timelineHasPlan() ? 1 : 0}`
+      });
+      return;
+    }
+    const picked: ArtifactInfo[] = [];
+    const extras: ArtifactInfo[] = [];
+    for (let i = 0; i < arts.length; i++) {
+      const p = arts[i].path ?? '';
+      const size = arts[i].sizeBytes ?? 0;
+      if (size > 80 * 1024) {
+        continue;
+      }
+      if (isPlanPath(p)) {
+        picked.push(arts[i]);
+      } else if (p.toLowerCase().endsWith('.md')) {
+        extras.push(arts[i]);
+      }
+      if (picked.length >= 6) {
+        break;
+      }
+    }
+    if (picked.length === 0) {
+      for (let i = 0; i < extras.length && picked.length < 8; i++) {
+        picked.push(extras[i]);
+      }
+    }
+    picked.sort((a: ArtifactInfo, b: ArtifactInfo) => {
+      const at = a.updatedAt ?? '';
+      const bt = b.updatedAt ?? '';
+      if (at < bt) {
+        return -1;
+      }
+      if (at > bt) {
+        return 1;
+      }
+      const ap = a.path ?? '';
+      const bp = b.path ?? '';
+      if (ap < bp) {
+        return -1;
+      }
+      if (ap > bp) {
+        return 1;
+      }
+      return 0;
+    });
+    const rows: TimelineItem[] = [];
+    let empty = 0;
+    let skip = 0;
+    let fail = 0;
+    for (let i = 0; i < picked.length; i++) {
+      const path = picked[i].path;
+      try {
+        const raw = await this.artifactsSvc.readText(agentId, path);
+        if (!this.stillSession(gen, agentId)) {
+          return;
+        }
+        if (raw.length === 0) {
+          empty++;
+          continue;
+        }
+        if (i === 0) {
+          SessionDiag.emit({
+            tag: TAG,
+            event: 'plan_head',
+            agentId: agentId,
+            extra: `len=${raw.length} yaml=${looksLikePlanDoc(raw) ? 1 : 0}`
+          });
+        }
+        if (!isPlanPath(path) && !looksLikePlanDoc(raw)) {
+          skip++;
+          continue;
+        }
+        const doc = parsePlanDoc(raw, path);
+        if (doc.name.length === 0 && path.length > 0) {
+          doc.name = titleFromPlanPath(path);
+        }
+        doc.path = path;
+        if (doc.name.length === 0 && doc.todos.length === 0 && doc.body.length === 0) {
+          skip++;
+          continue;
+        }
+        rows.push(planItemFromDoc(`plan-art-${shortPlanPath(path)}`, 'history', doc));
+      } catch (_e) {
+        fail++;
+      }
+    }
+    const first = picked.length > 0 ? (picked[0].path ?? '') : '';
+    let docBits = '';
+    if (rows.length > 0) {
+      const d = planDocFromItem(rows[0]);
+      docBits = ` name=${d.name.length} todos=${d.todos.length} body=${d.body.length} ov=${d.overview.length}`;
+    }
+    SessionDiag.emit({
+      tag: TAG,
+      event: 'plan_hydrate',
+      agentId: agentId,
+      extra: `arts=${arts.length} pick=${picked.length} rows=${rows.length} empty=${empty} skip=${skip} fail=${fail} hasPlan=${this.timelineHasPlan() ? 1 : 0} first=${first}${docBits}`
+    });
+    if (rows.length === 0) {
+      return;
+    }
+    this.rememberPlans(rows);
+    const next = weavePlans(this.source.snapshot(), this.planKeep);
+    this.source.replaceAll(next);
+    this.rememberPlans(next);
+    this.persistTimeline(true);
+    this.notify();
+  }
+
+  private rememberPlans(items: TimelineItem[]): void {
+    const keep: TimelineItem[] = [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].kind === 'plan') {
+        keep.push(items[i]);
+      }
+    }
+    if (keep.length > 0) {
+      this.planKeep = keep;
+    }
+  }
+
+  private restoreKeptPlans(): void {
+    if (this.planKeep.length === 0) {
+      return;
+    }
+    const next = weavePlans(this.source.snapshot(), this.planKeep);
+    this.source.replaceAll(next);
+    this.rememberPlans(next);
   }
 
   private applyCachedExtras(cached: CachedAgentPayload | undefined): void {
@@ -885,6 +1135,10 @@ export class DetailVM {
     this.timelineFlush.cancel();
     this.persistTimeline(true);
     this.uiFlush.cancel();
+    this.planKeep = [];
+    this.hydrating = false;
+    this.hydrateAgain = false;
+    this.unreadSettled = false;
     this.source.replaceAll([]);
     this.activeAssistantKey = '';
     this.activeThinkingKey = '';
@@ -940,6 +1194,7 @@ export class DetailVM {
     this.source.updateAt(idx, cur);
     this.stickToBottom = false;
     this.notify();
+    this.uiFlush.flush();
   }
 
   async retryCreate(): Promise<void> {
@@ -950,20 +1205,6 @@ export class DetailVM {
     }
     if (this.agentId.indexOf('local-') !== 0) {
       return;
-    }
-    const draft = CreateDraftStore.getInstance().peek();
-    if (draft) {
-      const nowIso = new Date().toISOString();
-      InboxVM.getInstance().prependOptimistic({
-        id: draft.localId,
-        name: draft.name,
-        status: 'ACTIVE',
-        url: '',
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        lastUserAt: nowIso,
-        latestRunStatus: 'CREATING'
-      });
     }
     await this.openFromCreate(this.agentId);
   }
@@ -1041,6 +1282,16 @@ export class DetailVM {
   private async sendFollowUp(prompt: string, images: PromptImage[] = []): Promise<boolean> {
     const gen = this.openGen;
     const agentId = this.agentId;
+    if (this.isRunActive()) {
+      this.queuedFollowUp = prompt;
+      this.queuedImages = images;
+      this.queueImagesLost = false;
+      this.errorMsg = '';
+      this.streamNotice = '结束后发送';
+      this.persistQueue();
+      this.notify();
+      return true;
+    }
     this.sending = true;
     this.errorMsg = '';
     this.streamNotice = '正在提交…';
@@ -1052,39 +1303,12 @@ export class DetailVM {
       agentId: this.agentId,
       extra: 'start'
     });
-    const tempKey = `user-${Date.now()}`;
     const followModel: Record<string, Object> | undefined = this.followUpModel.length > 0 ?
       followModelBody(this.followUpModel, this.followUpParams) : undefined;
     Log.info(TAG, `follow model ${modelSentJson(followModel)}`);
-    this.source.append({
-      key: tempKey,
-      kind: 'userPrompt',
-      runId: 'pending',
-      text: prompt,
-      usageShort: formatModelSent(followModel),
-      sentTags: modelSentTags(followModel),
-      localAt: new Date().toISOString(),
-      imageUrls: imageUrlsFromPrompt(images)
-    });
-    this.source.append({
-      key: `thinking-${tempKey}`,
-      kind: 'thinking',
-      runId: 'pending',
-      text: '',
-      collapsed: false,
-      streaming: true
-    });
     this.stickToBottom = true;
     this.notify();
     this.uiFlush.flush();
-    this.persistTimeline(true);
-    SessionDiag.emit({
-      tag: TAG,
-      event: 'follow',
-      agentId: this.agentId,
-      elapsedMs: Date.now() - this.followStartedAt,
-      extra: 'placeholder'
-    });
     this.bumpInbox();
     InboxVM.getInstance().markUserAt(this.agentId);
     let opScope = '';
@@ -1136,22 +1360,24 @@ export class DetailVM {
       this.lastFailedPrompt = '';
       this.lastFailedImages = [];
       this.queueRetries = 0;
-      const idx = this.source.findIndexByKey(tempKey);
-      if (idx >= 0) {
-        const item = this.source.getData(idx);
-        item.runId = run.id;
-        this.source.updateAt(idx, item);
-      }
-      const thinkIdx = this.source.findIndexByKey(`thinking-${tempKey}`);
-      if (thinkIdx >= 0) {
-        const think = this.source.getData(thinkIdx);
-        think.key = waitingKey(run.id);
-        think.runId = run.id;
-        think.streaming = true;
-        think.collapsed = false;
-        think.text = '';
-        this.source.updateAt(thinkIdx, think);
-      }
+      this.source.append({
+        key: `user-${run.id}`,
+        kind: 'userPrompt',
+        runId: run.id,
+        text: prompt,
+        usageShort: formatModelSent(followModel),
+        sentTags: modelSentTags(followModel),
+        localAt: new Date().toISOString(),
+        imageUrls: imageUrlsFromPrompt(images)
+      });
+      this.source.append({
+        key: waitingKey(run.id),
+        kind: 'thinking',
+        runId: run.id,
+        text: '',
+        collapsed: false,
+        streaming: true
+      });
       this.source.append({
         key: `run-${run.id}`,
         kind: 'runHeader',
@@ -1159,7 +1385,8 @@ export class DetailVM {
         statusLabel: run.status,
         text: runStatusZh(run.status)
       });
-      this.applyRunSnapshot(run);
+      this.persistTimeline(true);
+      this.applyRunSnapshot(run, true);
       InboxVM.getInstance().touch(this.agentId, this.name, run.status,
         run.updatedAt && run.updatedAt.length > 0 ? run.updatedAt : new Date().toISOString(),
         run.id);
@@ -1171,10 +1398,6 @@ export class DetailVM {
     } catch (e) {
       if (!this.stillSession(gen, agentId)) {
         return false;
-      }
-      const thinkIdx = this.source.findIndexByKey(`thinking-${tempKey}`);
-      if (thinkIdx >= 0) {
-        this.source.removeAt(thinkIdx);
       }
       const apiCode = e instanceof ApiException ? e.apiCode : '';
       const apiN = e instanceof ApiException ? e.code : -1;
@@ -1188,18 +1411,17 @@ export class DetailVM {
         event: 'follow',
         agentId: this.agentId,
         elapsedMs: Date.now() - this.followStartedAt,
-        extra: `fail code=${apiN} api=${apiCode}`
+        extra: `fail code=${apiN} api=${apiCode} retries=${this.queueRetries}`
       });
       if (e instanceof ApiException && (e.code === 409 || e.apiCode === 'agent_busy')) {
-        this.removeTimelineKey(tempKey);
         this.lastFailedPrompt = '';
         this.lastFailedImages = [];
         this.queuedFollowUp = prompt;
         this.queuedImages = images;
+        this.queueRetries += 1;
         this.persistQueue();
-        this.streamNotice = '';
-        this.scheduleFlushQueue(800 * Math.max(1, this.queueRetries + 1));
-        Haptics.warn();
+        this.streamNotice = '结束后发送';
+        this.scheduleFlushQueue(queueBackoffMs(this.queueRetries));
         return true;
       }
       const unknown = e instanceof ApiException && (e.apiCode === 'network' || e.code === 0);
@@ -1208,10 +1430,9 @@ export class DetailVM {
         if (!NetworkMonitor.getInstance().online) {
           this.errorMsg = '网络断开，恢复后可重发';
         }
-        Haptics.fail();
+        this.announceVisibleFail(this.errorMsg);
         return true;
       }
-      this.removeTimelineKey(tempKey);
       this.lastFailedPrompt = '';
       this.lastFailedImages = [];
       if (e instanceof ApiException) {
@@ -1222,7 +1443,7 @@ export class DetailVM {
       if (!NetworkMonitor.getInstance().online) {
         this.errorMsg = '网络断开，恢复后可重发';
       }
-      Haptics.fail();
+      this.announceVisibleFail(this.errorMsg);
       return false;
     } finally {
       if (this.stillSession(gen, agentId)) {
@@ -1231,6 +1452,15 @@ export class DetailVM {
         this.uiFlush.flush();
       }
     }
+  }
+
+  private announceVisibleFail(message: string): void {
+    if (this.viewing) {
+      Haptics.fail();
+      return;
+    }
+    showToast(message, 'danger', '');
+    Haptics.fail();
   }
 
   private scheduleFlushQueue(delayMs: number = 700): void {
@@ -1321,7 +1551,7 @@ export class DetailVM {
         this.notify();
         return;
       }
-      this.scheduleFlushQueue(1600);
+      this.scheduleFlushQueue(queueBackoffMs(this.queueRetries));
       return;
     }
     if (this.queueRetries >= 5) {
@@ -1330,7 +1560,6 @@ export class DetailVM {
       this.notify();
       return;
     }
-    this.queueRetries += 1;
     const imgs = this.queuedImages;
     this.queuedFollowUp = '';
     this.queuedImages = [];
@@ -1430,7 +1659,7 @@ export class DetailVM {
         // already terminal — refresh
         try {
           const run = await CursorApiClient.getInstance().getRun(this.agentId, this.activeRunId);
-          this.applyRunSnapshot(run);
+          this.applyRunSnapshot(run, true);
           this.finishStreamingItems();
           this.settleLive(run.id, run.status);
         } catch (_e) {
@@ -1644,14 +1873,16 @@ export class DetailVM {
           return;
         }
         Log.debug(TAG, `poll ${runId} status=${run.status}`);
-        SessionDiag.emit({
-          tag: TAG,
-          event: 'poll',
-          agentId: agentId,
-          runId: runId,
-          extra: `status=${run.status}`
-        });
-        this.applyRunSnapshot(run);
+        if (`${run.status}` !== this.runStatus) {
+          SessionDiag.emit({
+            tag: TAG,
+            event: 'poll',
+            agentId: agentId,
+            runId: runId,
+            extra: `status=${run.status} prev=${this.runStatus}`
+          });
+        }
+        this.applyRunSnapshot(run, true);
         if (isTerminal(run.status)) {
           this.dropWaitingItems(run.id);
           this.finishStreamingItems();
@@ -1668,6 +1899,15 @@ export class DetailVM {
         this.reviveWaitingThink();
       } catch (e) {
         Log.warn(TAG, `poll failed: ${JSON.stringify(e)}`);
+        const code = e instanceof ApiException ? e.code : -1;
+        const api = e instanceof ApiException ? e.apiCode : '';
+        SessionDiag.emit({
+          tag: TAG,
+          event: 'poll',
+          agentId: agentId,
+          runId: runId,
+          extra: `fail code=${code} api=${api}`
+        });
       }
       if (this.stillSession(gen, agentId, runId) && this.isRunActive()) {
         this.pollTimer = setTimeout(() => {
@@ -1702,9 +1942,6 @@ export class DetailVM {
         runId: this.activeRunId,
         extra: detail
       });
-      if (this.viewing) {
-        Haptics.warn();
-      }
     } else if (kind === 'stale') {
       this.freezeLiveOverlay();
       this.reviveWaitingThink();
@@ -1724,7 +1961,9 @@ export class DetailVM {
     } else if (kind === 'done') {
       this.pendingConnectNotice = false;
       this.clearConnectNoticeTimer();
-      this.streamNotice = '';
+      if (this.queuedFollowUp.trim().length === 0) {
+        this.streamNotice = '';
+      }
       this.eventIdFlush.flush();
       SessionDiag.emit({
         tag: TAG,
@@ -1738,13 +1977,15 @@ export class DetailVM {
       this.pendingConnectNotice = false;
       this.clearConnectNoticeTimer();
       this.freezeLiveOverlay();
-      this.streamNotice = detail.length > 0 ? detail : 'SSE 异常，已切换轮询';
+      if (this.streamNotice.indexOf('重连') < 0) {
+        this.streamNotice = '连接不稳，正在重连…';
+      }
       SessionDiag.emit({
         tag: TAG,
-        event: 'stream_terminal',
+        event: 'stream_error',
         agentId: this.agentId,
         runId: this.activeRunId,
-        extra: `kind=error frames=${this.streamFrames}`
+        extra: `frames=${this.streamFrames}`
       });
     }
     this.notify();
@@ -1783,15 +2024,18 @@ export class DetailVM {
           this.convKey = nextKey;
         }
       }
-      this.applyRunSnapshot(run);
-      this.streamNotice = '';
+      this.applyRunSnapshot(run, true);
       if (isTerminal(run.status)) {
+        this.streamNotice = '';
         this.finishStreamingItems();
         this.ensureOutcomeItem(run);
         this.settleLive(run.id, run.status);
         Haptics.success();
         this.announceFinished(run.status, run.result ?? this.resultText);
       } else {
+        if (this.queuedFollowUp.trim().length > 0) {
+          this.streamNotice = '结束后发送';
+        }
         this.reviveWaitingThink();
         this.streamEarlyDone += 1;
         SessionDiag.emit({
@@ -1932,12 +2176,17 @@ export class DetailVM {
       this.freezeProgress();
       this.freezeThinking();
       this.collapseCompletedTools(this.activeRunId);
-      this.progressSealed = true;
-      this.runHasTools = true;
       const tool = parseTool(frame.data);
       if (!tool) {
         return;
       }
+      if (isPlanToolEvent(tool.name, tool.argsText ?? '')) {
+        this.upsertPlanFromTool(tool);
+        this.notify();
+        return;
+      }
+      this.progressSealed = true;
+      this.runHasTools = true;
       const key = `tool-${this.activeRunId}-${tool.callId}`;
       const idx = this.source.findIndexByKey(key);
       const done = tool.status === 'completed';
@@ -1989,15 +2238,8 @@ export class DetailVM {
       return;
     }
     if (frame.event === 'done') {
-      this.streamNotice = '';
-      this.finishStreamingItems();
       this.eventIdFlush.flush();
-      if (this.isRunActive()) {
-        this.fetchTerminal();
-      } else {
-        this.announceFinished(this.runStatus, this.resultText);
-        this.settleLive(this.activeRunId, this.runStatus);
-      }
+      this.fetchTerminal();
       this.notify();
     }
   }
@@ -2039,6 +2281,7 @@ export class DetailVM {
           item.text = appendRuntimeText(item.text ?? '', delta);
           item.streaming = true;
         });
+        this.maybePromotePlan(idx);
         return;
       }
       this.activeAssistantKey = '';
@@ -2188,6 +2431,114 @@ export class DetailVM {
       text: appendRuntimeText('', text),
       streaming: true
     });
+    const idx = this.source.findIndexByKey(key);
+    if (idx >= 0) {
+      this.maybePromotePlan(idx);
+    }
+  }
+
+  private maybePromotePlan(idx: number): void {
+    if (idx < 0) {
+      return;
+    }
+    const cur = this.source.getData(idx);
+    if (cur.kind !== 'assistant' && cur.kind !== 'plan') {
+      return;
+    }
+    const raw = cur.text ?? '';
+    if (!looksLikePlanDoc(raw)) {
+      return;
+    }
+    const wasPlan = cur.kind === 'plan';
+    this.source.mutateAt(idx, (item: TimelineItem) => {
+      applyPlanDoc(item, parsePlanDoc(raw, item.usageShort ?? ''));
+      item.text = raw;
+      if (!wasPlan && item.pinnedOpen !== true) {
+        item.collapsed = true;
+      }
+    });
+    this.collapsePlansForRun(cur.runId);
+  }
+
+  private collapsePlansForRun(runId: string): void {
+    if (runId.length === 0) {
+      return;
+    }
+    const idxs: number[] = [];
+    const total = this.source.totalCount();
+    for (let i = 0; i < total; i++) {
+      const it = this.source.getData(i);
+      if (it.kind === 'plan' && it.runId === runId) {
+        idxs.push(i);
+      }
+    }
+    if (idxs.length < 2) {
+      return;
+    }
+    const extra: number[] = [];
+    for (let n = 1; n < idxs.length; n++) {
+      let dest = -1;
+      for (let k = 0; k < n; k++) {
+        if (isDroppedIndex(extra, idxs[k])) {
+          continue;
+        }
+        if (shouldMergePlans(this.source.getData(idxs[k]), this.source.getData(idxs[n]))) {
+          dest = idxs[k];
+          break;
+        }
+      }
+      if (dest < 0) {
+        continue;
+      }
+      const src = this.source.getData(idxs[n]);
+      this.source.mutateAt(dest, (item: TimelineItem) => {
+        mergePlanInto(item, src);
+      });
+      extra.push(idxs[n]);
+    }
+    if (extra.length === 0) {
+      return;
+    }
+    const keepKey = this.source.getData(idxs[0]).key;
+    for (let j = extra.length - 1; j >= 0; j--) {
+      const gone = this.source.getData(extra[j]);
+      if (this.activeAssistantKey === gone.key) {
+        this.activeAssistantKey = keepKey;
+      }
+      this.source.removeAt(extra[j]);
+    }
+  }
+
+  private upsertPlanFromTool(tool: ToolCallEvent): void {
+    const doc = planDocFromTool(tool);
+    const done = tool.status === 'completed';
+    const key = `plan-${this.activeRunId}-${tool.callId}`;
+    let idx = this.source.findIndexByKey(key);
+    if (idx < 0) {
+      const probe = planItemFromDoc('probe', this.activeRunId, doc);
+      const total = this.source.totalCount();
+      for (let i = total - 1; i >= 0; i--) {
+        const it = this.source.getData(i);
+        if (it.kind === 'plan' && it.runId === this.activeRunId && shouldMergePlans(it, probe)) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    if (idx >= 0) {
+      this.source.mutateAt(idx, (item: TimelineItem) => {
+        applyPlanDoc(item, doc);
+        item.tool = tool;
+        item.streaming = !done;
+      });
+      this.collapsePlansForRun(this.activeRunId);
+      return;
+    }
+    const row = planItemFromDoc(key, this.activeRunId, doc);
+    row.tool = tool;
+    row.streaming = !done;
+    this.source.append(row);
+    this.collapsePlansForRun(this.activeRunId);
   }
 
   private sealLiveAssistantIfProgress(): void {
@@ -2213,6 +2564,7 @@ export class DetailVM {
     this.source.mutateAt(idx, (it: TimelineItem) => {
       it.streaming = false;
     });
+    this.maybePromotePlan(idx);
     this.activeAssistantKey = '';
   }
 
@@ -2253,7 +2605,8 @@ export class DetailVM {
   private hasAssistantForRun(runId: string): boolean {
     const snap = this.source.snapshot();
     for (let i = 0; i < snap.length; i++) {
-      if (snap[i].kind === 'assistant' && snap[i].runId === runId && (snap[i].text ?? '').trim().length > 0) {
+      if ((snap[i].kind === 'assistant' || snap[i].kind === 'plan') && snap[i].runId === runId &&
+        (snap[i].text ?? '').trim().length > 0) {
         return true;
       }
     }
@@ -2306,9 +2659,9 @@ export class DetailVM {
         continue;
       }
       if (it.kind === 'thinking' || it.kind === 'progress' || it.kind === 'tool' ||
-        it.kind === 'step' || it.kind === 'assistant') {
+        it.kind === 'step' || it.kind === 'assistant' || it.kind === 'plan') {
         this.source.mutateAt(i, (item: TimelineItem) => {
-          if (item.kind !== 'assistant' && item.pinnedOpen !== true) {
+          if (item.kind !== 'assistant' && item.kind !== 'plan' && item.pinnedOpen !== true) {
             item.collapsed = true;
           }
           item.streaming = false;
@@ -2402,7 +2755,7 @@ export class DetailVM {
       }
       if (k === 'thinking' || k === 'progress' || k === 'step' || k === 'tool' ||
         k === 'assistant' || k === 'userPrompt' || k === 'runHeader' || k === 'runOutcome' ||
-        k === 'subagent') {
+        k === 'subagent' || k === 'plan') {
         keep.push({
           key: it.key,
           kind: it.kind,
@@ -2418,7 +2771,8 @@ export class DetailVM {
           usageShort: it.usageShort,
           sentTags: it.sentTags,
           localAt: it.localAt,
-          imageUrls: it.imageUrls
+          imageUrls: it.imageUrls,
+          promptText: it.promptText
         });
       }
     }
@@ -2429,6 +2783,12 @@ export class DetailVM {
       let summary = '';
       for (let i = keep.length - 1; i >= 0; i--) {
         const k = keep[i].kind;
+        if (k === 'plan') {
+          summary = keep[i].statusLabel ?? lastNonEmptyLine(keep[i].promptText ?? '', 72);
+          if (summary.length > 0) {
+            break;
+          }
+        }
         if (k === 'assistant' || k === 'thinking' || k === 'progress' || k === 'step') {
           summary = lastNonEmptyLine(keep[i].text ?? '', 72);
           if (summary.length > 0) {
@@ -2445,12 +2805,16 @@ export class DetailVM {
     if (!cached || cached.length === 0) {
       return;
     }
+    const folded = foldAgentWrittenPrompts(cached);
     const snap = this.source.snapshot();
-    const withLocal = keepPendingTurns(snap, cached);
-    const merged = restoreUserSentTags(mergeCachedActivity(withLocal, cached), cached);
-    if (merged !== snap) {
-      this.source.replaceAll(merged);
+    const withLocal = keepPendingTurns(snap, folded);
+    const merged = restoreUserSentTags(mergeCachedActivity(withLocal, folded), folded);
+    const next = foldPlanItems(merged);
+    if (next !== snap) {
+      this.source.replaceAll(next);
     }
+    this.rememberPlans(this.source.snapshot());
+    this.restoreKeptPlans();
   }
 
   private reviveWaitingThink(): void {
@@ -2518,26 +2882,42 @@ export class DetailVM {
 
   private buildConversation(messages: ConversationMessage[]): void {
     this.source.replaceAll(conversationToTimeline(messages));
+    this.restoreKeptPlans();
     this.applyUnreadScroll();
   }
 
   private applyUnreadScroll(): void {
-    if (!this.openWasUnread) {
+    const vis = visibleTimeline(this.source.snapshot());
+    if (vis.length === 0) {
       this.stickToBottom = true;
       this.unreadAnchorKey = '';
       this.unreadNewCount = 0;
       return;
     }
-    const vis = visibleTimeline(this.source.snapshot());
     const lastSeen = UnreadStore.getInstance().lastSeenKey(this.agentId);
-    this.unreadAnchorKey = findUnreadAnchor(vis, lastSeen);
-    this.unreadNewCount = countNewContent(vis, lastSeen);
-    this.stickToBottom = this.unreadAnchorKey.length === 0;
+    const anchor = findUnreadAnchor(vis, lastSeen);
+    const fresh = countNewContent(vis, lastSeen);
+    const hasUnread = fresh > 0 && anchor.length > 0;
+    if (this.unreadSettled) {
+      if (this.unreadAnchorKey.length > 0 || !hasUnread) {
+        return;
+      }
+    }
+    if (hasUnread || (this.openWasUnread && anchor.length > 0)) {
+      this.unreadAnchorKey = anchor;
+      this.unreadNewCount = fresh > 0 ? fresh : 1;
+      this.stickToBottom = false;
+    } else {
+      this.unreadAnchorKey = '';
+      this.unreadNewCount = 0;
+      this.stickToBottom = true;
+    }
+    this.unreadSettled = true;
     SessionDiag.emit({
       tag: TAG,
       event: 'unread_scroll',
       agentId: this.agentId,
-      extra: `stick=${this.stickToBottom ? 1 : 0} new=${this.unreadNewCount} anchor=${this.unreadAnchorKey.length > 0 ? 1 : 0}`
+      extra: `stick=${this.stickToBottom ? 1 : 0} new=${this.unreadNewCount} anchor=${this.unreadAnchorKey.length > 0 ? 1 : 0} openUnread=${this.openWasUnread ? 1 : 0}`
     });
   }
 
@@ -2607,15 +2987,15 @@ export class DetailVM {
     if (!this.activeRunId || this.activeRunId.length === 0) {
       this.activeRunId = latest.id;
     }
-    this.applyRunSnapshot(latest);
+    this.applyRunSnapshot(latest, true);
   }
 
-  private applyRunSnapshot(run: Run): void {
+  private applyRunSnapshot(run: Run, confirmed: boolean = false): void {
     if (this.streamRunId.length > 0 && run.id !== this.streamRunId) {
       return;
     }
     const prev = this.runStatus;
-    if (!canApplyRunStatus(prev, run.status)) {
+    if (!canApplyRunStatus(prev, run.status, confirmed)) {
       return;
     }
     if (run.updatedAt && run.updatedAt.length > 0 &&
@@ -2915,25 +3295,44 @@ function parseTool(data: string): ToolCallEvent | undefined {
   if (callId.length === 0) {
     return undefined;
   }
+  const name = `${obj['name'] ?? 'tool'}`;
   const truncated = obj['truncated'] as Record<string, Object> | undefined;
+  const argsFull = obj['args'] !== undefined ? stringifyJson(obj['args']) : '';
+  const keepFull = keepFullToolArgs(name, argsFull);
+  const maxN = keepFull ? CACHE_TEXT_MAX : 4000;
   return {
     callId: callId,
-    name: `${obj['name'] ?? 'tool'}`,
+    name: name,
     status: `${obj['status'] ?? 'running'}`,
-    argsText: obj['args'] !== undefined ? safeJson(obj['args']) : undefined,
-    resultText: obj['result'] !== undefined ? safeJson(obj['result']) : undefined,
+    argsText: obj['args'] !== undefined ? clipJson(argsFull, maxN) : undefined,
+    resultText: obj['result'] !== undefined ? clipJson(stringifyJson(obj['result']), maxN) : undefined,
     truncatedArgs: truncated ? !!truncated['args'] : false,
     truncatedResult: truncated ? !!truncated['result'] : false
   };
 }
 
-function safeJson(v: Object): string {
+function stringifyJson(v: Object): string {
   try {
-    const s = JSON.stringify(v);
-    return s.length > 4000 ? `${s.substring(0, 4000)}…` : s;
+    return JSON.stringify(v);
   } catch (_e) {
     return `${v}`;
   }
+}
+
+function clipJson(s: string, maxN: number): string {
+  if (s.length <= maxN) {
+    return s;
+  }
+  return maxN >= CACHE_TEXT_MAX ? s.substring(0, maxN) : `${s.substring(0, maxN)}…`;
+}
+
+function isDroppedIndex(extra: number[], idx: number): boolean {
+  for (let i = 0; i < extra.length; i++) {
+    if (extra[i] === idx) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function toolSummary(tool: ToolCallEvent): string {

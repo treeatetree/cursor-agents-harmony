@@ -15,8 +15,11 @@ import {
   toApiSubagents, usesNamedEnv
 } from '../utils/AgentCapabilities';
 import { Log } from '../utils/Log';
+import { SessionDiag } from '../utils/SessionDiag';
 import { coerceParamsToVariant, findModel, modelSentJson } from '../utils/ModelGroups';
 import { isOriginRepo, normalizeCreateRepoUrl } from '../utils/GitLinks';
+import { OpIdStore } from '../store/OpIdStore';
+import { InboxVM } from './InboxVM';
 import { util } from '@kit.ArkTS';
 
 const TAG = 'NewAgentVM';
@@ -300,21 +303,57 @@ export class NewAgentVM {
     }
     this.busy = true;
     this.errorMsg = '';
+    const body = this.buildCreateBody();
+    const opScope = OpIdStore.bodyScope('create', this.retryAgentId, body);
+    const started = Date.now();
+    SessionDiag.emit({ tag: TAG, event: 'create', extra: 'start' });
     try {
-      const body = this.buildCreateBody();
       Log.info(TAG, `create model ${modelSentJson(this.modelPayload())}`);
-      const raw = await CursorApiClient.getInstance().createAgent(body);
+      const opId = await OpIdStore.getOrCreate(opScope, 'create');
+      const raw = await CursorApiClient.getInstance().createAgent(body, opId);
       const resp = unwrapCreateAgent(raw as object);
-      Log.info(TAG, `created ${resp.agent?.id ?? ''}`);
+      const agent = resp.agent;
+      if (!agent || !agent.id) {
+        throw new ApiException(500, '创建响应缺少 id', 'invalid_create', true);
+      }
+      await OpIdStore.clear(opScope);
+      const row = inboxRowFromCreate(resp, this.titleFromPrompt());
+      if (row) {
+        InboxVM.getInstance().prependOptimistic(row);
+      }
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'create',
+        agentId: agent.id,
+        elapsedMs: Date.now() - started,
+        extra: 'ok'
+      });
+      Log.info(TAG, `created ${agent.id}`);
       PrefStore.getInstance().setLastTools(serializeTools(this.env, this.mcpServers, this.subagents));
       this.retryAgentId = '';
       return resp;
     } catch (e) {
-      if (e instanceof ApiException) {
+      const unknown = e instanceof ApiException && (e.apiCode === 'network' || e.code === 0);
+      const apiN = e instanceof ApiException ? e.code : -1;
+      const apiCode = e instanceof ApiException ? e.apiCode : '';
+      if (e instanceof ApiException && e.code !== 0 && e.apiCode !== 'network' && !e.retryable) {
+        await OpIdStore.clear(opScope).catch(() => {
+        });
+      }
+      if (unknown) {
+        this.errorMsg = '提交结果未知，请回 Inbox 下拉确认是否已创建，不要连点重发';
+      } else if (e instanceof ApiException) {
         this.errorMsg = e.message;
       } else {
         this.errorMsg = '创建失败';
       }
+      SessionDiag.emit({
+        tag: TAG,
+        event: 'create',
+        elapsedMs: Date.now() - started,
+        extra: `fail code=${apiN} api=${apiCode}`
+      });
+      Log.error(TAG, this.errorMsg);
       return undefined;
     } finally {
       this.busy = false;
@@ -559,6 +598,30 @@ function repoRecency(r: RepoInfo, agents: AgentSummary[]): number {
     }
   }
   return best;
+}
+
+function inboxRowFromCreate(resp: CreateAgentResponse, fallbackName: string): AgentSummary | undefined {
+  const agent = resp.agent;
+  if (!agent || !agent.id) {
+    return undefined;
+  }
+  const nowIso = agent.updatedAt && agent.updatedAt.length > 0 ? agent.updatedAt :
+    (agent.createdAt && agent.createdAt.length > 0 ? agent.createdAt : new Date().toISOString());
+  const row: AgentSummary = {
+    id: agent.id,
+    name: agent.name && agent.name.length > 0 ? agent.name : fallbackName,
+    status: agent.status ?? 'ACTIVE',
+    url: agent.url ?? '',
+    createdAt: agent.createdAt && agent.createdAt.length > 0 ? agent.createdAt : nowIso,
+    updatedAt: nowIso,
+    lastUserAt: nowIso,
+    latestRunId: resp.run?.id,
+    latestRunStatus: resp.run?.status ?? 'CREATING'
+  };
+  if (agent.repos && agent.repos.length > 0) {
+    row.repos = agent.repos;
+  }
+  return row;
 }
 
 function mintAgentId(): string {

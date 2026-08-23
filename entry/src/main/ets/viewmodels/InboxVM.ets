@@ -20,6 +20,7 @@ import { repoTail } from '../utils/DisplayFmt';
 import { AppState } from '../utils/AppState';
 import { LiveIsland } from '../utils/LiveIsland';
 import { NetworkMonitor } from '../utils/NetworkMonitor';
+import { shouldNoteTerminal } from '../utils/RunState';
 import { DetailVM } from './DetailVM';
 
 const TAG = 'InboxVM';
@@ -32,6 +33,7 @@ export class InboxVM {
   refreshing: boolean = false;
   loadingMore: boolean = false;
   errorMsg: string = '';
+  refreshWaitNotice: string = '';
   loadedOnce: boolean = false;
   nextCursor: string = '';
   includeArchived: boolean = false;
@@ -99,11 +101,6 @@ export class InboxVM {
       return this.refresh(false);
     }
     if (!this.shouldRefresh(minIntervalMs)) {
-      SessionDiag.emit({
-        tag: TAG,
-        event: 'refresh_skip',
-        extra: `min=${minIntervalMs} age=${this.lastRefreshAt > 0 ? Date.now() - this.lastRefreshAt : -1}`
-      });
       return true;
     }
     return this.refresh(true);
@@ -170,22 +167,30 @@ export class InboxVM {
       return false;
     }
     if (this.loading || CursorApiClient.getInstance().isMutating()) {
+      const busyExtra = `mutating=${CursorApiClient.getInstance().isMutating() ? 1 : 0} loading=${this.loading ? 1 : 0}`;
       if (silent) {
         this.refreshQueued = true;
-        SessionDiag.emit({ tag: TAG, event: 'refresh_skip', extra: 'busy_silent' });
+        SessionDiag.emit({ tag: TAG, event: 'refresh_skip', extra: `busy_silent ${busyExtra}` });
         return true;
       }
       this.userRefreshPending = true;
       this.refreshing = true;
       this.emitChange();
-      SessionDiag.emit({ tag: TAG, event: 'refresh_wait', extra: 'busy' });
+      SessionDiag.emit({ tag: TAG, event: 'refresh_wait', extra: `busy ${busyExtra}` });
+      const waitAt = Date.now();
       await this.untilIdle(12000);
       if (this.loading || CursorApiClient.getInstance().isMutating()) {
         this.userRefreshPending = false;
         this.refreshing = false;
+        this.refreshWaitNotice = '任务还在提交';
         this.emitChange();
-        SessionDiag.emit({ tag: TAG, event: 'refresh_skip', extra: 'wait_timeout' });
-        return false;
+        SessionDiag.emit({
+          tag: TAG,
+          event: 'refresh_skip',
+          elapsedMs: Date.now() - waitAt,
+          extra: `wait_timeout mutating=${CursorApiClient.getInstance().isMutating() ? 1 : 0} loading=${this.loading ? 1 : 0}`
+        });
+        return true;
       }
     }
     this.loading = true;
@@ -195,6 +200,7 @@ export class InboxVM {
       this.emitChange();
     }
     this.errorMsg = '';
+    this.refreshWaitNotice = '';
     this.authExpired = false;
     this.needsPlanUpgrade = false;
     const started = Date.now();
@@ -537,6 +543,7 @@ export class InboxVM {
   prependOptimistic(agent: AgentSummary): void {
     this.heldIds = [agent.id].concat(this.heldIds.filter((id: string) => id !== agent.id));
     this.dirty = true;
+    this.source.removeById(agent.id);
     this.source.prepend(agent);
     AgentCache.getInstance().saveInbox(this.source.snapshot(), 'merge');
     this.pushWidget();
@@ -645,10 +652,7 @@ export class InboxVM {
 
   private noteTerminal(a: AgentSummary, oldStatus: string): void {
     const now = `${a.latestRunStatus ?? ''}`;
-    if (!isTerminalRun(now)) {
-      return;
-    }
-    if (oldStatus === now || (oldStatus.length > 0 && isTerminalRun(oldStatus))) {
+    if (!shouldNoteTerminal(oldStatus, now)) {
       return;
     }
     const watching = DetailVM.getActive()?.isViewing(a.id) === true;
@@ -673,6 +677,7 @@ export class InboxVM {
   }
 
   removeLocal(agentId: string): void {
+    this.heldIds = this.heldIds.filter((id: string) => id !== agentId);
     this.source.removeById(agentId);
     AgentCache.getInstance().removeInboxId(agentId);
     this.pushWidget();
@@ -834,10 +839,6 @@ function applyRunGit(agent: AgentSummary, run: Run): void {
     return;
   }
   agent.repos = [{ url: url, prUrl: pr.length > 0 ? pr : undefined }];
-}
-
-function isTerminalRun(status: string): boolean {
-  return status === 'FINISHED' || status === 'ERROR' || status === 'CANCELLED' || status === 'EXPIRED';
 }
 
 function runStatusLabel(status: string): string {

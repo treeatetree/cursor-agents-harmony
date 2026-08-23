@@ -20,11 +20,17 @@ export interface ParsedProtocol {
 
 export function isComposerProtocol(text: string): boolean {
   const t = text ?? '';
+  // <timestamp> wraps almost every Cloud Agent turn, including assistant finals.
+  // It is chrome, not a protocol payload.
   return t.indexOf('<system_notification>') >= 0 ||
     t.indexOf('<task>') >= 0 ||
     t.indexOf('<user_query>') >= 0 ||
-    t.indexOf('<timestamp>') >= 0 ||
     t.indexOf('<user_visible_high_level_summary>') >= 0;
+}
+
+/** Drop the composer timestamp wrapper. Safe on plain text. */
+export function stripComposerWrapper(text: string): string {
+  return stripTag(text ?? '', 'timestamp').trim();
 }
 
 export function parseComposerProtocol(text: string): ParsedProtocol {
@@ -67,6 +73,106 @@ export function taskCardBody(task: ParsedTask): string {
 export function taskFailed(task: ParsedTask): boolean {
   const s = task.status.toLowerCase();
   return s === 'error' || s === 'failed' || s === 'fail';
+}
+
+/** Parent-agent spawn briefs that Cursor stores as user_message. */
+export function looksLikeAgentTaskPrompt(text: string): boolean {
+  const t = unwrapPromptText(text);
+  if (t.length < 40) {
+    return false;
+  }
+  const low = t.toLowerCase();
+  if (t.charAt(0) === '{') {
+    if (low.indexOf('"prompt"') >= 0 &&
+      (low.indexOf('subagent') >= 0 || low.indexOf('"description"') >= 0)) {
+      return true;
+    }
+  }
+  if (low.indexOf('the parent agent') >= 0 || low.indexOf('parent agent') >= 0) {
+    return true;
+  }
+  if (low.indexOf("your team's answer") >= 0 || low.indexOf('your teams answer') >= 0) {
+    return true;
+  }
+  if (low.indexOf('subagent_type') >= 0 || low.indexOf('subagent type') >= 0) {
+    return true;
+  }
+  if ((low.indexOf('you are a ') >= 0 || low.indexOf('you are an ') >= 0) &&
+    low.indexOf('agent') >= 0) {
+    return true;
+  }
+  if (low.indexOf('explore agent') >= 0 || low.indexOf('general-purpose') >= 0 ||
+    low.indexOf('general purpose') >= 0 || low.indexOf('generalpurpose') >= 0) {
+    return true;
+  }
+  if (low.indexOf('briefly inform the user about the task result') >= 0) {
+    return true;
+  }
+  if (t.indexOf('你是一个') >= 0 || t.indexOf('你是一名') >= 0) {
+    return t.indexOf('子代理') >= 0 || t.indexOf('子任务') >= 0 || t.indexOf('探索') >= 0 ||
+      t.indexOf('代理') >= 0;
+  }
+  return false;
+}
+
+export function agentPromptTitle(text: string): string {
+  const t = unwrapPromptText(text);
+  if (t.charAt(0) === '{') {
+    try {
+      const raw = JSON.parse(t) as Record<string, Object>;
+      const d = `${raw['description'] ?? raw['title'] ?? ''}`.trim();
+      if (d.length > 0) {
+        return `子任务提示词 · ${clipLine(d, 28)}`;
+      }
+    } catch (_e) {
+    }
+  }
+  const line = firstPromptLine(t);
+  return line.length > 0 ? `子任务提示词 · ${clipLine(line, 28)}` : '子任务提示词';
+}
+
+export function agentPromptBody(text: string): string {
+  const t = unwrapPromptText(text);
+  if (t.charAt(0) === '{') {
+    try {
+      const raw = JSON.parse(t) as Record<string, Object>;
+      const p = `${raw['prompt'] ?? ''}`.trim();
+      if (p.length > 0) {
+        return p;
+      }
+    } catch (_e) {
+    }
+  }
+  return t;
+}
+
+export function unwrapPromptText(text: string): string {
+  const src = text ?? '';
+  const q = extractTag(src, 'user_query').trim();
+  if (q.length > 0) {
+    return q;
+  }
+  const leftover = leftoverUserText(src);
+  return leftover.length > 0 ? leftover : src.trim();
+}
+
+function firstPromptLine(text: string): string {
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.length > 0) {
+      return line;
+    }
+  }
+  return '';
+}
+
+function clipLine(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) {
+    return t;
+  }
+  return `${t.substring(0, max)}…`;
 }
 
 function parseTaskBlock(block: string): ParsedTask {

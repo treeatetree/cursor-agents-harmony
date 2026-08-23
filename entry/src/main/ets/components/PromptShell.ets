@@ -1,10 +1,9 @@
 import { Tokens } from '../theme/Tokens';
 import { Haptics } from '../utils/Haptics';
 import { hasPreviewMap, requirePreviewMap } from '../utils/ImagePicker';
-import { chromeTransition, fadeTransition, motionMs, prefersReducedMotion, runLayout, shakeSeq } from '../utils/Motion';
+import { fadeTransition, motionMs, prefersReducedMotion, runLayout, shakeSeq } from '../utils/Motion';
 import { HuChip } from './HuChip';
 import { HuIcon } from './HuIcon';
-import { HuTextButton } from './HuTextButton';
 
 /**
  * Prompt card: new-task field is ~6 lines; follow-up stays compact.
@@ -34,6 +33,7 @@ export struct PromptShell {
   @Prop status: string = '';
   @Prop quoteText: string = '';
   @Prop bottomPad: number = 12;
+  @Prop hPad: number = 0;
   @State private focused: boolean = false;
   @State private wantFocus: boolean = false;
   @State private shake: number = 0;
@@ -159,56 +159,27 @@ export struct PromptShell {
     return 14;
   }
 
+  private outerPadH(): number {
+    return this.hPad > 0 ? this.hPad : Tokens.pagePad;
+  }
+
   private cardPadV(): number {
     return this.follow && !this.expanded() ? 10 : 14;
   }
 
   build() {
     Column({ space: Tokens.space2 }) {
-      if (this.follow && this.queued.length > 0) {
-        Row({ space: Tokens.space2 }) {
-          Column({ space: 2 }) {
-            Text(`结束后发送 · ${this.queued}`)
-              .fontSize(Tokens.typeMicro)
-              .fontColor($r('app.color.text_secondary'))
-              .maxLines(2)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-            if (this.queueNote.length > 0) {
-              Text(this.queueNote)
-                .fontSize(Tokens.typeMicro)
-                .fontColor($r('app.color.warn'))
-                .maxLines(1)
-                .width('100%')
-            }
-          }
-          .layoutWeight(1)
-          .alignItems(HorizontalAlign.Start)
-          HuTextButton({
-            label: '改',
-            onTap: () => {
-              this.onEditQueue();
-            }
-          })
-          HuTextButton({
-            label: '取消',
-            onTap: () => {
-              this.onClearQueue();
-            }
-          })
-        }
-        .width('100%')
-        .constraintSize({ minHeight: Tokens.touchMin })
-        .padding({ left: 10, right: 4, top: 4, bottom: 4 })
-        .backgroundColor($r('app.color.bg2'))
-        .borderRadius(Tokens.radiusMd)
-        .alignItems(VerticalAlign.Center)
-        .transition(chromeTransition())
-      }
-
       Column({ space: 4 }) {
         if (this.quoteText.length > 0) {
           this.quoteChip()
+        }
+
+        if (this.follow && this.queued.length > 0) {
+          Text(this.queueNote.length > 0 ? this.queueNote : '结束后发送')
+            .fontSize(Tokens.typeMicro)
+            .fontColor(this.queueNote.length > 0 ? $r('app.color.warn') : $r('app.color.text_secondary'))
+            .maxLines(1)
+            .width('100%')
         }
 
         if (this.imageUris.length > 0 && this.expanded()) {
@@ -336,8 +307,8 @@ export struct PromptShell {
     }
     .width('100%')
     .padding({
-      left: Tokens.pagePad,
-      right: Tokens.pagePad,
+      left: this.outerPadH(),
+      right: this.outerPadH(),
       bottom: this.bottomPad
     })
     .animation({ duration: motionMs(), curve: Curve.FastOutSlowIn })
@@ -433,7 +404,21 @@ export struct PromptShell {
             }
           }
         })
-        if (this.follow && this.canSend()) {
+        if (this.follow && this.queued.length > 0) {
+          HuChip({
+            label: '已排队',
+            on: true,
+            onTap: () => {
+            }
+          })
+          HuChip({
+            label: '改',
+            on: true,
+            onTap: () => {
+              this.onEditQueue();
+            }
+          })
+        } else if (this.follow && this.canSend()) {
           HuChip({
             label: '排队',
             on: true,
@@ -451,13 +436,24 @@ export struct PromptShell {
         }
       })
     } else {
-      HuChip({
-        label: '发送',
-        on: this.canSend(),
-        onTap: () => {
-          this.trySend();
+      Row({ space: 6 }) {
+        if (this.follow && this.queued.length > 0) {
+          HuChip({
+            label: '改',
+            on: true,
+            onTap: () => {
+              this.onEditQueue();
+            }
+          })
         }
-      })
+        HuChip({
+          label: '发送',
+          on: this.canSend(),
+          onTap: () => {
+            this.trySend();
+          }
+        })
+      }
     }
   }
 

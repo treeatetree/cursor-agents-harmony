@@ -25,4 +25,5 @@ signing/material/
 .cxx/
 *.log
 .cursor/review-shots/
+.cursor/device-logs/
 ref/

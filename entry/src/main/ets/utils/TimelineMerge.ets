@@ -1,5 +1,6 @@
 import { ConversationMessage } from '../models/Api';
 import { TimelineItem } from '../models/Timeline';
+import { looksLikeAgentTaskPrompt } from './ConvProtocol';
 
 /**
  * Conversation GET /v0/agents/{id}/conversation only has
@@ -32,10 +33,13 @@ function isActivity(kind: string): boolean {
 }
 
 function isDurableExtra(kind: string): boolean {
-  return isActivity(kind) || kind === 'runHeader' || kind === 'runOutcome';
+  return isActivity(kind) || kind === 'runHeader' || kind === 'runOutcome' || kind === 'plan';
 }
 
 function hasBody(item: TimelineItem): boolean {
+  if (item.kind === 'plan') {
+    return true;
+  }
   if ((item.text ?? '').trim().length > 0) {
     return true;
   }
@@ -58,7 +62,8 @@ function copyItem(src: TimelineItem): TimelineItem {
     usageShort: src.usageShort,
     sentTags: src.sentTags,
     localAt: src.localAt,
-    imageUrls: src.imageUrls
+    imageUrls: src.imageUrls,
+    promptText: src.promptText
   };
 }
 
@@ -224,10 +229,17 @@ export function mergeCachedActivity(conv: TimelineItem[], cached: TimelineItem[]
   return merged;
 }
 
+function isHumanUserPrompt(item: TimelineItem): boolean {
+  if (item.kind !== 'userPrompt') {
+    return false;
+  }
+  return !looksLikeAgentTaskPrompt(item.text ?? '');
+}
+
 function userPromptCount(items: TimelineItem[]): number {
   let n = 0;
   for (let i = 0; i < items.length; i++) {
-    if (items[i].kind === 'userPrompt') {
+    if (isHumanUserPrompt(items[i])) {
       n += 1;
     }
   }
@@ -250,7 +262,7 @@ export function keepPendingTurns(conv: TimelineItem[], live: TimelineItem[]): Ti
   let seen = 0;
   let start = -1;
   for (let i = 0; i < live.length; i++) {
-    if (live[i].kind !== 'userPrompt') {
+    if (!isHumanUserPrompt(live[i])) {
       continue;
     }
     if (seen === convUsers) {
@@ -271,9 +283,28 @@ export function keepPendingTurns(conv: TimelineItem[], live: TimelineItem[]): Ti
     if (it.kind === 'streamNotice') {
       continue;
     }
+    if (it.kind === 'userPrompt' && looksLikeAgentTaskPrompt(it.text ?? '')) {
+      continue;
+    }
+    if (it.kind === 'userPrompt' && convOwnsText(conv, it.text ?? '')) {
+      continue;
+    }
     out.push(copyItem(it));
   }
   return out;
+}
+
+function convOwnsText(items: TimelineItem[], text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0) {
+    return false;
+  }
+  for (let i = 0; i < items.length; i++) {
+    if ((items[i].text ?? '').trim() === t) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function looksLikeTokenShort(s: string): boolean {
@@ -357,7 +388,8 @@ export function restoreUserSentTags(conv: TimelineItem[], cached: TimelineItem[]
       usageShort: it.usageShort,
       sentTags: it.sentTags,
       localAt: it.localAt,
-      imageUrls: it.imageUrls
+      imageUrls: it.imageUrls,
+      promptText: it.promptText
     };
     if (take.sentTags && take.sentTags.length > 0) {
       copy.sentTags = take.sentTags;

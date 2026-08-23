@@ -1,6 +1,7 @@
 import { vibrator } from '@kit.SensorServiceKit';
 import { Log } from './Log';
 import { Sounds } from './Sounds';
+import { SessionDiag } from './SessionDiag';
 
 const TAG = 'Haptics';
 
@@ -8,8 +9,11 @@ const TAG = 'Haptics';
  * Touch vocabulary. Usage `touch` / `physicalFeedback` is louder than `notification`
  * on HarmonyOS; intensity 0–100 is honored on API 12+.
  */
+const NOTICE_GAP_MS = 8000;
+
 export class Haptics {
   static enabled: boolean = true;
+  private static lastNoticeAt: number = 0;
 
   static setEnabled(value: boolean): void {
     Haptics.enabled = value;
@@ -53,17 +57,43 @@ export class Haptics {
 
   static success(): void {
     Sounds.play('success');
+    SessionDiag.emit({ tag: 'Haptic', event: 'success', extra: 'fire' });
     Haptics.fire('haptic.notice.success', 100, 'notification');
   }
 
   static fail(): void {
-    Sounds.play('fail');
-    Haptics.fire('haptic.notice.fail', 100, 'notification');
+    Haptics.notice('fail');
   }
 
   static warn(): void {
-    Sounds.play('warn');
-    Haptics.fire('haptic.notice.warning', 94, 'notification');
+    Haptics.notice('warn');
+  }
+
+  private static notice(kind: string): void {
+    if (!Haptics.enabled) {
+      SessionDiag.emit({ tag: 'Haptic', event: kind, extra: 'disabled' });
+      return;
+    }
+    if (!Haptics.noticeReady()) {
+      SessionDiag.emit({ tag: 'Haptic', event: kind, extra: 'skip_gap' });
+      return;
+    }
+    SessionDiag.emit({ tag: 'Haptic', event: kind, extra: 'fire' });
+    Sounds.play(kind === 'fail' ? 'fail' : 'warn');
+    if (kind === 'fail') {
+      Haptics.fire('haptic.notice.fail', 100, 'notification');
+    } else {
+      Haptics.fire('haptic.notice.warning', 94, 'notification');
+    }
+  }
+
+  private static noticeReady(): boolean {
+    const now = Date.now();
+    if (now - Haptics.lastNoticeAt < NOTICE_GAP_MS) {
+      return false;
+    }
+    Haptics.lastNoticeAt = now;
+    return true;
   }
 
   private static fire(effectId: string, intensity: number, usage: vibrator.Usage): void {

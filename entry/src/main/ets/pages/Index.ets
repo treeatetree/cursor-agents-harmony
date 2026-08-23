@@ -21,7 +21,6 @@ import { Haptics } from '../utils/Haptics';
 import { expandTransition, fadeTransition, motionMs, runLayout } from '../utils/Motion';
 import { StatusPill } from '../components/StatusPill';
 import { ToastHost } from '../components/ToastHost';
-import { CreateDraftStore } from '../store/CreateDraftStore';
 import { HuAvatar, HuAvatarPicker } from '../components/HuAvatar';
 import { HuButton } from '../components/HuButton';
 import { HuIcon } from '../components/HuIcon';
@@ -396,6 +395,12 @@ struct Index {
   private async runInboxRefresh(okText: string = ''): Promise<void> {
     const ok = await this.inbox.refresh(false);
     this.pullInboxUi();
+    const waitNote = this.inbox.refreshWaitNotice;
+    if (waitNote.length > 0) {
+      this.inbox.refreshWaitNotice = '';
+      showToast(waitNote, 'info', 'inbox');
+      return;
+    }
     if (!ok) {
       const err = this.inboxError.length > 0 ? this.inboxError : '刷新失败';
       notifyResult(false, '', err, 'inbox');
@@ -650,26 +655,7 @@ struct Index {
 
   private retryCreateFromBanner(): void {
     this.inbox.clearActionBanner();
-    const draft = CreateDraftStore.getInstance().peek();
-    if (!draft) {
-      this.openNew();
-      return;
-    }
-    const nowIso = new Date().toISOString();
-    InboxVM.getInstance().prependOptimistic({
-      id: draft.localId,
-      name: draft.name,
-      status: 'ACTIVE',
-      url: '',
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      lastUserAt: nowIso,
-      latestRunStatus: 'CREATING'
-    });
-    const param: Record<string, Object> = {};
-    param['agentId'] = draft.localId;
-    param['seed'] = '1';
-    this.navStack.pushPath({ name: 'AgentDetail', param: param });
+    this.openNew();
   }
 
   private async togglePin(id: string): Promise<void> {
@@ -1721,11 +1707,10 @@ struct Index {
   newAgentSheet() {
     NewAgentPage({
       embedded: true,
-      onCreated: (localId: string) => {
+      onCreated: (agentId: string) => {
         this.showNewSheet = false;
         const param: Record<string, Object> = {};
-        param['agentId'] = localId;
-        param['seed'] = '1';
+        param['agentId'] = agentId;
         this.navStack.pushPath({ name: 'AgentDetail', param: param });
       },
       onDismiss: () => {
