@@ -181,7 +181,6 @@ HDC="/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/toolchains
 ### 编译安装
 
 ```bash
-cd .
 ./scripts/build.sh && ./scripts/install.sh
 ```
 
